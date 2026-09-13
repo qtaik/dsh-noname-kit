@@ -80,6 +80,10 @@ node scripts/test-tasks.mjs   # 任务状态机,27 项
 node scripts/test-blocks.mjs  # 区块读写,46 项
 ```
 
+## 反馈
+
+插件有问题欢迎提 [issue](https://github.com/qtaik/dsh-noname-kit/issues),附上复现步骤和报错更好。
+
 ## 杂谈
 
 其实在 agent 这个概念兴起之前,就已经在用 AI 写复杂代码了——从 ChatGPT-3 一路用到
