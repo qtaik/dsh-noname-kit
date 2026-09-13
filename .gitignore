@@ -1,0 +1,13 @@
+# 依赖与构建产物
+node_modules/
+*.log
+
+# 本机配置与私有文档(不随仓库发布)
+noname-kit.json
+noname-kit.tasks.json
+HANDOFF.md
+
+# 运行/测试产物
+backup/
+*.bak*
+_noname-kit-test-*/

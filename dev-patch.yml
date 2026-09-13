@@ -1,0 +1,7 @@
+# 本地开发覆盖层:直接用 --patch 挂载本包(不经过 profile 安装)。
+# 启动:pnpm dsh web --port 3082 --patch ./noname-kit/dev-patch.yml
+- insert:
+    - id: noname-kit
+      name: 'file:///D:/dev/noname-kit/index.js'
+      config:
+        nonameDir: 'D:/path/to/noname/resources/app' # ← 按本机实际路径修改

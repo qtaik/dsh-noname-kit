@@ -1,0 +1,14 @@
+# dsh-noname-kit bundle patch。
+# 通过 `dsh plugin --profile <name> add dsh-noname-kit` 安装时,本文件作为 bundle
+# 配置层自动插入。nonameDir 是无名杀游戏本体目录(含 extension/ 的那层);
+# 不配置则为"仅生成模式"(工具可用,不能写文件,守卫不激活)。
+# 用户可在自己 profile 的 cordis.patch.yml 里用同 id 行覆盖整行 config:
+#   - id: noname-kit
+#     name: dsh-noname-kit
+#     config:
+#       nonameDir: 'D:/games/noname/resources/app'
+- insert:
+    - id: noname-kit
+      name: dsh-noname-kit
+      config:
+        nonameDir: ''
