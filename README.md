@@ -6,6 +6,10 @@
 静态校验、任务管理都有插件兜底;游戏扩展目录只认专用写入通道,AI 抄错或删错
 代码会被工具层拦下,覆盖前自动备份。
 
+![工坊:任务表单与任务列表](docs/screenshots/workshop.png)
+
+![历史页:备份回滚与注意点清单](docs/screenshots/history.png)
+
 ## 安装
 
 需要 DeepSeek Harness 和 pnpm。
