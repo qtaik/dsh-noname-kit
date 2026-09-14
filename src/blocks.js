@@ -11,8 +11,10 @@
  * 区块化写入仍需真实锚点(由骨架模板在首写时产生,或走迁移)。
  */
 
-const BEGIN_RE = /^[ \t]*\/\/#noname-kit-begin\s+([\w]+):([\w-]+)[ \t]*$/
-const END_RE = /^[ \t]*\/\/#noname-kit-end\s+([\w]+):([\w-]+)[ \t]*$/
+// 行尾允许 \r:CRLF 文件里锚点行可能带回车(编辑器/git autocrlf 会把整个文件转 CRLF),
+// 行尾锚漏了 \r 就会认不出锚点、以为文件没锚过
+const BEGIN_RE = /^[ \t]*\/\/#noname-kit-begin\s+([\w]+):([\w-]+)[ \t\r]*$/
+const END_RE = /^[ \t]*\/\/#noname-kit-end\s+([\w]+):([\w-]+)[ \t\r]*$/
 const ANCHOR_LINE_RE = /^[ \t]*\/\/#noname-kit-(begin|end)\s+/
 
 function anchorBegin(kind, id) { return `//#noname-kit-begin ${kind}:${id}` }
@@ -427,9 +429,12 @@ export function migrateCode(oldCode) {
     addAt(le, anchorEnd(b.kind, b.id) + '\n')
     inserted += 2
     // 区块收尾补逗号:end 锚前最后一个内容行若不以 , 结尾则补上,
-    // 保证后续往该位置之后插入新区块不会产生语法错误
+    // 保证后续往该位置之后插入新区块不会产生语法错误。
+    // 跳过空白时必须带上 \r —— CRLF 文件行尾是 ",\r",漏了 \r 就会把回车当成
+    // "最后一个字符",于是给每一行都误补一个逗号(实测:真实 CRLF 扩展 523 个区块
+    // 全被误补,逗号落到下一行行首 → Unexpected token ',')
     let last = le - 1
-    while (last > ls && /[ \t\n]/.test(base[last])) last--
+    while (last > ls && /[ \t\r\n]/.test(base[last])) last--
     if (base[last] !== ',') { addAt(last + 1, ','); commas++ }
   }
   let code = base
@@ -444,9 +449,9 @@ export function migrateCode(oldCode) {
   return { code, inserted, commas, blocks: skills.length + translates.length }
 }
 
-/** 迁移自检用:剥掉行尾逗号(迁移合法差异=新增锚点行与收尾逗号)。 */
+/** 迁移自检用:剥掉行尾逗号(迁移合法差异=新增锚点行与收尾逗号;CRLF 行尾的 \r 一并剥)。 */
 function stripEolCommas(code) {
-  return code.split('\n').map((l) => l.replace(/[ \t]*$/, '').replace(/,$/, '')).join('\n')
+  return code.split('\n').map((l) => l.replace(/[ \t\r]*$/, '').replace(/,$/, '')).join('\n')
 }
 
 /** 剥掉全部锚点注释行(迁移自检用)。 */

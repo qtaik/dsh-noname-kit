@@ -119,6 +119,27 @@ try {
   const m2 = blocks.migrateCode(ANCHORED)
   ok(!m2.error && blocks.scanAnchored(m2.code).length === 4 && blocks.stripAnchors(m2.code) === LEGACY, '重复迁移=幂等重建(剥旧锚重打,结果一致)')
 
+  // ── 8b) 迁移:CRLF 文件(Windows 编辑器 / git autocrlf 的真实产物)──
+  // 踩过的坑:补逗号时判断"行尾最后一个非空白字符"的字符集写成 [ \t\n],漏了 \r ——
+  // CRLF 下行尾是 ",\r",于是每个区块都被误判成"没逗号"、白补一个,逗号落到下一行
+  // 行首 → Unexpected token ','。真实 523 区块的 CRLF 扩展整包迁移失败(靠写前语法
+  // 自检拦下、没写坏文件),而当时所有测试样例都是 LF,所以没照出来。
+  const { validateExtensionCode } = await import('../src/validate.js')
+  const syntaxOk = (code) => validateExtensionCode({ code, style: 'classic', kind: 'character' }).ok
+  const CRLF = LEGACY.split('\n').join('\r\n')
+  const c1 = blocks.migrateCode(CRLF)
+  ok(!c1.error && c1.blocks === 4, 'CRLF 迁移:同样识别 4 个区块')
+  ok(c1.commas === 0, 'CRLF 迁移:原文每块都有逗号 → 一个都不该补')
+  ok(!/[\r],/.test(c1.code), 'CRLF 迁移:没有把逗号插到回车后面')
+  ok(blocks.stripAnchors(c1.code) === CRLF, 'CRLF 迁移:剥掉锚点后与原文逐字节一致')
+  ok(blocks.scanAnchored(c1.code).length === 4, 'CRLF 迁移:锚点可被扫描到(行尾锚已容忍 \\r)')
+  ok(syntaxOk(c1.code), 'CRLF 迁移后的代码语法校验通过')
+  const CRLF_MINI = 'game.import("extension", function (lib, game, ui, get, ai, _status) {\r\n  return {\r\n    name: "x",\r\n    skill: {\r\n      cs_a: { content: function () {} }\r\n    },\r\n    translate: {\r\n      cs_a: "甲"\r\n    }\r\n  }\r\n})\r\n'
+  const c2 = blocks.migrateCode(CRLF_MINI)
+  ok(!c2.error && c2.commas === 2, 'CRLF 迁移:确实缺逗号的区块照旧补上(2 处)')
+  ok(syntaxOk(c2.code), 'CRLF 补齐逗号后语法仍通过')
+  ok(/},\r\n/.test(c2.code), 'CRLF:逗号补在回车之前(不是后面)')
+
   // ── 9) 集成:writeExtension 区块模式(临时游戏目录)──
   const w1 = await writeExtension(nonameDir, { folder: '测试包', code: ANCHORED, style: 'classic', kind: 'character' })
   ok(w1.ok && w1.wrote && w1.backup === '', '集成:首写成功且无备份')
