@@ -522,8 +522,8 @@ window.__ModuleLoader__.load({
         fetch('/noname-kit-api/update/check', { method: 'POST' }).then(function (r) { return r.json() }).then(function (body) {
           healthBus.adopt(body);
           var check = body.check || {};
-          // 本地 link 安装没有"更新"可言,别报"已检查"显得像查到了什么
-          set({ healthBusy: false, healthMsg: check.skipped === 'link' ? '本地开发安装,不需要检查更新' : (check.error ? '' : '✅ 已检查') });
+          // link 方式不参与检测,直说,别绕
+          set({ healthBusy: false, healthMsg: check.skipped === 'link' ? 'link 方式不参与版本检测' : (check.error ? '' : '✅ 已检查') });
         }, function (error) { set({ healthBusy: false, healthErr: '检查失败: ' + (error && error.message || error) }) });
       };
       var reinstallPreset = function () {
@@ -553,7 +553,7 @@ window.__ModuleLoader__.load({
         var installForm = health.installForm || 'unknown';
         var line;
         if (installForm === 'link') {
-          line = e('div', 'nnk-hint', '本地开发安装(link:源码目录就是插件本体)——没有「更新」这回事,改完重启 DSH 即生效。');
+          line = e('div', 'nnk-hint', 'link 方式加载的插件不参与版本检测');
         } else if (check && check.error) {
           line = e('div', 'nnk-hint', '检查失败:' + check.error + '(不影响使用,可稍后重试)');
         } else if (check && check.hasUpdate) {
@@ -569,7 +569,7 @@ window.__ModuleLoader__.load({
         return e('div', {},
           h('div', {},
             h('b', null, '插件'),
-            h('span', { className: 'nnk-hint' }, '　当前 v' + (form.version || '?') + (installForm === 'link' ? ' · 本地 link 安装' : ''))
+            h('span', { className: 'nnk-hint' }, '　当前 v' + (form.version || '?') + (installForm === 'link' ? ' · link 方式加载' : ''))
           ),
           h('div', {},
             h('button', { className: 'nnk-smallbtn', disabled: form.healthBusy, onClick: checkNow }, form.healthBusy ? '检查中…' : '🔄 检查更新'),

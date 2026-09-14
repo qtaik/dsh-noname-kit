@@ -58,6 +58,16 @@ try {
   writeFileSync(join(alt, 'preset.yml'), 'name: 无名杀开发模式\n')
   eq(preset.hashDir(alt), baseHash, '创建顺序不同但内容相同 → 哈希相同')
 
+  // 行尾不同不算差异:Windows 上 git 检出会把 LF 转 CRLF(实测 pnpm 装 git 依赖
+  // 就是这样),不归一化会把内容完全相同的两份误报成"不一致"
+  const crlf = join(home, 'crlf')
+  mkdirSync(join(crlf, 'skills', 'noname-extension-dev'), { recursive: true })
+  writeFileSync(join(crlf, 'preset.yml'), 'name: 无名杀开发模式\n'.replace(/\n/g, '\r\n'))
+  writeFileSync(join(crlf, 'agent.cordis.yml'), 'persona:\r\n  prefix: 你是无名杀扩展开发者\r\n')
+  writeFileSync(join(crlf, 'custom-bash.mjs'), 'export const x = 1\r\n')
+  writeFileSync(join(crlf, 'skills', 'noname-extension-dev', 'SKILL.md'), '# 规范\r\n')
+  eq(preset.hashDir(crlf), baseHash, 'CRLF 与 LF 内容相同 → 哈希相同(行尾不算差异)')
+
   // 内容变、增、删都必须被发现
   writeFileSync(join(alt, 'preset.yml'), 'name: 无名杀开发模式(改)\n')
   ok(preset.hashDir(alt) !== baseHash, '改一个字节 → 哈希变化')

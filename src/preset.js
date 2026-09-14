@@ -70,6 +70,9 @@ function collectFiles(dir, prefix, out) {
 /**
  * 目录内容哈希:按相对路径排序后逐个把「路径 + 内容」喂给 sha256。
  * 与文件系统返回顺序、绝对路径、时间戳无关,只反映内容;目录不存在返回 null。
+ * 行尾统一成 LF 再哈希:同一个文件在 Windows 上检出(git autocrlf 会转 CRLF)和
+ * 打包产物里可能行尾不同(实测 pnpm 装 git 依赖时 clone+checkout 就转了 CRLF),
+ * 但行为完全一样 —— 不归一化就会把"完全相同的两份"误报成不一致。
  */
 export function hashDir(dir) {
   if (!existsSync(dir)) return null
@@ -78,7 +81,7 @@ export function hashDir(dir) {
   for (const file of files) {
     hash.update(file.rel)
     hash.update('\0')
-    hash.update(readFileSync(file.full))
+    hash.update(readFileSync(file.full, 'utf8').replace(/\r\n/g, '\n'))
     hash.update('\0')
   }
   return hash.digest('hex')
