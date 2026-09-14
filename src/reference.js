@@ -189,7 +189,9 @@ async function getIndex(nonameDir) {
  */
 export async function searchReference(nonameDir, { query, type = 'any', limit = 5 }) {
   if (!nonameDir) {
-    return { ok: false, error: '未配置 nonameDir(游戏本体目录),无法搜索官方源码。请在插件配置里填 nonameDir。' }
+    // 报错必须给 AI 指明出路,否则它会退回 bash 自己找 —— 实测会从系统根目录开始
+    // 全盘检索,用户等几分钟都没结果(issue #1)
+    return { ok: false, error: '未配置 nonameDir(游戏本体目录),noname_search_reference 无法搜索。请让用户在工坊「⚙ 设置」页配置游戏本体目录;配置之前不要用 bash 在磁盘/系统目录里检索源码——那会全盘扫描,耗时极长。' }
   }
   const raw = String(query || '').trim()
   if (!raw) {
