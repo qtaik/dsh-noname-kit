@@ -43,7 +43,9 @@ window.__ModuleLoader__.load({
       '.nnk-status-done{color:var(--dsw-alias-state-success-primary)}',
       '.nnk-mini{width:100%;box-sizing:border-box;min-height:56px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:6px 8px;resize:vertical;margin-top:6px}',
       '.nnk-smallbtn{border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:3px 10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer;font:inherit;font-size:11px;margin:4px 6px 0 0}',
-      '.nnk-fbrow{border-left:3px solid var(--dsw-alias-border-l2);padding:2px 8px;margin:4px 0;font-size:12px;color:var(--dsw-alias-label-secondary)}'
+      '.nnk-fbrow{border-left:3px solid var(--dsw-alias-border-l2);padding:2px 8px;margin:4px 0;font-size:12px;color:var(--dsw-alias-label-secondary)}',
+      '.nnk-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-state-warn-primary);margin-left:5px;vertical-align:middle}',
+      '.nnk-cmd{font-family:Consolas,monospace;font-size:12px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 8px;margin-top:6px;display:inline-block;user-select:all}'
     ].join('\n');
     if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css="dsh-noname-kit/ui"]') === null) {
       var tag = document.createElement('style');
@@ -466,16 +468,24 @@ window.__ModuleLoader__.load({
 
     // ── 设置面板(⚙ 子页):游戏目录 / AI 输出阀门 / 关于 ─────────
     function SettingsPanel() {
-      var state = React.useState({ loading: true, version: '', nonameDir: '', source: 'none', bashMax: 64000, bashMaxK: '64', manual: '', scanning: false, scanned: false, candidates: [], busy: false, msg: '', err: '' });
+      var state = React.useState({ loading: true, version: '', nonameDir: '', source: 'none', bashMax: 64000, bashMaxK: '64', updateCheck: true, manual: '', scanning: false, scanned: false, candidates: [], busy: false, healthBusy: false, msg: '', err: '', healthMsg: '', healthErr: '' });
       var form = state[0], setForm = state[1];
       var set = function (patch) { setForm(function (prev) { return Object.assign({}, prev, patch) }) };
       var load = function () {
         fetch('/noname-kit-api/settings').then(function (r) { return r.json() }).then(function (s) {
           var bytes = s.bashMaxOutputBytes || 64000;
-          set({ loading: false, version: s.version || '', nonameDir: s.nonameDir || '', source: s.source || 'none', bashMax: bytes, bashMaxK: String(Math.round(bytes / 1000)) });
+          set({ loading: false, version: s.version || '', nonameDir: s.nonameDir || '', source: s.source || 'none', bashMax: bytes, bashMaxK: String(Math.round(bytes / 1000)), updateCheck: s.updateCheck !== false });
         }, function () { set({ loading: false, err: '设置服务不可用(插件更新后需重启 DSH)' }) });
       };
       React.useEffect(function () { load() }, []);
+      // 版本/一致性状态来自共享的 healthBus(🛠 按钮那份),挂载时刷一次
+      var healthState = React.useState(healthBus.state);
+      var health = healthState[0], setHealth = healthState[1];
+      React.useEffect(function () {
+        var off = healthBus.sub(setHealth);
+        healthBus.refresh();
+        return off;
+      }, []);
 
       var scan = function () {
         set({ scanning: true, err: '' });
@@ -506,6 +516,94 @@ window.__ModuleLoader__.load({
           if (!body.ok) throw new Error(body.error || '保存失败');
           set({ busy: false, bashMax: body.bashMaxOutputBytes, bashMaxK: String(Math.round(body.bashMaxOutputBytes / 1000)), msg: '✅ 输出上限已保存为 ' + Math.round(body.bashMaxOutputBytes / 1000) + 'K——对新开的会话生效(已开的会话保持不变)' });
         }, function (error) { set({ busy: false, err: '保存失败: ' + (error && error.message || error) }) });
+      };
+      var checkNow = function () {
+        set({ healthBusy: true, healthErr: '', healthMsg: '' });
+        fetch('/noname-kit-api/update/check', { method: 'POST' }).then(function (r) { return r.json() }).then(function (body) {
+          healthBus.adopt(body);
+          var check = body.check || {};
+          // 本地 link 安装没有"更新"可言,别报"已检查"显得像查到了什么
+          set({ healthBusy: false, healthMsg: check.skipped === 'link' ? '本地开发安装,不需要检查更新' : (check.error ? '' : '✅ 已检查') });
+        }, function (error) { set({ healthBusy: false, healthErr: '检查失败: ' + (error && error.message || error) }) });
+      };
+      var reinstallPreset = function () {
+        set({ healthBusy: true, healthErr: '', healthMsg: '' });
+        fetch('/noname-kit-api/preset/install', { method: 'POST' }).then(function (r) { return r.json() }).then(function (body) {
+          if (!body.ok) throw new Error(body.error || '安装失败');
+          healthBus.set({ preset: body.preset || null });
+          set({ healthBusy: false, healthMsg: '✅ preset 已重装' + (body.backup ? '(旧版已备份)' : '') + '——对新建会话生效,已开的会话不变' });
+        }, function (error) { set({ healthBusy: false, healthErr: '重装失败: ' + (error && error.message || error) }) });
+      };
+      var toggleUpdateCheck = function () {
+        var next = !form.updateCheck;
+        set({ busy: true, err: '', msg: '' });
+        fetch('/noname-kit-api/settings', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ updateCheck: next }),
+        }).then(function (r) { return r.json() }).then(function (body) {
+          if (!body.ok) throw new Error(body.error || '保存失败');
+          set({ busy: false, updateCheck: body.updateCheck });
+          healthBus.set({ updateCheck: body.updateCheck });
+        }, function (error) { set({ busy: false, err: '保存失败: ' + (error && error.message || error) }) });
+      };
+
+      // 版本与一致性两行:插件本体(能查新版就告知,不自动更新)+ preset 一致性
+      var renderUpdateRow = function () {
+        var check = health.update;
+        var installForm = health.installForm || 'unknown';
+        var line;
+        if (installForm === 'link') {
+          line = e('div', 'nnk-hint', '本地开发安装(link:源码目录就是插件本体)——没有「更新」这回事,改完重启 DSH 即生效。');
+        } else if (check && check.error) {
+          line = e('div', 'nnk-hint', '检查失败:' + check.error + '(不影响使用,可稍后重试)');
+        } else if (check && check.hasUpdate) {
+          line = e('div', 'nnk-err', '⬆ 有新版本 v' + check.latest + '(当前 v' + (check.current || form.version) + ',来源 ' + check.source + ')');
+        } else if (check) {
+          line = e('div', 'nnk-hint', '✅ 已是最新(v' + (check.current || form.version) + ',来源 ' + check.source + ')');
+        } else if (!form.updateCheck) {
+          line = e('div', 'nnk-hint', '启动时自动检查已关闭,尚未检查过。');
+        } else {
+          line = e('div', 'nnk-hint', '尚未检查(点右侧「检查更新」)。');
+        }
+        var cmd = check && check.hasUpdate ? (health.installHint || check.installHint) : null;
+        return e('div', {},
+          h('div', {},
+            h('b', null, '插件'),
+            h('span', { className: 'nnk-hint' }, '　当前 v' + (form.version || '?') + (installForm === 'link' ? ' · 本地 link 安装' : ''))
+          ),
+          h('div', {},
+            h('button', { className: 'nnk-smallbtn', disabled: form.healthBusy, onClick: checkNow }, form.healthBusy ? '检查中…' : '🔄 检查更新'),
+            h('button', { className: 'nnk-smallbtn', disabled: form.busy, onClick: toggleUpdateCheck }, (form.updateCheck ? '☑' : '☐') + ' 启动时自动检查')
+          ),
+          line,
+          cmd ? e('div', 'nnk-hint', '在终端执行(完成后重启 DSH):') : null,
+          cmd ? h('div', {}, h('code', { className: 'nnk-cmd' }, cmd)) : null
+        );
+      };
+      var renderPresetRow = function () {
+        var preset = health.preset;
+        var line;
+        if (!health.loaded) line = e('div', 'nnk-hint', '读取中…');
+        else if (!preset) line = e('div', 'nnk-hint', '状态不可用(服务端未响应)');
+        else if (preset.state === 'ok') line = e('div', 'nnk-hint', '✅ 与插件版本一致' + (preset.installedVersion ? '(v' + preset.installedVersion + ')' : ''));
+        else if (preset.state === 'missing') line = e('div', 'nnk-hint', '⚠️ 未安装——新建会话里选不到「无名杀开发模式」,点右侧重装。');
+        else if (preset.state === 'stale') {
+          // stale 只代表"内容不一致",不能一律说成旧版本 —— 版本号可能完全相同
+          var sameVersion = preset.installedVersion && preset.installedVersion === form.version;
+          line = e('div', 'nnk-hint', sameVersion
+            ? '⚠️ 本地这份的内容与插件自带的不一致(版本号都是 v' + form.version + ')——多半是你手改过它。想让插件接管就点右侧重装(会先备份)。'
+            : '⚠️ 与当前插件版本不一致:装的是' + (preset.installedVersion ? ' v' + preset.installedVersion : '无版本记录(手工放置或很旧的安装)') + ',插件是 v' + (form.version || '?') + '——插件更新后没重装就会这样。');
+        }
+        else line = e('div', 'nnk-hint', '⚠️ ' + (preset.error || '状态未知'));
+        return e('div', {},
+          h('div', {},
+            h('b', null, '开发模式 preset'),
+            h('span', { className: 'nnk-hint' }, '　AI 的人格、常驻工具名单与技能文档')
+          ),
+          h('div', {}, h('button', { className: 'nnk-smallbtn', disabled: form.healthBusy, onClick: reinstallPreset }, '♻️ 重装 preset')),
+          line,
+          e('div', 'nnk-hint', 'preset 是插件行为的第二份副本,代码更新后不重装会拿到自相矛盾的指令且不报错,所以单列一行。覆盖前会先备份成 noname-dev.bak-<时间戳>。')
+        );
       };
 
       if (form.loading) return e('div', 'nnk-hint', '加载中…');
@@ -542,6 +640,12 @@ window.__ModuleLoader__.load({
           e('span', 'nnk-hint', 'K(64 ~ 256)'),
           h('button', { className: 'nnk-smallbtn', disabled: form.busy, onClick: function () { saveBashMax((parseInt(form.bashMaxK, 10) || 0) * 1000) } }, '💾 保存上限')
         ),
+
+        h('div', { style: { marginTop: '14px' } }, h('b', null, '版本与一致性'), h('span', { className: 'nnk-hint' }, '　插件本体与开发模式 preset')),
+        form.healthMsg ? e('div', 'nnk-ok', form.healthMsg) : null,
+        form.healthErr ? e('div', 'nnk-err', form.healthErr) : null,
+        renderUpdateRow(),
+        h('div', { style: { marginTop: '12px' } }, renderPresetRow()),
 
         h('div', { style: { marginTop: '14px' } }, h('b', null, '关于')),
         e('div', 'nnk-hint', '无名杀工坊(noname-kit)v' + (form.version || '?') + ' · 「无名杀开发模式」与工坊同属一套,本页设置保存在 ~/.dsh/noname-kit.json')
@@ -903,18 +1007,73 @@ window.__ModuleLoader__.load({
       sub: function (f) { var self = this; this.subs.push(f); return function () { self.subs = self.subs.filter(function (x) { return x !== f }) } },
     };
 
+    /** 版本/一致性状态:🛠 按钮的红点与 ⚙ 设置页共用一份,避免两处各查一次。
+     *  GET /noname-kit-api/update 只做本地探测(读 profile 的 package.json + 算
+     *  preset 哈希),版本信息取服务端进程内的 6 小时缓存,不发网络请求。 */
+    var healthBus = {
+      state: { loaded: false, failed: false, update: null, preset: null, updateCheck: true, installForm: null, installHint: null },
+      subs: [],
+      // 注意:通知时必须先把新状态取到局部变量再 forEach —— 回调里的 this 不是
+      // 这个对象(非严格模式下是全局对象),直接写 this.state 会把 undefined 推给
+      // 所有订阅者,把 React 状态设成 undefined(实测踩过:设置页整块渲染崩溃)。
+      set: function (next) {
+        this.state = Object.assign({}, this.state, next);
+        var snapshot = this.state;
+        this.subs.forEach(function (f) { f(snapshot) });
+      },
+      sub: function (f) { var self = this; this.subs.push(f); return function () { self.subs = self.subs.filter(function (x) { return x !== f }) } },
+      adopt: function (body) {
+        this.set({
+          loaded: true, failed: false,
+          update: body.check || null,
+          preset: body.preset || null,
+          updateCheck: body.updateCheck !== false,
+          installForm: body.installForm || null,
+          installHint: body.installHint || null,
+        });
+        return body;
+      },
+      refresh: function () {
+        var self = this;
+        return fetch('/noname-kit-api/update').then(function (r) { return r.json() })
+          .then(function (body) { return self.adopt(body) },
+            function () { self.set({ loaded: true, failed: true }); return null });
+      },
+      /** 是否需要提醒用户:有新版本,或 preset 没装/与插件版本不一致。 */
+      needsAttention: function () {
+        var s = this.state;
+        if (s.failed) return false;
+        return Boolean((s.update && s.update.hasUpdate) || (s.preset && s.preset.state !== 'ok' && s.preset.state !== 'unknown'));
+      },
+      attentionText: function () {
+        var s = this.state;
+        if (s.preset && s.preset.state === 'missing') return '「无名杀开发模式」preset 未安装'
+        if (s.preset && s.preset.state === 'stale') return 'preset 与插件版本不一致'
+        if (s.update && s.update.hasUpdate) return '插件有新版本 v' + s.update.latest
+        return ''
+      },
+    };
+
     /** 输入条工坊入口:conversation.input.left 是 list 插槽,追加不替换官方件。 */
     function WorkshopChipButton(props) {
       var openState = React.useState(workshopBus.open);
       var isOpen = openState[0], setIsOpen = openState[1];
+      var healthState = React.useState(healthBus.state);
+      var health = healthState[0], setHealth = healthState[1];
       React.useEffect(function () { return workshopBus.sub(function (v) { setIsOpen(v) }) }, []);
+      React.useEffect(function () {
+        var off = healthBus.sub(setHealth);
+        healthBus.refresh();
+        return off;
+      }, []);
+      var attention = healthBus.attentionText();
       return h('button', {
         type: 'button',
         className: 'nnk-smallbtn',
         style: { margin: '0 6px', whiteSpace: 'nowrap' },
-        title: '无名杀工坊:创建任务 / 任务列表 / 历史',
+        title: '无名杀工坊:创建任务 / 任务列表 / 历史' + (attention ? '(⚠️ ' + attention + ')' : ''),
         onClick: function () { workshopBus.set(!workshopBus.open) },
-      }, isOpen ? '🛠 关闭工坊' : '🛠 工坊');
+      }, isOpen ? '🛠 关闭工坊' : '🛠 工坊', attention ? h('span', { className: 'nnk-dot' }) : null);
     }
 
     /** 工坊浮窗:初始屏/任意会话用浮层承载整个工坊页;任务发进当前会话。 */

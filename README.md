@@ -64,6 +64,22 @@ xiaobright/dsh-anchored-standard,MIT):首轮不开放任何工具,之后常驻�
 shell、编辑器和上述工具,web 等重工具按需解锁;完整开发规范走 skill 按需
 加载,不占 system prompt。
 
+## 更新
+
+工坊「⚙ 设置」页顶部是「版本与一致性」,两块各管一件事:
+
+- **插件**:显示当前版本,有新版本时给出升级命令(只提示,不自动更新)。git/npm
+  安装用 `dsh plugin --profile web update dsh-noname-kit`;源码 `link:` 安装会直接
+  跳过检查(代码就是源码目录,改完重启即可)。
+- **开发模式 preset**:preset 是插件行为的第二份副本(人格、常驻工具名单、技能文档),
+  插件更新后不重装它会拿到自相矛盾的指令,而且不报错——所以单独盯一行。发现不一致
+  点「♻️ 重装 preset」即可(覆盖前自动备份成 `noname-dev.bak-<时间戳>`);装完对
+  新建会话生效。
+
+任一项有问题时,输入条上的 🛠 按钮会带一个小红点。版本信息从 npm registry 和
+GitHub tag 取,查不通只显示一行「检查失败」,不影响使用;「启动时自动检查」可以在
+设置页关掉,改成手动点。
+
 ## 已知限制
 
 - 新建会话发第一条消息前,顶部页签栏不显示——这是 DSH 空白会话的官方设计,
@@ -76,8 +92,10 @@ shell、编辑器和上述工具,web 等重工具按需解锁;完整开发规范
 ## 测试
 
 ```sh
-node scripts/test-tasks.mjs   # 任务状态机,27 项
-node scripts/test-blocks.mjs  # 区块读写,46 项
+node scripts/test-tasks.mjs    # 任务状态机,27 项
+node scripts/test-blocks.mjs   # 区块读写,46 项
+node scripts/test-update.mjs   # 版本比较与更新检查,96 项
+node scripts/test-preset.mjs   # preset 自检与安装,39 项
 ```
 
 ## 反馈

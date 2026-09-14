@@ -25,6 +25,8 @@ import { writeExtension, readExtension, listBackups, rollbackExtension, extRootO
 import { readHistory, archiveTask, listExtensionHistories, recordBackup, deleteNote } from './src/history.js'
 import { copyImages } from './src/images.js'
 import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, completeById, deleteTask, reopenTask } from './src/tasks.js'
+import { bundledPresetDir, installPreset, presetDirOf, presetStatus } from './src/preset.js'
+import { cachedUpdate, checkForUpdate, detectInstall, installHint } from './src/update.js'
 import pkg from './package.json' with { type: 'json' }
 
 /** bash 单次输出上限的出厂默认与允许范围(与 custom-bash.mjs 保持一致)。
@@ -107,6 +109,55 @@ export function apply(ctx, config) {
   }
 
   console.log(`[noname-kit] 加载成功,游戏目录: ${active ? nonameDir : '(未配置或无效,仅生成模式;可在工坊向导里初始化)'}`)
+
+  // ── 0.5) 版本与一致性自检 ────────────────────────────────────
+  // preset(agent.cordis.yml 的 persona + residentTools 工具名白名单 + SKILL.md 的
+  // 参数文档)是插件行为的第二份手抄,复制到 ~/.dsh/.agent-presets/ 后与代码再无
+  // 任何关联:代码更新而 preset 没重装时,会话会拿到自相矛盾的指令(工具名对不上
+  // →工具在会话里静默消失;参数文档对不上→AI 写出的调用被校验挡下),而且不报错。
+  // 这里只负责"发现",修由用户在工坊 ⚙ 设置页点「重装 preset」。
+  // (曾想用目录链接让漂移不可能发生,实测否决:DSH 的 discovery 用
+  //  readdir().isDirectory() 判定,而 node 对 junction/symlink 一律报 isLink。)
+  const presetDir = presetDirOf(dshHomeDir)
+  const bundledDir = bundledPresetDir()
+  const readPresetStatus = () => presetStatus({ presetDir, bundledDir })
+  {
+    const status = readPresetStatus()
+    if (status.state === 'missing') {
+      console.warn('[noname-kit] ⚠️ 「无名杀开发模式」preset 未安装:工坊 ⚙ 设置页点「重装 preset」,或跑 node scripts/install-preset.mjs')
+    } else if (status.state === 'stale') {
+      console.warn(`[noname-kit] ⚠️ preset 与当前插件版本不一致(装的是 v${status.installedVersion ?? '未知'},插件是 v${pkg.version})——工坊 ⚙ 设置页点「重装 preset」`)
+    } else if (status.state === 'unknown') {
+      console.warn(`[noname-kit] ⚠️ ${status.error}`)
+    }
+  }
+  // 版本检查只在启动时跑一次(结果缓存 6 小时,失败不缓存);link 安装直接短路,
+  // 一个请求都不发。结果只进内存不落盘——一次网络查询不值得在用户家目录留状态。
+  if (readSettingsFile().updateCheck !== false) {
+    checkForUpdate({ currentVersion: pkg.version, dshHome: dshHomeDir }).then((result) => {
+      if (result.error) {
+        console.log(`[noname-kit] 版本检查未完成:${result.error}(不影响使用,可在 ⚙ 设置页手动重试)`)
+      } else if (result.hasUpdate) {
+        console.log(`[noname-kit] ⬆ 有新版本 v${result.latest}(当前 v${result.current},来源 ${result.source});升级:${result.installHint || '见 README'}`)
+      }
+    }).catch(() => {})
+  }
+
+  /** 设置页「版本与一致性」的载荷:本地探测不联网,网络结果只来自缓存或显式检查。 */
+  const updatePayload = async (force) => {
+    const install = detectInstall({ dshHome: dshHomeDir, packageName: pkg.name })
+    const check = force ? await checkForUpdate({ currentVersion: pkg.version, dshHome: dshHomeDir, force: true }) : cachedUpdate()
+    return {
+      current: pkg.version,
+      preset: readPresetStatus(),
+      updateCheck: readSettingsFile().updateCheck !== false,
+      installForm: install.form,
+      installProfile: install.profile,
+      installSpec: install.spec,
+      installHint: installHint({ form: install.form, profile: install.profile, packageName: pkg.name }),
+      check: check || null,
+    }
+  }
 
   // ── 1) 常驻规范知识(文本随配置状态动态生成) ─────────────────
   ctx.systemPrompt.section({
@@ -458,22 +509,38 @@ export function apply(ctx, config) {
         // 工坊设置(⚙ 子页):bash 输出阀门等。任何状态可读写;bash 阀门
         // 由 custom-bash 在新会话挂载时读取,保存后对新会话生效。
         if (req.method === 'GET' && url.pathname === '/noname-kit-api/settings') {
+          // 读文件而不是用启动时的 saved 快照:否则保存后刷新页面会看到改动前的值
+          const current = readSettingsFile()
           return json(200, {
             version: pkg.version,
             nonameDir: active ? nonameDir : '',
-            source: config.nonameDir ? 'cordis.yml' : (saved.nonameDir ? 'workshop' : 'none'),
-            bashMaxOutputBytes: clampBashMaxOutput(saved.bashMaxOutputBytes) ?? BASH_MAX_OUTPUT_DEFAULT,
+            source: config.nonameDir ? 'cordis.yml' : (current.nonameDir ? 'workshop' : 'none'),
+            bashMaxOutputBytes: clampBashMaxOutput(current.bashMaxOutputBytes) ?? BASH_MAX_OUTPUT_DEFAULT,
+            updateCheck: current.updateCheck !== false,
           })
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/settings') {
           const body = await readBody()
-          const v = clampBashMaxOutput(body.bashMaxOutputBytes)
-          if (v === null) return json(400, { ok: false, error: `bashMaxOutputBytes 必须是 ${BASH_MAX_OUTPUT_MIN}~${BASH_MAX_OUTPUT_MAX} 之间的整数` })
           const next = readSettingsFile()
-          next.bashMaxOutputBytes = v
+          const applied = []
+          if (body.bashMaxOutputBytes !== undefined) {
+            const v = clampBashMaxOutput(body.bashMaxOutputBytes)
+            if (v === null) return json(400, { ok: false, error: `bashMaxOutputBytes 必须是 ${BASH_MAX_OUTPUT_MIN}~${BASH_MAX_OUTPUT_MAX} 之间的整数` })
+            next.bashMaxOutputBytes = v
+            applied.push(`bash 单次输出上限 ${v} 字节`)
+          }
+          if (body.updateCheck !== undefined) {
+            next.updateCheck = Boolean(body.updateCheck)
+            applied.push(`启动时检查更新 ${next.updateCheck ? '开' : '关'}`)
+          }
+          if (!applied.length) return json(400, { ok: false, error: '没有可保存的设置项' })
           writeFileSync(settingsPath, JSON.stringify(next, null, 2), 'utf8')
-          console.log(`[noname-kit] 设置已保存:bash 单次输出上限 ${v} 字节(新会话生效)`)
-          return json(200, { ok: true, bashMaxOutputBytes: v })
+          console.log(`[noname-kit] 设置已保存:${applied.join(' / ')}(新会话生效)`)
+          return json(200, {
+            ok: true,
+            bashMaxOutputBytes: clampBashMaxOutput(next.bashMaxOutputBytes) ?? BASH_MAX_OUTPUT_DEFAULT,
+            updateCheck: next.updateCheck !== false,
+          })
         }
         // 任务登记处:读列表不要求已配置;创建/反馈/完成要求已配置(要有扩展文件夹)
         if (req.method === 'GET' && url.pathname === '/noname-kit-api/tasks') {
@@ -557,6 +624,21 @@ export function apply(ctx, config) {
           const body = await readBody()
           const result = await copyImages(nonameDir, body)
           return json(result.ok ? 200 : 400, result)
+        }
+        // 版本与一致性(⚙ 设置页):刻意放在下面这道 503 闸门之前 —— 没配游戏目录
+        // 的新用户正是最需要看到「preset 未安装」的时候。
+        if (req.method === 'GET' && url.pathname === '/noname-kit-api/update') {
+          return json(200, await updatePayload(false))
+        }
+        if (req.method === 'POST' && url.pathname === '/noname-kit-api/update/check') {
+          return json(200, await updatePayload(true))
+        }
+        if (req.method === 'POST' && url.pathname === '/noname-kit-api/preset/install') {
+          const result = installPreset({ presetDir, bundledDir, pluginVersion: pkg.version })
+          if (result.ok) {
+            console.log(`[noname-kit] preset 已重装(v${pkg.version})${result.backup ? ',旧版备份到 ' + result.backup : ''}(新会话生效)`)
+          }
+          return json(result.ok ? 200 : 400, { ...result, preset: readPresetStatus() })
         }
         // 以下都需要已配置
         if (!active) return json(503, { error: 'noname-kit 未配置 nonameDir(或目录无效):请在工坊「初始化向导」里完成配置' })
