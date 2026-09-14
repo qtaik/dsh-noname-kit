@@ -941,7 +941,9 @@ window.__ModuleLoader__.load({
             h('button', { className: 'nnk-smallbtn', disabled: box.busy, onClick: function () { feedbackSubmit(task, fbTarget.skill) } }, box.busy ? '提交中…' : '提交反馈')
           ) : null,
           expanded && task.feedbacks && task.feedbacks.length
-            ? task.feedbacks.slice().reverse().map(function (fb, i) {
+            ? task.feedbacks.map(function (fb, i) {
+                // 按提交时间正序编号:第1轮=最初的问题(此前 reverse 后按显示位置编号,
+                // 导致最新的反馈被标成第1轮 —— issue #2)
                 return e('div', 'nnk-fbrow', '第' + (i + 1) + '轮反馈' + (fb.skill ? '(' + fb.skill + ')' : '') + ': ' + (fb.issue || '').slice(0, 80))
               })
             : null
