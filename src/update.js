@@ -13,7 +13,7 @@
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { isNewer, maxVersion, parseVersion } from './version.js'
+import { formatVersion, isNewer, maxVersion, parseVersion } from './version.js'
 
 export const PACKAGE_NAME = 'dsh-noname-kit'
 const NPM_REGISTRY = 'https://registry.npmjs.org'
@@ -180,7 +180,9 @@ export async function checkForUpdate({
   }
   const payload = {
     ...base,
-    latest: result.latest,
+    // 显示用规范化形式(去掉 GitHub tag 的 v 前缀,与 current 写法一致);
+    // 比较仍用远端原值。
+    latest: formatVersion(result.latest),
     source: result.source,
     hasUpdate: isNewer(result.latest, currentVersion),
     error: null,

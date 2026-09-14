@@ -55,6 +55,23 @@ function compareParsed(left, right) {
   return comparePrerelease(left.pre, right.pre)
 }
 
+/** 由规范化的 { major, minor, patch, pre } 拼回显示形式。 */
+function formatParsed(parsed) {
+  const base = `${parsed.major}.${parsed.minor}.${parsed.patch}`
+  return parsed.pre ? `${base}-${parsed.pre}` : base
+}
+
+/**
+ * 规范化版本号的显示形式:去掉 v 前缀、补齐三段(1.2 → 1.2.0)。
+ * GitHub 的 tag 名带 v 而 npm 的版本号不带,显示时统一成一个样子,
+ * 免得出现「vv1.2.0」这种拼两次的错。无法解析时原样返回(如 'latest')。
+ */
+export function formatVersion(input) {
+  const parsed = parseVersion(input)
+  if (!parsed) return input === null || input === undefined ? '' : String(input)
+  return formatParsed(parsed)
+}
+
 /** 比较两个版本号:返回 -1 / 0 / 1;任一无法解析则返回 null(由调用方决定怎么显示)。 */
 export function compareVersions(left, right) {
   const a = parseVersion(left)

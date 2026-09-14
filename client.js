@@ -585,7 +585,7 @@ window.__ModuleLoader__.load({
         var line;
         if (!health.loaded) line = e('div', 'nnk-hint', '读取中…');
         else if (!preset) line = e('div', 'nnk-hint', '状态不可用(服务端未响应)');
-        else if (preset.state === 'ok') line = e('div', 'nnk-hint', '✅ 与插件版本一致' + (preset.installedVersion ? '(v' + preset.installedVersion + ')' : ''));
+        else if (preset.state === 'ok') line = e('div', 'nnk-hint', '✅ 与插件自带的一致');
         else if (preset.state === 'missing') line = e('div', 'nnk-hint', '⚠️ 未安装——新建会话里选不到「无名杀开发模式」,点右侧重装。');
         else if (preset.state === 'stale') {
           // stale 只代表"内容不一致",不能一律说成旧版本 —— 版本号可能完全相同

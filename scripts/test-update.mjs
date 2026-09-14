@@ -56,6 +56,11 @@ try {
   ok(!version.isNewer('nonsense', '1.0.0'), '远端无法解析时不说有新版本')
   eq(version.maxVersion(['v1.0.0', 'v1.10.0', 'v1.9.0', 'nightly']), 'v1.10.0', 'maxVersion 挑最大且跳过非法项')
   eq(version.maxVersion([]), null, 'maxVersion 空列表返回 null')
+  eq(version.formatVersion('v1.2.0'), '1.2.0', 'formatVersion 去掉 tag 的 v 前缀')
+  eq(version.formatVersion('1.2'), '1.2.0', 'formatVersion 补齐三段')
+  eq(version.formatVersion('1.0.0-rc.1'), '1.0.0-rc.1', 'formatVersion 保留 prerelease')
+  eq(version.formatVersion('latest'), 'latest', 'formatVersion 无法解析时原样返回')
+  eq(version.formatVersion(''), '', 'formatVersion 空串返回空串')
 
   // ── 3) 安装 spec 分类 ──
   eq(update.classifySpec('link:D:/deepseek-harness/dsh-latest/noname-kit'), 'link', 'link: 视作本地开发')
@@ -172,7 +177,7 @@ try {
       'api.github.com': { status: 200, body: [{ name: 'v1.0.0' }, { name: 'v1.1.0' }, { name: 'v1.0.9' }] },
     }),
   })
-  ok(fallback.source === 'github' && fallback.latest === 'v1.1.0', 'npm 404 → 回退 GitHub tags 并取最大')
+  ok(fallback.source === 'github' && fallback.latest === '1.1.0', 'npm 404 → 回退 GitHub tags 并取最大(去掉 tag 的 v 前缀)')
   ok(fallback.hasUpdate, 'GitHub 回退也算出新版本')
 
   // 全部失败:只报错,不抛,且 hasUpdate 为 false
