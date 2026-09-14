@@ -167,6 +167,24 @@ try {
   ok(presetEntries.some((n) => /\.bak-\d+$/.test(n)), '备份与 preset 同层且名字带 .bak-<时间戳>')
   ok(!/^[a-z0-9][a-z0-9-]*$/.test(reinstalled.backup.split(/[\\/]/).pop()), '备份目录名不匹配 DSH 的 PRESET_ID 规则 → 不会被 discovery 收录')
 
+  // ── custom-bash 的全盘检索闸(issue #1:模型 find / 全盘找目录,几分钟出不来)──
+  const { rootSearchIssue } = await import('../presets/noname-dev/custom-bash.mjs')
+  const refuseCase = [
+    'find / -maxdepth 6 -type d -name "神创包" 2>/dev/null | head',
+    'grep -rn "layout" /',
+    'find ~ -name x',
+    'du -sh / ; ls',
+  ]
+  for (const cmd of refuseCase) ok(!!rootSearchIssue(cmd), '全盘检索闸:拒绝 ' + cmd.slice(0, 40))
+  const allowCase = [
+    'find /d/games/noname/extension -name "*.js"',
+    'grep -rn "draw" noname/library | head -20',
+    'grep -rn "path / desc" docs/x.md',
+    'ls -la /',
+    'find . -name x',
+  ]
+  for (const cmd of allowCase) ok(rootSearchIssue(cmd) === null, '全盘检索闸:放行 ' + cmd.slice(0, 40))
+
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })

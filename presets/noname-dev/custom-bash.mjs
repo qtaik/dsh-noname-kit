@@ -90,6 +90,32 @@ function detectGitBash() {
   return 'bash'
 }
 
+/**
+ * 全盘检索闸(纯函数,便于单测):递归检索命令的起点是文件系统根(/、/c /d 这类
+ * 盘符根、C:\ 这类盘符写法、~)时,返回拒绝理由;否则返回 null。
+ *
+ * 为什么要有:有用户实测模型在找不到扩展目录时跑了
+ * `find / -maxdepth 6 -type d -name "xxx"` —— 从盘符根翻起,几分钟都出不来结果
+ * (issue #1)。只拦"起点是根"这一种形态:带具体子路径的检索照常放行;
+ * 引号里的内容先摘掉再判,避免 `grep "see / this"` 这类误伤。
+ * 误拦的代价可控:模型看到拒绝理由后写明确路径即可恢复。
+ */
+export function rootSearchIssue(command) {
+  // 先摘掉引号字符串:里面的 "/" 是文案不是检索起点
+  const text = String(command || '')
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+  const RE = /(?:^|[\s;&(])(find|grep|rg|du|fd|locate)\b([^;|&>]*)/g
+  let m
+  while ((m = RE.exec(text))) {
+    // 起点是根:/ 本身、/c /d 这类盘符根(后面必须直接结束)、C:\ C:/ 盘符写法、或 ~
+    if (/(?:^|[\s'"(])(?:\/(?![\w.])|\/[a-z](?![\w.\-/])|[a-z]:[\\/](?![\w.\-/])|~(?![\w.\-/]))/i.test(m[2])) {
+      return '检索起点是文件系统根(' + m[1] + ' …),会全盘扫描、几乎等不到结果。请把检索路径限定在游戏源码目录(noname/library、character、card、gnc、extension)或扩展目录里;找游戏/扩展目录的位置请直接问用户;官方实现的检索请改用 noname_search_reference。'
+    }
+  }
+  return null
+}
+
 /** Register the model-facing `bash` tool. */
 export function apply(ctx, config) {
   const bashPath = typeof config?.bashPath === 'string' && config.bashPath.length > 0 ? config.bashPath : detectGitBash()
@@ -124,6 +150,9 @@ export function apply(ctx, config) {
       render: (_args, value) => [{ type: 'text', text: value.text }],
     },
     async execute(args, exec) {
+      // 全盘检索闸:先于执行判断,拒绝时把替代做法写给模型(见 rootSearchIssue)
+      const guard = rootSearchIssue(args.command)
+      if (guard) throw new Error('已拒绝执行(全盘检索闸): ' + guard)
       const shell = await ctx.subprocess.resolveExecutable(bashPath, undefined, exec?.signal)
       const workdir = typeof args.workdir === 'string' && args.workdir.length > 0
         ? args.workdir
