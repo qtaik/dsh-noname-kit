@@ -79,21 +79,32 @@ try {
 
   // ── 2) 状态判定 ──
   eq(preset.presetStatus({ presetDir, bundledDir: bundled }).state, 'missing', '没装 → missing')
-  const installed = preset.installPreset({ presetDir, bundledDir: bundled, pluginVersion: '1.0.0' })
+  const installed = preset.installPreset({ presetDir, bundledDir: bundled })
   ok(installed.ok && installed.target === presetDir, '安装成功并返回目标路径')
   eq(installed.backup, null, '首次安装没有备份')
   const afterInstall = preset.presetStatus({ presetDir, bundledDir: bundled })
   eq(afterInstall.state, 'ok', '装完即 ok(盖章文件不影响哈希)')
-  eq(afterInstall.installedVersion, '1.0.0', '状态里带出盖章的插件版本号')
+  eq(afterInstall.localEdited, false, '装完 localEdited=false(本地这份装完没动过)')
   ok(existsSync(join(presetDir, '.noname-kit-install.json')), '盖章文件已写入')
-  eq(JSON.parse(readFileSync(join(presetDir, '.noname-kit-install.json'), 'utf8')).pluginVersion, '1.0.0', '盖章内容含插件版本')
+  const stamp = JSON.parse(readFileSync(join(presetDir, '.noname-kit-install.json'), 'utf8'))
+  ok(!!stamp.hash && typeof stamp.installedAt === 'number', '盖章只记内容哈希与时间')
+  eq(stamp.pluginVersion, undefined, '盖章里不存版本号(preset 不按版本管理)')
 
   const manifest = join(presetDir, 'agent.cordis.yml')
   const original = readFileSync(manifest, 'utf8')
   writeFileSync(manifest, original + '# 用户自己加了一行\n')
   eq(preset.presetStatus({ presetDir, bundledDir: bundled }).state, 'stale', '本地被改过 → stale')
+  eq(preset.presetStatus({ presetDir, bundledDir: bundled }).localEdited, true, '本地被改过 → localEdited=true')
   writeFileSync(manifest, original)
   eq(preset.presetStatus({ presetDir, bundledDir: bundled }).state, 'ok', '改回去 → 又 ok')
+  eq(preset.presetStatus({ presetDir, bundledDir: bundled }).localEdited, false, '改回去 → localEdited 也回 false')
+
+  // 没有安装记录的旧 preset:内容虽然一致,但说不清有没有被改过 → localEdited 为 null
+  unlinkSync(join(presetDir, '.noname-kit-install.json'))
+  const noStamp = preset.presetStatus({ presetDir, bundledDir: bundled })
+  eq(noStamp.state, 'ok', '没有盖章但内容一致 → 仍判 ok')
+  eq(noStamp.localEdited, null, '没有盖章 → localEdited=null(无法判断是否被改过)')
+  preset.installPreset({ presetDir, bundledDir: bundled })
 
   unlinkSync(join(presetDir, 'custom-bash.mjs'))
   eq(preset.presetStatus({ presetDir, bundledDir: bundled }).state, 'stale', '少一个文件 → stale')
@@ -106,16 +117,16 @@ try {
   // ── 3) 重装与备份 ──
   // 放一个只有"重装前"才有的标记,用来验证备份抓的是旧状态、重装换的是新内容
   writeFileSync(join(presetDir, 'USER-NOTE.txt'), '用户自己加的东西\n')
-  const reinstalled = preset.installPreset({ presetDir, bundledDir: bundled, pluginVersion: '1.1.0' })
+  const reinstalled = preset.installPreset({ presetDir, bundledDir: bundled })
   ok(reinstalled.ok && typeof reinstalled.backup === 'string', '重装产生备份')
   ok(/\.bak-\d+$/.test(reinstalled.backup), '备份名前缀为 .bak-<时间戳>(点号让 DSH 不把它当 preset 扫出来)')
   ok(existsSync(join(reinstalled.backup, 'USER-NOTE.txt')), '备份完整保留了重装前那份(含用户加的文件)')
   ok(!existsSync(join(presetDir, 'USER-NOTE.txt')), '重装后目标目录换成了插件自带那份')
   eq(preset.presetStatus({ presetDir, bundledDir: bundled }).state, 'ok', '重装后恢复 ok')
-  eq(preset.presetStatus({ presetDir, bundledDir: bundled }).installedVersion, '1.1.0', '盖章版本号已更新')
+  eq(preset.presetStatus({ presetDir, bundledDir: bundled }).localEdited, false, '重装后 localEdited 回到 false')
 
   // 目标目录不完整时不许安装(宁可不装,也不要留半份)
-  const badResult = preset.installPreset({ presetDir: join(home, 'x'), bundledDir: brokenSource, pluginVersion: '1.1.0' })
+  const badResult = preset.installPreset({ presetDir: join(home, 'x'), bundledDir: brokenSource })
   ok(!badResult.ok && /不完整/.test(badResult.error), '插件自带 preset 不完整 → 拒绝安装并报错')
   ok(!existsSync(join(home, 'x')), '拒绝安装时不会留下半份目录')
 
@@ -125,7 +136,7 @@ try {
   writeFileSync(join(linkTarget, 'keep-me.txt'), 'important\n')
   const linkDir = join(home, 'dsh-home', '.agent-presets', 'link-probe')
   symlinkSync(linkTarget, linkDir, process.platform === 'win32' ? 'junction' : 'dir')
-  const linkResult = preset.installPreset({ presetDir: linkDir, bundledDir: bundled, pluginVersion: '1.1.0' })
+  const linkResult = preset.installPreset({ presetDir: linkDir, bundledDir: bundled })
   ok(linkResult.ok, '目标位置是链接时也能安装')
   ok(existsSync(join(linkTarget, 'keep-me.txt')), '链接指向的真实目录内容未被删除')
   ok(existsSync(join(linkDir, 'agent.cordis.yml')), '链接位置已换成真实的新 preset')

@@ -15,7 +15,6 @@ const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.u
 const result = installPreset({
   presetDir: presetDirOf(dshHome),
   bundledDir: bundledPresetDir(),
-  pluginVersion: version,
 })
 
 if (!result.ok) {

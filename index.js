@@ -126,7 +126,7 @@ export function apply(ctx, config) {
     if (status.state === 'missing') {
       console.warn('[noname-kit] ⚠️ 「无名杀开发模式」preset 未安装:工坊 ⚙ 设置页点「重装 preset」,或跑 node scripts/install-preset.mjs')
     } else if (status.state === 'stale') {
-      console.warn(`[noname-kit] ⚠️ preset 与当前插件版本不一致(装的是 v${status.installedVersion ?? '未知'},插件是 v${pkg.version})——工坊 ⚙ 设置页点「重装 preset」`)
+      console.warn('[noname-kit] ⚠️ preset 与插件自带的不一致:工坊 ⚙ 设置页点「重装 preset」')
     } else if (status.state === 'unknown') {
       console.warn(`[noname-kit] ⚠️ ${status.error}`)
     }
@@ -634,9 +634,9 @@ export function apply(ctx, config) {
           return json(200, await updatePayload(true))
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/preset/install') {
-          const result = installPreset({ presetDir, bundledDir, pluginVersion: pkg.version })
+          const result = installPreset({ presetDir, bundledDir })
           if (result.ok) {
-            console.log(`[noname-kit] preset 已重装(v${pkg.version})${result.backup ? ',旧版备份到 ' + result.backup : ''}(新会话生效)`)
+            console.log(`[noname-kit] preset 已重装${result.backup ? ',旧版备份到 ' + result.backup : ''}(新会话生效)`)
           }
           return json(result.ok ? 200 : 400, { ...result, preset: readPresetStatus() })
         }

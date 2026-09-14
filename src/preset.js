@@ -21,7 +21,9 @@ import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 export const PRESET_ID = 'noname-dev'
-/** 盖章文件:记下"这份 preset 是哪个插件版本装的、内容哈希是多少"。 */
+/** 盖章文件:记下"这份 preset 是什么时候装的、装进去的内容哈希是多少"。
+ *  刻意不存版本号 —— 判定依据是内容不是版本,而且"装进去的哈希"能额外回答
+ *  "本地这份后来被改过没有"(见 presetStatus 的 localEdited)。 */
 export const PRESET_MANIFEST = '.noname-kit-install.json'
 
 const COMPOSITION_FILE = 'agent.cordis.yml'
@@ -97,10 +99,10 @@ function readManifest(presetDir) {
 
 /**
  * 自检已安装的 preset 与插件自带那份是否一致。
- * state: 'ok' 一致 / 'stale' 不一致(没重装,或你改过本地那份)/ 'missing' 没装
- * / 'unknown' 插件自带的源读不到(打包缺文件,属异常)。
- * 注意 stale 的含义是"内容不一致",不区分原因是没重装还是你手动改过 —— 界面
- * 上两句话都要说,不能只报"过期"。
+ * state: 'ok' 一致 / 'stale' 不一致 / 'missing' 没装 / 'unknown' 插件自带的源读不到(打包异常)。
+ * localEdited: 装完之后本地那份被改过吗 —— true 被改过 / false 没动过 / null 没有安装记录
+ * (手工放置或很旧的安装)。它靠"盖章时记下的哈希"判断:与现在的不一致就是本地被改的,
+ * 一致则说明差异来自插件侧(插件更新了而你没重装)。两种情况的处置不同,所以要分开说。
  */
 export function presetStatus({ presetDir, bundledDir }) {
   // 先看插件自带那份是否完整:源不完整属打包异常,不能报成"你该重装"
@@ -110,7 +112,7 @@ export function presetStatus({ presetDir, bundledDir }) {
     return { state: 'unknown', error: `插件自带的 preset 源不完整(缺 ${COMPOSITION_FILE}):${bundledDir}` }
   }
   if (!existsSync(presetDir)) {
-    return { state: 'missing', bundledHash, installedHash: null, installedVersion: null, installedAt: null }
+    return { state: 'missing', bundledHash, installedHash: null, installedAt: null, localEdited: null }
   }
   const manifest = readManifest(presetDir)
   const installedHash = hashDir(presetDir)
@@ -118,8 +120,8 @@ export function presetStatus({ presetDir, bundledDir }) {
     state: installedHash === bundledHash ? 'ok' : 'stale',
     bundledHash,
     installedHash,
-    installedVersion: manifest?.pluginVersion ?? null,
     installedAt: manifest?.installedAt ?? null,
+    localEdited: manifest?.hash ? manifest.hash !== installedHash : null,
   }
 }
 
@@ -129,7 +131,7 @@ export function presetStatus({ presetDir, bundledDir }) {
  * preset 列表里多出一条垃圾),再复制新的一份并盖章。
  * 目标位置若是个链接(含 Windows junction)则只删链接本身,绝不递归进目标。
  */
-export function installPreset({ presetDir, bundledDir, pluginVersion }) {
+export function installPreset({ presetDir, bundledDir }) {
   if (!existsSync(join(bundledDir, COMPOSITION_FILE))) {
     return { ok: false, error: `插件自带的 preset 目录不完整(缺 ${COMPOSITION_FILE}):${bundledDir}` }
   }
@@ -163,7 +165,7 @@ export function installPreset({ presetDir, bundledDir, pluginVersion }) {
   }
   const hash = hashDir(presetDir)
   try {
-    writeFileSync(join(presetDir, PRESET_MANIFEST), JSON.stringify({ pluginVersion, installedAt: Date.now(), hash }, null, 2), 'utf8')
+    writeFileSync(join(presetDir, PRESET_MANIFEST), JSON.stringify({ hash, installedAt: Date.now() }, null, 2), 'utf8')
   } catch {
     // 盖章写不进去不影响 preset 本身可用,只是下次自检会报 stale —— 不视为失败
   }
