@@ -234,7 +234,7 @@ export function apply(ctx, config) {
     parameters: {
       folder: { type: 'string', required: true, description: 'Extension folder name.' },
       listBlocks: { type: 'boolean', description: 'Return the block directory (id/kind/lines) instead of full text.' },
-      block: { type: 'string', description: 'Read one block only, format kind:id (e.g. skill:cs_tianfa).' },
+      block: { type: 'string', description: 'Read one block only, format kind:id — kind is skill/card/character/translate (e.g. skill:cs_tianfa, card:cs_bangbang).' },
       notes: { type: 'boolean', description: 'Also return this package history notes (engine-level lessons). Fetch only when relevant to the current task.' },
     },
     output: {
@@ -307,7 +307,7 @@ export function apply(ctx, config) {
       writeMode: { type: 'string', enum: ['auto', 'manual'], description: 'auto=write; manual=return code only.' },
       blocks: { type: 'array', description: 'Block-assembly mode: submit complete new blocks for the IDs you change; everything else is kept from the old file by the tool.', items: { type: 'object', additionalProperties: false, properties: {
         id: { type: 'string', required: true, description: 'Internal ID, e.g. cs_tianfa.' },
-        kind: { type: 'string', enum: ['skill', 'translate'], required: true, description: 'Block type.' },
+        kind: { type: 'string', enum: ['skill', 'card', 'character', 'translate'], required: true, description: 'Block type.' },
         code: { type: 'string', required: true, description: 'Full block text (property with trailing comma; tool adds one if missing).' },
       } } },
       edits: { type: 'array', description: 'Exact small patches for non-block regions (character registration, card list lines). find must occur exactly once in the current file.', items: { type: 'object', additionalProperties: false, properties: {

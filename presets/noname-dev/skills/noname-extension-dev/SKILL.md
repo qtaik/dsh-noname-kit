@@ -16,7 +16,7 @@ whenToUse: 需要编写、修改或审查无名杀扩展代码(武将技能/卡�
 2. **ID 前缀约定**:任务带「内部 ID 前缀」时,新增内部 ID = 前缀 + 拼音/英文(如 cs_tianfa),显示名写入 translate。
 3. **找官方参考**:用 `noname_search_reference` 直接搜官方相似实现(中文名/ID/效果关键词;整句描述按相似度列候选)。确认前的只读调研不受确认门限制;用户已给参考代码或改动极简单时可跳过;编辑已有扩展先 `noname_read_extension` 读当前代码。
 4. **调研纪律(控上下文成本)**:优先用 `noname_search_reference`(结果有界);确需 bash 抽查引擎源码时用**窄窗口**命令(`grep -A5`/`sed -n 起止,p` 小范围/`head`),禁止大段倾倒整段文件;同一结论(注意点/搜索结果/参考代码里已有的)不重复验证。
-5. **生成代码(区块化读写,防抄错)**:扩展文件按锚点区块(//#noname-kit-begin/end 注释)管理。改已有技能:`noname_read_extension` 传 `listBlocks` 看区块目录 → 传 `block:'skill:ID'` 只读该块 → `noname_write_extension` 用 `blocks` 参数提交完整新块(未提交的区块由工具从旧文件逐字节保留);零星小改动(武将登记/牌堆条目)用 `edits` 精确补丁(find 必须唯一命中);删技能用 `deletes` 声明。**全文模式(code)仅用于新包首写或未建索引的存量包兜底;全文修改存量包必须带 `editScope`,范围外改动一律拒写**。新包首写按骨架模板给每个技能/翻译条目包锚点。
+5. **生成代码(区块化读写,防抄错)**:扩展文件按锚点区块(//#noname-kit-begin/end 注释)管理,块种类四种:**skill / card / character / translate**。改已有条目:`noname_read_extension` 传 `listBlocks` 看区块目录 → 传 `block:'skill:ID'`(card/character/translate 同理)只读该块 → `noname_write_extension` 用 `blocks` 参数提交完整新块(未提交的区块由工具从旧文件逐字节保留);零星小改动(牌堆条目、一处数值)用 `edits` 精确补丁(find 必须唯一命中);删条目用 `deletes` 声明。**全文模式(code)仅用于新包首写或未建索引的存量包兜底;全文修改存量包必须带 `editScope`,范围外改动一律拒写**。新包首写按骨架模板给每个技能/翻译条目包锚点。
 6. **必须校验**:`noname_validate`,有 error 修复重验。
 7. **落盘前自查**:写入前对照【需求理解确认】逐技能自查(触发/频率/目标/数值/边界/不做什么,逐条能在代码里指出来),发现偏差先改再写。
 8. **写入**:自查通过后 `noname_write_extension`(或手动模式由用户复制)。

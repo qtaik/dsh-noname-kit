@@ -213,12 +213,68 @@ export default function () {
   const pkTr = blocks.virtualTranslateBlocks(PKG)
   ok(pkTr.length === 2 && pkTr.some((b) => b.id === 'ts_huikan' && b.text.includes('挥砍')), 'package 布局:翻译块识别并合并名称+描述')
   const pkDir = blocks.scanBlocks(PKG)
-  ok(pkDir.blocks.every((b) => !['skill', 'translate'].includes(b.id)), 'package 布局:目录无结构键垃圾')
+  ok(pkDir.blocks.every((b) => !['skill', 'translate', 'card', 'character'].includes(b.id)), 'package 布局:目录无结构键垃圾')
+  const pkCh = blocks.virtualCharacterBlocks(PKG)
+  ok(pkCh.length === 1 && pkCh[0].id === 'ts_muou', 'package 布局:武将块识别为 ts_muou')
   const pm = blocks.migrateCode(PKG)
-  ok(!pm.error && pm.blocks === 3 && blocks.scanAnchored(pm.code).length === 3, 'package 布局:迁移覆盖 3 个内容块(1 技能 + 2 翻译组)')
+  ok(!pm.error && pm.blocks === 4 && blocks.scanAnchored(pm.code).length === 4, 'package 布局:迁移覆盖 4 个内容块(1 技能 + 1 武将 + 2 翻译组)')
+  ok(pm.code.includes('//#noname-kit-begin character:ts_muou'), 'package 布局:武将块也打上了锚点')
   ok(blocks.stripAnchors(pm.code).replace(/[ \t]*$/gm, '').replace(/,$/gm, '') === PKG.replace(/[ \t]*$/gm, '').replace(/,$/gm, ''), 'package 布局:迁移除锚点行与收尾逗号外逐字节还原')
   ok(pm.code.includes('},\n//#noname-kit-end skill:ts_huikan'), 'package 布局:技能块收尾补逗号(后续插入不炸)')
   ok(pm.code.includes('出牌阶段限一次。",\n//#noname-kit-end translate:ts_huikan'), 'package 布局:翻译块 end 锚落在区段收口之内')
+
+  // ── 14) card / character 区块(老式扩展的主体内容,原先只有 skill/translate 支持)──
+  // 嵌套描述符布局 card:{ card:{…} } 是真实老包的常见形态(用户创神包即如此):
+  // 条目在内层容器里,插新块必须落到内层,插到外层会把新卡挂到错误的层级上。
+  const CARDS = `game.import("extension", function (lib, game, ui, get, ai, _status) {
+  return {
+    name: "卡包",
+    card: {
+        card: {
+            tumoubugui: {
+                type: "trick",
+                enable: true,
+            },
+            shuangqiang: {
+                type: "equip",
+            },
+        },
+    },
+  };
+})`
+  const ca = blocks.virtualCardBlocks(CARDS)
+  ok(ca.length === 2 && ca.map((b) => b.id).join(',') === 'tumoubugui,shuangqiang', 'card:虚拟划分识别 2 张卡(结构键 card 不当条目)')
+  ok(blocks.extractBlock(CARDS, 'card', 'tumoubugui').includes('type: "trick"'), 'card:按块读取(未锚文件走虚拟划分)')
+  const cm = blocks.migrateCode(CARDS)
+  ok(!cm.error && cm.blocks === 2 && cm.commas === 0, 'card:迁移打上 2 个卡的锚点、不误补逗号')
+  ok(cm.code.includes('//#noname-kit-begin card:tumoubugui'), 'card:锚点内容正确')
+  ok(blocks.scanAnchored(cm.code).filter((b) => b.kind === 'card').length === 2, 'card:迁移后锚点可扫描')
+  ok(syntaxOk(cm.code), 'card:迁移后语法通过')
+
+  // 插入点:嵌套布局里新卡必须落在内层容器(否则 virtualCardBlocks 认不出它)
+  const ins = blocks.assembleBlocks(cm.code, [{ kind: 'card', id: 'newone', code: 'newone: { type: "basic" }' }])
+  ok(ins.errors.length === 0 && ins.applied.includes('card:newone'), 'card:新卡插入成功')
+  const afterIns = blocks.virtualCardBlocks(ins.code)
+  ok(afterIns.some((b) => b.id === 'newone'), 'card:插入的新卡被识别为 card 区段的条目(说明落对了层级)')
+  ok(syntaxOk(ins.code), 'card:插入后语法通过')
+  ok(ins.code.includes('card:newone') && ins.code.includes('card:tumoubugui'), 'card:原有卡未被破坏')
+
+  // 无锚文件直接插新武将:同样要落在内层 character 容器里
+  const CHARS = 'game.import("extension", function (lib, game, ui, get, ai, _status) {\n  return {\n    name: "武将包",\n    character: {\n        character: {\n            ts_muou: { sex: "male", hp: 3 },\n        },\n    },\n  };\n})'
+  const ci = blocks.assembleBlocks(CHARS, [{ kind: 'character', id: 'ts_new', code: 'ts_new: { sex: "female", hp: 4 }' }])
+  ok(ci.errors.length === 0, 'character:无锚文件插入新武将成功')
+  ok(blocks.virtualCharacterBlocks(ci.code).some((b) => b.id === 'ts_new'), 'character:新武将落在内层容器(层级正确)')
+  ok(syntaxOk(ci.code), 'character:插入后语法通过')
+
+  // 武将的数组形态是老式扩展的经典写法(Miku: ["female","shen",3,[...],["zhu","des:…"]]),
+  // 只认"值是对象"会把整包武将排除在区块管理之外(实测真实扩展 70 个武将全军覆没)
+  const CHAR_ARR = 'game.import("extension", function (lib, game, ui, get, ai, _status) {\n  return {\n    name: "武将包",\n    character: {\n        character: {\n            Miku: ["female", "shen", 3, ["aicong"], ["zhu", "des:把你miku掉"]],\n            cs_feng: { sex: "male", hp: 4 },\n        },\n    },\n  };\n})'
+  const carr = blocks.virtualCharacterBlocks(CHAR_ARR)
+  ok(carr.length === 2, 'character:数组形态与对象形态都算条目(2 个)')
+  ok(carr.find((b) => b.id === 'Miku').text.includes('把你miku掉'), 'character:数组形态条目能整块读出')
+  const carrM = blocks.migrateCode(CHAR_ARR)
+  ok(!carrM.error && carrM.blocks === 2 && syntaxOk(carrM.code), 'character:数组形态条目迁移后语法通过')
+  ok(carrM.code.includes('//#noname-kit-begin character:Miku'), 'character:数组形态条目也打上锚点')
 
   console.log('\n全部通过:' + passed + ' 项')
 } finally {

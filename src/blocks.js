@@ -66,21 +66,6 @@ function skipBlockComment(text, i) {
   return end >= 0 ? end + 1 : text.length
 }
 
-/** 定位顶层区段(如 skill/translate)的 { 与配对 };多个候选取跨度最大者(避开 package 描述里的同名嵌套)。 */
-export function findSection(code, name) {
-  const re = new RegExp('(?:^|[\\n{,;])\\s*' + name + '\\s*:\\s*\\{', 'g')
-  let m
-  let best = null
-  while ((m = re.exec(code))) {
-    const open = code.indexOf('{', m.index + m[0].length - 1)
-    const close = matchBrace(code, open)
-    if (close < 0) continue
-    if (!best || close - open > best.close - best.open) best = { open, close }
-    re.lastIndex = close
-  }
-  return best
-}
-
 /**
  * 找出所有同名区段(含嵌套,如 package.skill 与 package.skill.skill)。
  * 虚拟划分用:无名杀扩展的布局不止一种,技能/翻译可能藏在任意层级。
@@ -211,7 +196,7 @@ export function scanAnchored(code) {
 
 export function hasAnchors(code) { return scanAnchored(code).length > 0 }
 
-/** 区块目录:锚点优先;无锚时虚拟划分(skill 区段属性 + translate 条目分组)。 */
+/** 区块目录:锚点优先;无锚时虚拟划分(skill/card/character 区段属性 + translate 条目分组)。 */
 export function scanBlocks(code) {
   const anchored = scanAnchored(code)
   if (anchored.length) {
@@ -221,8 +206,11 @@ export function scanBlocks(code) {
     }
   }
   const blocks = []
-  for (const b of virtualSkillBlocks(code)) blocks.push({ key: b.key, kind: 'skill', id: b.id, lines: b.text.split('\n').length, virtual: true })
-  for (const b of virtualTranslateBlocks(code)) blocks.push({ key: b.key, kind: 'translate', id: b.id, lines: b.text.split('\n').length, virtual: true })
+  for (const kind of [...CONTENT_KINDS, 'translate']) {
+    for (const b of virtualBlocks(code, kind)) {
+      blocks.push({ key: b.key, kind: b.kind, id: b.id, lines: b.text.split('\n').length, virtual: true })
+    }
+  }
   return { anchored: false, blocks }
 }
 
@@ -231,31 +219,43 @@ export function extractBlock(code, kind, id) {
   const key = kind + ':' + id
   const hit = scanAnchored(code).find((b) => b.key === key)
   if (hit) return hit.text
-  if (kind === 'skill') {
-    const b = virtualSkillBlocks(code).find((x) => x.id === id)
-    return b ? b.text : null
-  }
-  if (kind === 'translate') {
-    const b = virtualTranslateBlocks(code).find((x) => x.id === id)
-    return b ? b.text : null
-  }
-  return null
+  const b = virtualBlocks(code, kind).find((x) => x.id === id)
+  return b ? b.text : null
 }
 
-/** 无锚文件:所有 skill 区段(含嵌套如 package.skill.skill)的 depth-1 属性逐个成块。 */
-export function virtualSkillBlocks(code) {
+/** 内容块种类:skill / card / character 三种条目形状相同(区段: { 名字: {...} }),
+ *  translate 有 name+desc 合并逻辑、单独处理。 */
+export const CONTENT_KINDS = ['skill', 'card', 'character']
+
+/**
+ * 无锚文件:某个区段的 depth-1 条目逐个成块(含嵌套区段的并集)。
+ * closers = 允许的"条目值结尾字符":skill 只认对象 `{}`;card/character 还认数组 `[]`
+ * —— 老式扩展的武将最常用数组形态(`Miku: ["Miku", ["cs_x"], ...]`),那是正文不是噪声,
+ * 不认数组就等于把整包武将排除在区块管理之外(实测真实扩展 70 个武将全军覆没)。
+ */
+function virtualObjectBlocks(code, kind, closers = '}') {
   const out = []
   const seen = new Set()
-  for (const sec of findAllSections(code, 'skill')) {
+  for (const sec of findAllSections(code, kind)) {
     for (const p of sectionProperties(code, sec.open, sec.close)) {
-      if (code[p.end] !== '}') continue
+      if (!closers.includes(code[p.end])) continue
       if (STRUCTURAL_NAMES.has(p.name)) continue
       if (seen.has(p.name)) continue
       seen.add(p.name)
-      out.push({ key: 'skill:' + p.name, kind: 'skill', id: p.name, start: p.start, end: p.end, text: code.slice(p.start, p.end + 1) })
+      out.push({ key: kind + ':' + p.name, kind, id: p.name, start: p.start, end: p.end, text: code.slice(p.start, p.end + 1) })
     }
   }
   return out
+}
+
+export function virtualSkillBlocks(code) { return virtualObjectBlocks(code, 'skill') }
+export function virtualCardBlocks(code) { return virtualObjectBlocks(code, 'card', '}]') }
+export function virtualCharacterBlocks(code) { return virtualObjectBlocks(code, 'character', '}]') }
+
+/** 按种类取虚拟块(translate 走它自己的分组逻辑)。 */
+export function virtualBlocks(code, kind) {
+  if (kind === 'translate') return virtualTranslateBlocks(code)
+  return virtualObjectBlocks(code, kind, kind === 'skill' ? '}' : '}]')
 }
 
 /** 无锚文件:所有 translate 区段的条目按基础 ID 分组(x 与 x_info 同块),按区段去重。 */
@@ -282,7 +282,7 @@ export function virtualTranslateBlocks(code) {
 
 function normalizeBlockCode(kind, raw) {
   let code = String(raw || '').replace(/\s+$/, '')
-  if (kind === 'skill' || kind === 'translate') {
+  if (CONTENT_KINDS.includes(kind) || kind === 'translate') {
     if (!code.endsWith(',')) code += ','
   }
   return code
@@ -296,9 +296,17 @@ function anchorWrap(key, body) {
 function insertPoint(code, kind) {
   const all = scanAnchored(code).filter((b) => b.kind === kind)
   if (all.length) return all[all.length - 1].end
-  const sec = findSection(code, kind)
-  if (!sec) return null
-  const nl = code.indexOf('\n', sec.open)
+  // 无锚时:挑"真正装着条目"的那个同名区段插入。嵌套布局(老式扩展常见的
+  // card:{ card:{…} })里外层容器只有一个同名骨架键、条目全在内层,插到外层
+  // 会让新条目挂到错误的对象层级上。
+  let best = null
+  let bestCount = -1
+  for (const sec of findAllSections(code, kind)) {
+    const count = sectionProperties(code, sec.open, sec.close).filter((p) => !STRUCTURAL_NAMES.has(p.name)).length
+    if (count > bestCount) { best = sec; bestCount = count }
+  }
+  if (!best) return null
+  const nl = code.indexOf('\n', best.open)
   return nl >= 0 ? nl + 1 : null
 }
 
@@ -352,7 +360,7 @@ export function assembleBlocks(oldCode, blocks = [], edits = [], deletes = []) {
   }
 
   // 5) 插入新块:插到同类最后一个块之后(区段缺失则报错)
-  for (const kind of ['skill', 'translate']) {
+  for (const kind of [...CONTENT_KINDS, 'translate']) {
     const list = inserting.filter((x) => x.kind === kind)
     if (!list.length) continue
     const at = insertPoint(code, kind)
@@ -379,16 +387,24 @@ export function assembleBlocks(oldCode, blocks = [], edits = [], deletes = []) {
 }
 
 /**
- * 保真校验(全文模式写存量包用):scope 外的 skill 区块必须逐字节一致
- * (按行尾空白/回车归一后比较,避免无害差异误报)。
+ * 保真校验(全文模式写存量包用):scope 外的内容区块必须逐字节一致
+ * (按行尾空白/回车归一后比较,避免无害差异误报)。覆盖 skill/card/character/translate
+ * —— 早先只管 skill,等于卡片、武将与翻译条目在全文模式下被动过也拦不住。
  */
 export function checkFidelity(oldCode, newCode, scopeIds = []) {
   const scope = new Set(scopeIds)
-  const newBlocks = new Map(virtualSkillBlocks(newCode).map((b) => [b.id, b]))
+  const collect = (code) => {
+    const map = new Map()
+    for (const kind of [...CONTENT_KINDS, 'translate']) {
+      for (const b of virtualBlocks(code, kind)) map.set(b.key, b)
+    }
+    return map
+  }
+  const newBlocks = collect(newCode)
   const changed = []
-  for (const b of virtualSkillBlocks(oldCode)) {
+  for (const b of collect(oldCode).values()) {
     if (scope.has(b.id)) continue
-    const nb = newBlocks.get(b.id)
+    const nb = newBlocks.get(b.key)
     if (!nb || normalizeForCompare(b.text) !== normalizeForCompare(nb.text)) changed.push(b.id)
   }
   return { ok: changed.length === 0, changed }
@@ -405,10 +421,10 @@ function normalizeForCompare(code) {
 export function migrateCode(oldCode) {
   // 幂等:已锚点文件先剥旧锚再重扫(锚点规范升级后直接重新建立索引即可)
   const base = scanAnchored(oldCode).length ? stripAnchors(oldCode) : oldCode
-  const skills = virtualSkillBlocks(base)
-  const translates = virtualTranslateBlocks(base)
-  if (!skills.length && !translates.length) {
-    return { error: '未能识别出可锚定的区块(skill/translate 区段)——该文件可能是非常规格式,请走全文模式处理。' }
+  const items = []
+  for (const kind of [...CONTENT_KINDS, 'translate']) items.push(...virtualBlocks(base, kind))
+  if (!items.length) {
+    return { error: '未能识别出可锚定的区块(skill/card/character/translate 区段)——该文件可能是非常规格式,请走全文模式处理。' }
   }
   // 按位置聚合插入(同一边界:前块 end 锚先于后块 begin 锚),再从后往前落位
   const byAt = new Map()
@@ -420,7 +436,7 @@ export function migrateCode(oldCode) {
   }
   let inserted = 0
   let commas = 0
-  for (const b of [...skills, ...translates]) {
+  for (const b of items) {
     const ls = base.lastIndexOf('\n', b.start) + 1
     let le = b.end
     while (le < base.length && base[le] !== '\n') le++
@@ -446,7 +462,7 @@ export function migrateCode(oldCode) {
   if (normalizeForCompare(stripEolCommas(stripAnchors(code))) !== normalizeForCompare(stripEolCommas(base))) {
     return { error: '锚点插入自检失败(除锚点行与收尾逗号外内容发生变化),已放弃写入。' }
   }
-  return { code, inserted, commas, blocks: skills.length + translates.length }
+  return { code, inserted, commas, blocks: items.length }
 }
 
 /** 迁移自检用:剥掉行尾逗号(迁移合法差异=新增锚点行与收尾逗号;CRLF 行尾的 \r 一并剥)。 */

@@ -20,7 +20,7 @@ export const KNOWLEDGE_TEXT = `【无名杀扩展开发规范(noname-kit)】
 2. **ID 前缀约定(防跨包冲突)**:lib.skill/character/card 与 translate 键是全局命名空间,所有扩展共享。任务消息若带有「内部 ID 前缀」,所有新增技能/武将/卡牌的内部 ID 必须 = 前缀 + 拼音或英文(如 cs_tianfa),中文显示名写入 translate;需求理解确认里要包含内部 ID 命名。
 3. **找官方参考**:用 noname_search_reference 直接搜官方相似实现(中文名/ID/效果关键词;整句效果描述按相似度≥50% 列候选)。**确认前的只读调研不受确认门限制**——先搜再写确认单,确认单可引用参考依据。用户已在表单提供参考代码、或改动极简单时可跳过。搜不到就换关键词再搜,别硬写。
 4. **调研纪律(控上下文成本)**:优先用 noname_search_reference(结果有界);确需 bash 抽查引擎源码时用**窄窗口**命令(\`grep -A5\`/\`sed -n 起止,p\` 小范围/\`head\`),禁止大段倾倒整段文件;同一结论(注意点/搜索结果/参考代码里已有的)不重复验证。
-5. **生成代码(区块化读写,防抄错)**:扩展文件按「锚点区块」管理(//#noname-kit-begin/end 注释包裹)。**改已有技能**:noname_read_extension 传 listBlocks 看区块目录 → 传 block:'skill:ID' 只读该块 → noname_write_extension 用 blocks 参数提交完整新块(未提交的区块由工具从旧文件逐字节保留,不可能抄错);零星小改动(武将登记/牌堆条目)用 edits 精确补丁(find 必须唯一命中);删技能用 deletes 声明。**全文模式(code 参数)仅用于新包首写或未建索引的存量包兜底;全文修改存量包必须带 editScope(本次允许改动的 ID 清单),范围外改动一律拒写**。新包首写按骨架模板给每个技能/翻译条目包上锚点。
+5. **生成代码(区块化读写,防抄错)**:扩展文件按「锚点区块」管理(//#noname-kit-begin/end 注释包裹),块种类四种:**skill / card / character / translate**。**改已有条目**:noname_read_extension 传 listBlocks 看区块目录 → 传 block:'skill:ID'(card/character/translate 同理)只读该块 → noname_write_extension 用 blocks 参数提交完整新块(未提交的区块由工具从旧文件逐字节保留,不可能抄错);零星小改动(牌堆条目、一处数值)用 edits 精确补丁(find 必须唯一命中);删条目用 deletes 声明。**全文模式(code 参数)仅用于新包首写或未建索引的存量包兜底;全文修改存量包必须带 editScope(本次允许改动的 ID 清单),范围外改动一律拒写**。新包首写按骨架模板给每个技能/翻译条目包上锚点。
 6. **必须校验**:保存前必须调用 noname_validate。有 error 必须修复后重新校验。
 7. **落盘前自查**:调用 noname_write_extension 前,对照【需求理解确认】逐技能自查一遍(触发/频率/目标/数值/边界/不做什么,逐条能在代码里指出来),发现偏差先改再写。
 8. **写入**:自查通过后按用户选定的写入方式执行(自动写入用 noname_write_extension;手动模式由用户复制)。
