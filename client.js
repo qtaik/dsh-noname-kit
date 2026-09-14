@@ -588,12 +588,11 @@ window.__ModuleLoader__.load({
         else if (preset.state === 'ok') line = e('div', 'nnk-hint', '✅ 与插件自带的一致');
         else if (preset.state === 'missing') line = e('div', 'nnk-hint', '⚠️ 未安装——新建会话里选不到「无名杀开发模式」,点右侧重装。');
         else if (preset.state === 'stale') {
-          // 用"装进去的哈希"区分:差异来自插件侧(你没重装)还是本地被改过 —— 两者处置不同
-          line = e('div', 'nnk-hint', preset.localEdited === true
-            ? '⚠️ 本地这份被改过,和插件自带的不一致。重装会用插件那份覆盖它(先备份)。'
-            : preset.localEdited === false
-              ? '⚠️ 插件自带的更新了,你这份还是旧的。点重装同步(先备份)。'
-              : '⚠️ 和插件自带的不一致,而且没有安装记录。点重装覆盖(先备份)。');
+          // 只陈述事实(哈希不同)+ 后果(重装会覆盖本地这份),不替用户猜原因 ——
+          // "本地被改过"或"插件更新了"都只是可能,猜错反而误导
+          var mine = String(preset.installedHash || '').slice(0, 8);
+          var theirs = String(preset.bundledHash || '').slice(0, 8);
+          line = e('div', 'nnk-hint', '⚠️ 与插件自带的不一致(已装 ' + mine + ' ≠ 插件 ' + theirs + ')。点重装会用插件自带那份覆盖本地这份(先备份)。');
         }
         else line = e('div', 'nnk-hint', '⚠️ ' + (preset.error || '状态未知'));
         return e('div', {},
