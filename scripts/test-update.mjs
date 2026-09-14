@@ -84,7 +84,7 @@ try {
   mkdirSync(join(dshHome, 'profiles', 'web'), { recursive: true })
   mkdirSync(join(dshHome, 'profiles', 'prod'), { recursive: true })
   writeFileSync(join(dshHome, 'profiles', 'web', 'package.json'), JSON.stringify({
-    dependencies: { 'dsh-noname-kit': 'link:D:/dev/noname-kit' },
+    dependencies: { 'dsh-noname-kit': 'link:../noname-kit' },
   }))
   eq(update.detectInstall({ dshHome }).form, 'link', '只有 link 安装 → 形态 link')
   writeFileSync(join(dshHome, 'profiles', 'prod', 'package.json'), JSON.stringify({
@@ -97,7 +97,7 @@ try {
   eq(update.installHint({ form: 'link', profile: 'web' }), null, 'link 安装没有升级命令')
   eq(update.installHint({ form: 'git', profile: 'prod' }), 'dsh plugin --profile prod update dsh-noname-kit', 'git 安装给出升级命令')
   writeFileSync(join(dshHome, 'profiles', 'web', 'package.json'), JSON.stringify({
-    dependencies: { 'dsh-noname-kit': 'link:D:/dev/noname-kit' },
+    dependencies: { 'dsh-noname-kit': 'link:../noname-kit' },
   }))
   rmSync(join(dshHome, 'profiles', 'prod'), { recursive: true, force: true })
   eq(update.detectInstall({ dshHome: join(home, 'nothing-here') }).form, 'unknown', '家目录不存在 → unknown')
