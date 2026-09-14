@@ -669,6 +669,19 @@ window.__ModuleLoader__.load({
         // 未配置游戏目录时默认落在「⚙ 设置」页:新用户第一眼就是配置入口
         if (phase === false) setActive('settings');
       }, [phase]);
+      var presetFlip = React.useState(false);
+      var presetFlipDone = presetFlip[0], setPresetFlipDone = presetFlip[1];
+      React.useEffect(function () {
+        if (presetFlipDone) return
+        // 「无名杀开发模式」没装时也默认落在「⚙ 设置」页 —— 那页有「♻️ 重装 preset」按钮。
+        // 从 npm 装的用户手里没有插件目录路径(它在 ~/.dsh/profiles/web/node_modules/ 下),
+        // 指望他去命令行跑 install-preset.mjs 是不现实的(实测:陌生人卡在这一步)。
+        healthBus.refresh().then(function (body) {
+          setPresetFlipDone(true)
+          var preset = body && body.preset
+          if (preset && preset.state === 'missing') setActive('settings')
+        })
+      }, [presetFlipDone]);
       var send = function (text) {
         var session = sessionId;
         return Promise.resolve(session).then(function (id) {
