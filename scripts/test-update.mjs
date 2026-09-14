@@ -63,7 +63,7 @@ try {
   eq(version.formatVersion(''), '', 'formatVersion 空串返回空串')
 
   // ── 3) 安装 spec 分类 ──
-  eq(update.classifySpec('link:D:/deepseek-harness/dsh-latest/noname-kit'), 'link', 'link: 视作本地开发')
+  eq(update.classifySpec('link:D:/dev/noname-kit'), 'link', 'link: 视作本地开发')
   eq(update.classifySpec('file:../x'), 'link', 'file: 视作本地开发')
   eq(update.classifySpec('.'), 'link', '相对路径视作本地开发')
   eq(update.classifySpec('D:/foo/bar'), 'link', '绝对路径视作本地开发')
