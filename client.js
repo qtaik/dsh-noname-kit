@@ -464,59 +464,6 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // ── 初始化向导:未配置游戏目录时先显示这个 ──────────────────
-    // 隐私考虑:默认不扫盘;只有用户点「自动扫描」才扫一次。
-    function SetupPanel(props) {
-      var onReady = props.onReady;
-      var state = React.useState({ chosen: '', manual: '', err: '', busy: false, scanning: false, scanned: false, candidates: [] });
-      var form = state[0], setForm = state[1];
-      var set = function (patch) { setForm(function (prev) { return Object.assign({}, prev, patch) }) };
-
-      var scan = function () {
-        set({ scanning: true, err: '' });
-        fetch('/noname-kit-api/detect').then(function (r) { return r.json() }).then(function (body) {
-          set({ scanning: false, scanned: true, candidates: body.candidates || [], chosen: (body.candidates || [])[0] || '' });
-        }, function () { set({ scanning: false, err: '扫描失败' }) });
-      };
-
-      var save = function () {
-        var dir = form.manual.trim() || form.chosen;
-        if (!dir) { set({ err: '请先填写游戏本体目录,或点「自动扫描」选择候选' }); return }
-        set({ busy: true, err: '' });
-        fetch('/noname-kit-api/init', {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ nonameDir: dir }),
-        }).then(function (r) { return r.json() }).then(function (body) {
-          if (body.ok) onReady();
-          else set({ busy: false, err: body.error || '保存失败' });
-        }, function (error) { set({ busy: false, err: '保存失败: ' + (error && error.message || error) }) });
-      };
-
-      return h('div', { className: 'nnk-card' },
-        e('div', {}, h('b', null, '🎬 初始化向导')),
-        e('div', 'nnk-hint', '还没有配置无名杀游戏本体目录。配置后 AI 才能把扩展自动写入游戏的 extension 文件夹;不配置也可以把写入方式设为「手动复制」(只出代码,你手动保存)。'),
-        e('div', 'nnk-label', '① 手动填写(游戏本体目录,含 extension/ 的那层)'),
-        h('input', {
-          className: 'nnk-input', value: form.manual,
-          placeholder: '例: D:\\Games\\noname\\resources\\app',
-          onChange: function (ev) { set({ manual: ev.target.value, chosen: '' }) },
-        }),
-        e('div', 'nnk-label', '② 或者'),
-        h('button', { className: 'nnk-copy', disabled: form.scanning, onClick: scan },
-          form.scanning ? '扫描中…' : (form.scanned ? '🔍 重新扫描本机' : '🔍 自动扫描本机(点一下才扫,几秒钟)')),
-        form.scanned && form.candidates.length === 0 ? e('div', 'nnk-hint', '没扫到——游戏装在非常规位置的话,直接用上面手动填写。') : null,
-        form.candidates.map(function (dir) {
-          return h('label', { key: dir, className: 'nnk-radio', style: { display: 'block', margin: '4px 0' } },
-            h('input', { type: 'radio', name: 'nnk-candidate', checked: form.chosen === dir, onChange: function () { set({ chosen: dir, manual: '' }) } }),
-            dir
-          );
-        }),
-        form.err ? e('div', 'nnk-err', form.err) : null,
-        h('button', { className: 'nnk-submit', disabled: form.busy, onClick: save }, form.busy ? '保存中…' : '💾 保存并启用'),
-        h('button', { className: 'nnk-copy', style: { marginLeft: '10px' }, onClick: function () { onReady(true) } }, '暂不配置,仅生成模式 →')
-      );
-    }
-
     // ── 设置面板(⚙ 子页):游戏目录 / AI 输出阀门 / 关于 ─────────
     function SettingsPanel() {
       var state = React.useState({ loading: true, version: '', nonameDir: '', source: 'none', bashMax: 64000, bashMaxK: '64', manual: '', scanning: false, scanned: false, candidates: [], busy: false, msg: '', err: '' });
@@ -614,6 +561,10 @@ window.__ModuleLoader__.load({
           setPhase(Boolean(status.active));
         }, function () { setPhase(true) }); // 服务不可用时照常显示,工具会自行报错
       }, []);
+      React.useEffect(function () {
+        // 未配置游戏目录时默认落在「⚙ 设置」页:新用户第一眼就是配置入口
+        if (phase === false) setActive('settings');
+      }, [phase]);
       var send = function (text) {
         var session = sessionId;
         return Promise.resolve(session).then(function (id) {
@@ -623,7 +574,6 @@ window.__ModuleLoader__.load({
         });
       };
       if (phase === null) return e('div', 'nnk-hint', '正在检查插件配置…');
-      if (phase === false) return e('div', 'nnk-hint', '⚠️ 未配置游戏路径:请在设置里完成初始化,或把写入方式设为「手动复制」。');
 
       return h('div', { className: 'nnk-wrap' },
         h('div', { className: 'nnk-tabs' },
@@ -632,6 +582,7 @@ window.__ModuleLoader__.load({
           h('button', { className: 'nnk-tab' + (active === 'history' ? ' nnk-active' : ''), onClick: function () { setActive('history') } }, '📜 历史'),
           h('button', { className: 'nnk-tab' + (active === 'settings' ? ' nnk-active' : ''), onClick: function () { setActive('settings') } }, '⚙ 设置')
         ),
+        phase === false && active === 'new' ? e('div', 'nnk-err', '⚠️ 还没配置游戏目录——到「⚙ 设置」页填一下就能自动写入;暂时不配也行,把写入方式设为「手动复制」。') : null,
         active === 'new' ? h(NewTaskForm, { sessionId: sessionId, send: send }) : null,
         active === 'tasklist' ? h(TaskListContent, { sessions: props.sessions, compact: false }) : null,
         active === 'history' ? h(HistoryPanel) : null,
