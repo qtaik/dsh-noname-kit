@@ -1,6 +1,6 @@
 {
   "name": "dsh-noname-kit",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Noname (无名杀) extension workshop for DeepSeek Harness: AI writes skills/cards with official-reference search, validation-gated writes, task history, and a web workshop panel.",
   "type": "module",
   "main": "index.js",
@@ -23,6 +23,7 @@
     "src",
     "presets",
     "scripts",
+    "docs",
     "cordis.patch.yml",
     "README.md"
   ],
@@ -33,6 +34,7 @@
     "noname",
     "sanguosha"
   ],
+  "author": "qtaik",
   "license": "MIT",
   "repository": {
     "type": "git",

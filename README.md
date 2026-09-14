@@ -6,16 +6,22 @@
 静态校验、任务管理都有插件兜底;游戏扩展目录只认专用写入通道,AI 抄错或删错
 代码会被工具层拦下,覆盖前自动备份。
 
-![工坊:任务表单与任务列表](docs/screenshots/workshop.png)
+![工坊:任务表单与任务列表](https://cdn.jsdelivr.net/npm/dsh-noname-kit/docs/screenshots/workshop.png)
 
-![历史页:备份回滚与注意点清单](docs/screenshots/history.png)
+![历史页:备份回滚与注意点清单](https://cdn.jsdelivr.net/npm/dsh-noname-kit/docs/screenshots/history.png)
 
 ## 安装
 
 需要 DeepSeek Harness 和 pnpm。
 
 ```sh
-dsh plugin --profile web add qtaik/dsh-noname-kit
+dsh plugin --profile web add dsh-noname-kit
+```
+
+或者从 GitHub 装(等价):
+
+```sh
+dsh plugin --profile web add https://github.com/qtaik/dsh-noname-kit.git
 ```
 
 装完再把「无名杀开发模式」preset 装上(在插件目录里执行):
