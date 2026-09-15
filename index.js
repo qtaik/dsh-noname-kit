@@ -160,12 +160,19 @@ export function apply(ctx, config) {
   }
 
   // ── 1) 常驻规范知识(文本随配置状态动态生成) ─────────────────
+  // POSIX 形式路径:模型在 bash 里习惯 /d/... 写法,直接给两种形式免得它自己转换/寻找
+  const posixPath = (p) => String(p || '')
+    .replace(/^([A-Za-z]):[\\/]/, (_m, d) => '/' + d.toLowerCase() + '/')
+    .replace(/\\/g, '/')
   ctx.systemPrompt.section({
     name: 'noname-kit',
     // 排在文件工具说明(1200-1300)之后、web 工具(2000)之前:模型先懂规矩再干活
     order: 1800,
     text: () => active
-      ? KNOWLEDGE_TEXT + `\n当前部署的游戏本体目录: ${nonameDir}(扩展写入根: ${extRootOf(nonameDir)})`
+      ? KNOWLEDGE_TEXT + '\n## 当前环境(工坊已配置;路径就在下面,不需要寻找)\n'
+        + '- 游戏本体目录: ' + nonameDir + '(bash 里写作 ' + posixPath(nonameDir) + ')\n'
+        + '- 扩展写入根: ' + extRootOf(nonameDir) + '(bash 里写作 ' + posixPath(extRootOf(nonameDir)) + ')\n'
+        + '- 需要核对引擎 API/源码时,直接在上述目录下对 noname/ 子目录做窄窗口 grep——禁止用 ls/find 列盘符根、用户目录来寻找引擎或扩展路径(路径已在上面,找了也白找)。\n'
       : KNOWLEDGE_TEXT + '\n注意:当前部署未配置 nonameDir,noname_write_extension 与 noname_read_extension 不可写/不可读,生成代码后让用户自行保存。',
   })
 

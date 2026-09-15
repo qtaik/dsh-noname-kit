@@ -174,13 +174,18 @@ try {
     'grep -rn "layout" /',
     'find ~ -name x',
     'du -sh / ; ls',
+    'ls -la /',
+    'ls /d/',
+    'ls /c/ /d/ /e/',
+    'dir C:\\',
   ]
   for (const cmd of refuseCase) ok(!!rootSearchIssue(cmd), '全盘检索闸:拒绝 ' + cmd.slice(0, 40))
   const allowCase = [
     'find /d/games/noname/extension -name "*.js"',
     'grep -rn "draw" noname/library | head -20',
     'grep -rn "path / desc" docs/x.md',
-    'ls -la /',
+    'ls /d/wms/无名杀-双样式懒人包/resources/app',
+    'ls -la /d/deepseek-harness',
     'find . -name x',
   ]
   for (const cmd of allowCase) ok(rootSearchIssue(cmd) === null, '全盘检索闸:放行 ' + cmd.slice(0, 40))
