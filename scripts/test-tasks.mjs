@@ -99,6 +99,57 @@ try {
   const r3 = await writeExtension(nonameDir, { folder: '测试包', code: fullCode, style: 'classic', kind: 'character' })
   ok(r3.ok && r3.wrote && r3.backup, '补回技能 → 放行,且产生备份')
 
+  // ── 10) 编辑已有条目:createTask 的 target + listEntries(下拉数据源) ──
+  const editCreated = await tasks.createTask(home, {
+    id: '测试包-03', folder: '测试包', type: 'character', title: '凌霜',
+    skills: [{ name: '凌霜', desc: '把天罚伤害 1 改成 2' }],
+    target: { kind: 'character', id: ' cs_tianfa ' },
+  })
+  ok(editCreated.ok && editCreated.task.target
+    && editCreated.task.target.kind === 'character' && editCreated.task.target.id === 'cs_tianfa',
+    '编辑任务 target 落库(去空白)')
+  const badTarget = await tasks.createTask(home, {
+    id: '测试包-04', folder: '测试包', type: 'card', title: '占位',
+    skills: [{ name: '占位', desc: '效果' }],
+    target: { kind: 'weapon', id: 'bad id!' },
+  })
+  ok(badTarget.ok && badTarget.task.target === null, '非法 target(kind 不认/ID 不合法)归 null')
+  const noTarget = await tasks.createTask(home, { id: '测试包-05', folder: '测试包', type: 'card', title: '占位2', skills: [{ name: '占位2', desc: '' }] })
+  ok(noTarget.ok && noTarget.task.target === null, '不传 target → null(创建任务不受影响)')
+
+  const entriesCode = [
+    "game.import('extension', function (lib, game, ui, get, ai) {",
+    '  return {',
+    "    name: '条目包',",
+    '    character: {',
+    "      ts_ren1: ['male', 'wei', 4, ['ts_skill1']],",
+    "      ts_ren2: { sex: 'female', group: 'shu', hp: 3, skills: ['ts_skill2'] },",
+    '    },',
+    '    card: {',
+    '      card: {',
+    "        ts_kapai: { fullimage: true, type: 'trick' },",
+    '      },',
+    '    },',
+    '    translate: {',
+    "      ts_ren1: ['凌霜', '武将描述'],",
+    "      ts_ren2: { name: '霜女' },",
+    "      ts_kapai: '疾风符',",
+    '    },',
+    '  }',
+    '});',
+  ].join('\n')
+  const weEntries = await writeExtension(nonameDir, { folder: '条目包', code: entriesCode, style: 'classic', kind: 'character' })
+  ok(weEntries.ok && weEntries.wrote, '写入条目包(供 listEntries 测试)')
+  const { listEntries } = await import('../src/write.js')
+  const leChar = await listEntries(nonameDir, '条目包', 'character')
+  ok(leChar.ok && leChar.entries.length === 2, 'listEntries 列出两个武将(数组+对象形态,无锚虚拟划分)')
+  ok(leChar.entries.some((x) => x.id === 'ts_ren1' && x.name === '凌霜'), '数组形态武将 + translate 数组首元素显示名')
+  ok(leChar.entries.some((x) => x.id === 'ts_ren2' && x.name === '霜女'), '对象形态武将 + translate.name 显示名')
+  const leCard = await listEntries(nonameDir, '条目包', 'card')
+  ok(leCard.ok && leCard.entries.length === 1 && leCard.entries[0].id === 'ts_kapai' && leCard.entries[0].name === '疾风符', 'listEntries 列出卡牌(嵌套 card.card 布局)+ 字符串 translate 名')
+  const leBad = await listEntries(nonameDir, '条目包', 'skill')
+  ok(!leBad.ok, 'listEntries 非 character/card 的 kind 被拒')
+
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })

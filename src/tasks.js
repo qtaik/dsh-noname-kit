@@ -2,9 +2,11 @@
  * noname-kit 任务登记处 v2:层级任务树。
  * 任务 = 一个武将(多技能分叉)或一张卡牌(单节点):
  *   task = { id, folder, type: 'character'|'card', title, charInfo, image, idPrefix,
+ *            target: { kind: 'character'|'card', id } | null,
  *            pile: { join: boolean, entries: [{suit, point}] },
  *            skills: [{name, desc, status: open|written|confirmed, rounds, feedbacks[] }],
  *            status: open|done, style, writeMode, createdAt, updatedAt }
+ * target 非空 = 「编辑已有条目」任务:只改该条目对应区块,其他内容不动。
  * 每个技能独立状态机:待实现(open)→ 待测试(written)→ 确认无误(confirmed);
  * 反馈把技能打回 open 并记录日志。全部技能 confirmed 且图片就位 → 任务自动 done。
  * 删除任务 = 从登记处移除整树;不动扩展代码/备份/history 归档。
@@ -72,8 +74,9 @@ function descriptionOf(skills) {
 /**
  * 创建任务。ID 全局唯一;character 任务带 skills 分叉;card 任务单节点。
  * skills: [{name, desc}];card 类型自动生成单节点。
+ * target 可选 { kind: 'character'|'card', id }:「编辑已有条目」任务,非法值归 null。
  */
-export async function createTask(dshHome, { id, folder, type, title, charInfo, pile, idPrefix, skills, image }) {
+export async function createTask(dshHome, { id, folder, type, title, charInfo, pile, idPrefix, skills, image, target }) {
   if (typeof id !== 'string' || !ID_RE.test(id.trim())) {
     return { ok: false, error: `任务ID「${id}」不合法:只允许中文/字母/数字/下划线/连字符,长度 1-64。` }
   }
@@ -89,10 +92,15 @@ export async function createTask(dshHome, { id, folder, type, title, charInfo, p
   const skillList = taskType === 'card'
     ? [newSkill({ name: title || '新卡牌', desc: descriptionOf(skills) })]
     : ((Array.isArray(skills) && skills.length ? skills : [{ name: title || '新技能', desc: '' }]).map(newSkill))
+  const taskTarget = target && (target.kind === 'character' || target.kind === 'card')
+    && typeof target.id === 'string' && ID_RE.test(target.id.trim())
+    ? { kind: target.kind, id: target.id.trim() }
+    : null
   const task = {
     id: cleanId,
     folder: folder.trim(),
     type: taskType,
+    target: taskTarget,
     title: String(title || '').slice(0, 60),
     charInfo: String(charInfo || '').slice(0, 500),
     pile: pile && pile.join ? { join: true, entries: String(pile.entries || '').slice(0, 2000) } : { join: false, entries: '' },

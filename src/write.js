@@ -6,7 +6,7 @@
 import { mkdir, readFile, readdir, copyFile, writeFile } from 'node:fs/promises'
 import { join, resolve, basename, relative, sep } from 'node:path'
 import { validateExtensionCode, collectDefinedIds } from './validate.js'
-import { scanAnchored, scanBlocks, extractBlock, assembleBlocks, checkFidelity, migrateCode, stripAnchors } from './blocks.js'
+import { scanAnchored, scanBlocks, extractBlock, assembleBlocks, checkFidelity, migrateCode, stripAnchors, findAllSections, sectionProperties } from './blocks.js'
 
 const FOLDER_RE = /^[\w\u4e00-\u9fff-]{1,64}$/
 
@@ -214,4 +214,49 @@ export async function rollbackExtension(nonameDir, folder, backupName) {
   } catch { /* 当前不存在 */ }
   await copyFile(backupPath, target)
   return { folder, restored: backupName }
+}
+
+/** 尽力从 translate 区段提取条目显示名(工坊「编辑已有条目」下拉的括号注):
+ * 对象值找 name 字段,数组值取首元素(老式扩展武将 `cs_x: ['名字','描述']`),
+ * 字符串值本身就是名字;x 与 x_info 以先出现者为准。提不到就不入表。 */
+function extractDisplayNames(code) {
+  const names = new Map()
+  for (const sec of findAllSections(code, 'translate')) {
+    for (const p of sectionProperties(code, sec.open, sec.close)) {
+      const base = p.name.replace(/_info$/, '')
+      if (names.has(base)) continue
+      const seg = code.slice(p.start, p.end + 1)
+      const m = /name\s*:\s*(['"`])((?:\\.|(?!\1).)*?)\1/.exec(seg)
+        || /[:[]\s*\[\s*(['"`])((?:\\.|(?!\1).)*?)\1/.exec(seg)
+      let name = m && m[2] ? m[2] : ''
+      if (!name && (code[p.end] === '"' || code[p.end] === "'")) {
+        // 简单字符串值(`cs_a: "甲"`):整段结尾的引号字面量就是名字
+        const lit = /(['"])((?:\\.|(?!\1).)*?)\1\s*$/.exec(seg)
+        if (lit) name = lit[2]
+      }
+      if (name) names.set(base, name)
+    }
+  }
+  return names
+}
+
+/**
+ * 列出扩展包内指定种类的全部条目(工坊「编辑已有武将/卡牌」的目标下拉)。
+ * scanBlocks 锚点优先、无锚自动虚拟划分——未迁移老包(含数组形态武将)同样可用。
+ * 只读,不写任何文件。
+ */
+export async function listEntries(nonameDir, folder, kind) {
+  if (kind !== 'character' && kind !== 'card') {
+    return { ok: false, kind, entries: [], error: 'kind 应为 character 或 card。' }
+  }
+  const { full } = safeFolderPath(nonameDir, folder)
+  let code
+  try { code = await readFile(join(full, 'extension.js'), 'utf8') } catch {
+    return { ok: false, kind, entries: [], error: '该扩展没有 extension.js。' }
+  }
+  const names = extractDisplayNames(code)
+  const entries = scanBlocks(code).blocks
+    .filter((b) => b.kind === kind)
+    .map((b) => ({ id: b.id, lines: b.lines, name: names.get(b.id) || '' }))
+  return { ok: true, kind, entries }
 }

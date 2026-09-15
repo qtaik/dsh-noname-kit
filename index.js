@@ -21,7 +21,7 @@ import { KNOWLEDGE_TEXT } from './src/knowledge.js'
 import { validateExtensionCode } from './src/validate.js'
 import { searchReference } from './src/reference.js'
 import { detectCandidates } from './src/detect.js'
-import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateAnchors } from './src/write.js'
+import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateAnchors, listEntries } from './src/write.js'
 import { readHistory, archiveTask, listExtensionHistories, recordBackup, deleteNote } from './src/history.js'
 import { copyImages } from './src/images.js'
 import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, completeById, deleteTask, reopenTask } from './src/tasks.js'
@@ -646,6 +646,14 @@ export function apply(ctx, config) {
           const folder = url.searchParams.get('folder') || ''
           try { return json(200, await readExtension(nonameDir, folder)) } catch (error) {
             return json(200, { folder, files: [], error: error.message })
+          }
+        }
+        if (req.method === 'GET' && url.pathname === '/noname-kit-api/entries') {
+          // 工坊「编辑已有武将/卡牌」下拉:列出包内条目 id(只读)
+          const folder = url.searchParams.get('folder') || ''
+          const kind = url.searchParams.get('kind') || ''
+          try { return json(200, await listEntries(nonameDir, folder, kind)) } catch (error) {
+            return json(200, { ok: false, kind, entries: [], error: error.message })
           }
         }
         if (req.method === 'GET' && url.pathname === '/noname-kit-api/history') {
