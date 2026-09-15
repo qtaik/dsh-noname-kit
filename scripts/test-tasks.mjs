@@ -188,6 +188,45 @@ try {
   const e2 = await tasks.setSkillStatus(home, { taskId: '测试包-09', skill: '裂甲', status: 'confirmed' })
   ok(e2.ok && e2.autoCompleted === true && e2.task.status === 'done', '编辑任务:全确认且无图片需求 → 自动完成(不再卡缺图)')
 
+  // ── 13) 多文件扩展包(ES Module 子目录模块,英雄杀式):聚合/跨文件读/按文件写/多文件迁移 ──
+  const mf = 'multi包'
+  const { mkdir: mkdirP, writeFile: writeFileP } = await import('node:fs/promises')
+  await mkdirP(join(nonameDir, 'extension', mf, 'character'), { recursive: true })
+  await writeFileP(join(nonameDir, 'extension', mf, 'extension.js'),
+    'import { content } from "./main/content.js";\nexport default { name: "multi", package: {}, content };\n')
+  await writeFileP(join(nonameDir, 'extension', mf, 'character', 'character.js'),
+    "const character = {\n  yxs_a: { sex: 'male', group: 'wei', hp: 3, skills: ['yxs_s1'] },\n  yxs_b: ['female', 'shu', 4, ['yxs_s2']],\n};\nexport default character;\n")
+  await writeFileP(join(nonameDir, 'extension', mf, 'character', 'translate.js'),
+    "const translate = {\n  yxs_a: '甲将',\n  yxs_s1: { name: '技能一' },\n  yxs_s2: ['技能二', '描述'],\n};\nexport default translate;\n")
+
+  const { readExtension: readExt2, migrateExtension, listEntrySkills: les2 } = await import('../src/write.js')
+  const mEntries = await listEntries(nonameDir, mf, 'character')
+  ok(mEntries.ok && mEntries.entries.length === 2, '多文件包:listEntries 聚合子目录模块条目')
+  ok(mEntries.entries.every((e) => e.file === 'character/character.js'), '多文件包:条目带 file 归属')
+  ok(mEntries.entries.some((e) => e.id === 'yxs_a' && e.name === '甲将'), '多文件包:显示名跨文件聚合(条目与 translate 分文件)')
+  const mSkills = await les2(nonameDir, mf, 'yxs_a')
+  ok(mSkills.ok && mSkills.skills.length === 1 && mSkills.skills[0].id === 'yxs_s1' && mSkills.skills[0].name === '技能一',
+    '多文件包:listEntrySkills 技能名跨文件聚合')
+  const rdM = await readExt2(nonameDir, mf, { listBlocks: true })
+  ok(rdM.blocks.files && rdM.blocks.files.length === 2 && rdM.blocks.blocks.every((b) => b.file),
+    '多文件包:listBlocks 聚合全包并带 file 归属/文件摘要')
+  const rdB = await readExt2(nonameDir, mf, { block: 'character:yxs_b' })
+  ok(rdB.code && rdB.block && rdB.block.file === 'character/character.js',
+    '多文件包:未带 file 的按块读取自动跨文件定位')
+  const mig = await migrateExtension(nonameDir, mf)
+  ok(mig.ok && mig.totalFiles === 2 && mig.totalBlocks >= 3, '多文件迁移:两个条目文件锚点化,壳文件跳过')
+  const rdMig = await readExt2(nonameDir, mf, { block: 'character:yxs_a' })
+  ok(rdMig.code && rdMig.block.file === 'character/character.js', '多文件迁移:锚点化后按块读取仍正常')
+  const wM = await writeExtension(nonameDir, { folder: mf, file: 'character/character.js', kind: 'character', style: 'module',
+    blocks: [{ kind: 'character', id: 'yxs_a', code: "yxs_a: { sex: 'male', group: 'wei', hp: 4, skills: ['yxs_s1'] }" }] })
+  ok(wM.ok && wM.wrote, '多文件包:按 file 的区块写入成功')
+  const mLost = await writeExtension(nonameDir, { folder: mf, file: 'character/character.js', kind: 'character', style: 'module',
+    code: "const character = {\n  yxs_a: { sex: 'male', group: 'wei', hp: 3, skills: ['yxs_s1'] },\n};\nexport default character;\n" })
+  ok(!mLost.ok && /消失/.test(mLost.errors[0].message), '多文件包:全文模式防丢护栏按目标文件生效(丢 yxs_b 拒写)')
+  let backupOk = false
+  try { await import('node:fs/promises').then((fs) => fs.readdir(join(nonameDir, 'extension', mf, 'character', 'backup'))).then((n) => { backupOk = n.some((x) => x.startsWith('character.')) }) } catch { }
+  ok(backupOk, '多文件包:备份落在目标文件同目录 backup/')
+
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })

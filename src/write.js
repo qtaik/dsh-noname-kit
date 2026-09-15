@@ -4,11 +4,14 @@
  * (防路径逃逸)。覆盖前自动备份到 <文件夹>/backup/。
  */
 import { mkdir, readFile, readdir, copyFile, writeFile } from 'node:fs/promises'
-import { join, resolve, basename, relative, sep } from 'node:path'
-import { validateExtensionCode, collectDefinedIds } from './validate.js'
-import { scanAnchored, scanBlocks, extractBlock, assembleBlocks, checkFidelity, migrateCode, stripAnchors, findAllSections, sectionProperties, virtualCharacterBlocks, virtualCardBlocks } from './blocks.js'
+import { join, resolve, basename, relative, sep, dirname } from 'node:path'
+import { validateExtensionCode, syntaxCheck, collectDefinedIds } from './validate.js'
+import { scanAnchored, scanBlocks, extractBlock, assembleBlocks, checkFidelity, migrateCode, stripAnchors, findAllSections, sectionProperties, virtualCharacterBlocks, virtualCardBlocks, virtualBlocks, virtualTranslateBlocks, CONTENT_KINDS } from './blocks.js'
 
 const FOLDER_RE = /^[\w\u4e00-\u9fff-]{1,64}$/
+
+/** 多文件包扫描时跳过的目录(素材/备份/依赖,绝不会有条目)。 */
+const SKIP_DIRS = new Set(['backup', 'image', 'audio', 'node_modules', '.git'])
 
 export function extRootOf(nonameDir) {
   return join(resolve(nonameDir), 'extension')
@@ -27,6 +30,49 @@ export function safeFolderPath(nonameDir, folder) {
   return { root, full }
 }
 
+/**
+ * 解析「条目文件」参数(ES Module 多文件包的条目在子目录模块里,如
+ * character/character.js)。file 缺省 = extension.js(单文件包,完全向后兼容);
+ * 只允许包内相对 .js 路径,禁 ..,resolve 后必须仍在包目录内。
+ * @returns {{rel:string, full:string}} rel 为 POSIX 斜杠相对路径
+ */
+export function safeEntryFilePath(nonameDir, folder, file) {
+  const { full: folderFull } = safeFolderPath(nonameDir, folder)
+  const rel = file == null || file === '' ? 'extension.js' : String(file).split('\\').join('/')
+  if (!/\.js$/i.test(rel) || rel.includes('..') || rel.startsWith('/')) {
+    throw new Error(`非法的条目文件路径「${file}」:必须是扩展包内的相对 .js 路径。`)
+  }
+  const full = resolve(folderFull, rel)
+  if (!full.startsWith(folderFull + sep)) {
+    throw new Error('路径越界:目标文件不在扩展包目录内。')
+  }
+  return { rel, full }
+}
+
+/** 递归枚举扩展包内全部 .js(POSIX 相对路径;跳过 backup/image/audio 等目录)。 */
+export async function listPackageJsFiles(nonameDir, folder) {
+  const { full: folderFull } = safeFolderPath(nonameDir, folder)
+  const out = []
+  async function walk(dir, rel) {
+    let entries
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      if (e.name.startsWith('.')) continue
+      const childRel = rel ? rel + '/' + e.name : e.name
+      if (e.isDirectory()) {
+        if (SKIP_DIRS.has(e.name)) continue
+        await walk(join(dir, e.name), childRel)
+      } else if (e.isFile() && /\.js$/i.test(e.name)) {
+        // 历史备份文件(1.5.0 曾误写到包根):extension.<时间戳>.js 命名,不是源码,排除
+        if (/^extension\.(pre-rollback\.)?\d{8}-\d{6}\.js$/i.test(e.name)) continue
+        out.push(childRel)
+      }
+    }
+  }
+  await walk(folderFull, '')
+  return out.sort((a, b) => (a === 'extension.js' ? -1 : b === 'extension.js' ? 1 : a.localeCompare(b)))
+}
+
 function timestamp() {
   const d = new Date()
   const p = (n) => String(n).padStart(2, '0')
@@ -41,15 +87,16 @@ function timestamp() {
  *   其余文本由工具从旧文件逐字节保留——未提交区域物理上不可能被改。
  * @returns 校验失败 → {ok:false, errors, warnings};成功 → {ok:true, path, backup}
  */
-export async function writeExtension(nonameDir, { folder, code, blocks, edits, deletes, editScope, style, kind, infoJson, idPrefix, writeMode }) {
+export async function writeExtension(nonameDir, { folder, file, code, blocks, edits, deletes, editScope, style, kind, infoJson, idPrefix, writeMode }) {
   const blockMode = Array.isArray(blocks) || Array.isArray(edits) || Array.isArray(deletes)
   const { root, full } = safeFolderPath(nonameDir, folder)
   await mkdir(full, { recursive: true })
-  const target = join(full, 'extension.js')
+  const target = safeEntryFilePath(nonameDir, folder, file).full
 
   // 旧文件:两种模式都先读(区块模式组装、全文模式保真/防丢都依赖它)
   let oldCode = null
   try { oldCode = await readFile(target, 'utf8') } catch { /* 首次写入,无旧文件 */ }
+  await mkdir(dirname(target), { recursive: true })
 
   let finalCode = code
   const preErrors = []
@@ -74,8 +121,16 @@ export async function writeExtension(nonameDir, { folder, code, blocks, edits, d
     }
   }
 
-  const verdict = validateExtensionCode({ code: finalCode, style, kind, folder, idPrefix })
-  if (!verdict.ok) return { ...verdict, wrote: false }
+  // 模块文件(多文件包的子目录 .js,如 character/character.js)不是完整扩展,
+  // 没有 name/translate,扩展语义规则对它不适用——只做纯语法检查。
+  const isModuleFile = file != null && file !== ''
+  const verdict = isModuleFile
+    ? syntaxCheck(finalCode, style || 'module')
+    : validateExtensionCode({ code: finalCode, style, kind, folder, idPrefix })
+  if (!verdict.ok) {
+    if (isModuleFile) return { ok: false, wrote: false, errors: [{ message: verdict.message || '语法错误' }], warnings: [] }
+    return { ...verdict, wrote: false }
+  }
 
   // 防丢技能护栏:旧代码里定义、新代码里消失的内部 ID → 拒写。
   // 比对前剥掉锚点注释行(锚点是纯注释,ID 语义不变,但会隔断 collectDefinedIds 的匹配)。
@@ -101,10 +156,10 @@ export async function writeExtension(nonameDir, { folder, code, blocks, edits, d
   // 只给 "backup/x.js" 的话对方不知道该在哪个目录下找,实测要试错一次)
   let backup = ''
   if (oldCode) {
-    const backupDir = join(full, 'backup')
+    const backupDir = join(dirname(target), 'backup')
     await mkdir(backupDir, { recursive: true })
     backup = join(relative(nonameDir, backupDir), `extension.${timestamp()}.js`).split(sep).join('/')
-    await copyFile(target, join(full, basename(backup)))
+    await copyFile(target, join(backupDir, basename(backup)))
   }
   await writeFile(target, finalCode, 'utf8')
 
@@ -132,29 +187,57 @@ export async function writeExtension(nonameDir, { folder, code, blocks, edits, d
 }
 
 /**
- * 读取扩展内容。三种用法:
- * - 默认:全文整读(兼容)
- * - opts.listBlocks=true:返回区块目录 {blocks:{anchored, blocks[]}},无锚文件给虚拟区块
- * - opts.block='kind:id':只返回该区块内容(result.code + result.block)
+ * 读取扩展内容。file 缺省 = extension.js。
+ * - 默认:该文件全文整读(兼容)
+ * - opts.listBlocks=true:未指定 file 时**聚合全包**(每块带 file 归属、顶层 files
+ *   清单);指定 file 时只返回该文件的目录
+ * - opts.block='kind:id':file 给定 → 只在该文件找;未给定 → 先 extension.js,
+ *   找不到再扫全包(命中唯一文件即返回,块带 file)
  */
 export async function readExtension(nonameDir, folder, opts = {}) {
   const { full } = safeFolderPath(nonameDir, folder)
+  const fileRel = opts.file == null || opts.file === '' ? 'extension.js' : String(opts.file).split('\\').join('/')
+  const target = safeEntryFilePath(nonameDir, folder, fileRel).full
   const names = await readdir(full)
-  const result = { folder, files: names.filter((n) => !n.startsWith('.')) }
+  const result = { folder, file: fileRel, files: names.filter((n) => !n.startsWith('.')) }
   let code
-  if (names.includes('extension.js')) code = await readFile(join(full, 'extension.js'), 'utf8')
+  try { code = await readFile(target, 'utf8') } catch { /* 文件可能不存在(多文件包的壳可能极短或没有) */ }
   if (opts.listBlocks) {
-    result.blocks = code !== undefined
-      ? scanBlocks(code)
-      : { anchored: false, blocks: [] }
+    if (opts.file == null || opts.file === '') {
+      // 聚合全包:每个含条目的文件一段目录,块带 file 归属
+      const files = await listPackageJsFiles(nonameDir, folder)
+      const blocks = []
+      const fileSummaries = []
+      for (const f of files) {
+        let c
+        try { c = await readFile(join(full, f), 'utf8') } catch { continue }
+        const sb = scanBlocks(c)
+        if (!sb.blocks.length) continue
+        fileSummaries.push({ file: f, anchored: sb.anchored, blocks: sb.blocks.length })
+        for (const b of sb.blocks) blocks.push({ ...b, file: f })
+      }
+      result.blocks = { anchored: fileSummaries.some((f) => f.anchored), blocks, files: fileSummaries }
+    } else {
+      result.blocks = code !== undefined
+        ? scanBlocks(code)
+        : { anchored: false, blocks: [] }
+    }
   } else if (opts.block) {
     const m = /^(\w+):([\w-]+)$/.exec(String(opts.block))
     if (!m) result.error = 'block 参数格式应为 kind:id,例如 skill:cs_tianfa。'
-    else if (code === undefined) result.error = '该扩展没有 extension.js。'
     else {
-      const text = extractBlock(code, m[1], m[2])
-      if (text == null) result.error = `未找到区块「${opts.block}」(可用 listBlocks 查看目录)。`
-      else { result.code = text; result.block = { kind: m[1], id: m[2] } }
+      // 查找范围:指定 file → 只查该文件;未指定 → 先 extension.js,再扫全包
+      // (多文件包的壳 extension.js 里没有条目,不能因为它存在就停止查找)
+      let tryFiles
+      if (opts.file != null && opts.file !== '') tryFiles = [fileRel]
+      else tryFiles = ['extension.js', ...(await listPackageJsFiles(nonameDir, folder)).filter((f) => f !== 'extension.js')]
+      for (const f of tryFiles) {
+        let c
+        try { c = await readFile(join(full, f), 'utf8') } catch { continue }
+        const text = extractBlock(c, m[1], m[2])
+        if (text != null) { result.code = text; result.block = { kind: m[1], id: m[2], file: f }; break }
+      }
+      if (result.code === undefined) result.error = `未找到区块「${opts.block}」(可用 listBlocks 查看目录)。`
     }
   } else if (code !== undefined) {
     result.code = code
@@ -166,25 +249,72 @@ export async function readExtension(nonameDir, folder, opts = {}) {
 }
 
 /**
- * 锚点化迁移(用户在工坊手动触发,AI 永不自动执行):对无锚老文件插入
+ * 锚点化迁移(用户在工坊手动触发,AI 侧没有任何工具能调它):对无锚老文件插入
  * 锚点注释行,一个代码字符不动;写前自动备份,写后跑语法校验自证。
+ * file 缺省 = extension.js;多文件包对子目录模块文件逐个迁移。
  */
-export async function migrateAnchors(nonameDir, folder) {
+export async function migrateAnchors(nonameDir, folder, file) {
   const { full } = safeFolderPath(nonameDir, folder)
-  const target = join(full, 'extension.js')
+  const target = safeEntryFilePath(nonameDir, folder, file).full
   let oldCode
-  try { oldCode = await readFile(target, 'utf8') } catch { return { ok: false, error: '该扩展没有 extension.js。' } }
+  try { oldCode = await readFile(target, 'utf8') } catch { return { ok: false, error: '该文件不存在。' } }
   const r = migrateCode(oldCode)
   if (r.error) return { ok: false, error: r.error }
   const style = /game\.import\(/.test(r.code) ? 'classic' : 'module'
-  const verdict = validateExtensionCode({ code: r.code, style, kind: 'character' })
-  if (!verdict.ok) return { ok: false, error: '迁移后语法校验失败(不应发生,已放弃写入): ' + (verdict.errors[0] && verdict.errors[0].message || '未知') }
-  const backupDir = join(full, 'backup')
+  // 迁移只加注释行,自检用纯语法检查即可;模块文件没有 name 字段,
+  // validateExtensionCode 的语义规则(name 必有等)对它不适用
+  const verdict = syntaxCheck(r.code, style)
+  if (!verdict.ok) return { ok: false, error: '迁移后语法校验失败(不应发生,已放弃写入): ' + (verdict.message || '未知') }
+  const backupDir = join(dirname(target), 'backup')
   await mkdir(backupDir, { recursive: true })
-  const backup = join(relative(nonameDir, backupDir), `extension.${timestamp()}.js`).split(sep).join('/')
-  await copyFile(target, join(full, basename(backup)))
+  const backup = join(relative(nonameDir, backupDir), `${basename(target, '.js')}.${timestamp()}.js`).split(sep).join('/')
+  await copyFile(target, join(backupDir, basename(backup)))
   await writeFile(target, r.code, 'utf8')
   return { ok: true, inserted: r.inserted, commas: r.commas, blocks: r.blocks, backup }
+}
+
+/**
+ * 多文件迁移:遍历包内全部 .js,对「含可锚定条目」的文件逐个锚点化(幂等:
+ * 已锚文件剥旧锚重打;无条目的壳文件如 extension.js / index.js 自动跳过)。
+ * 返回逐文件明细;全部失败才 ok:false。
+ */
+export async function migrateExtension(nonameDir, folder) {
+  const files = await listPackageJsFiles(nonameDir, folder)
+  if (!files.length) return { ok: false, error: '扩展包里没有任何 .js 文件。' }
+  const results = []
+  for (const file of files) {
+    let code
+    try { code = await readFile(safeEntryFilePath(nonameDir, folder, file).full, 'utf8') } catch { continue }
+    const virtual = virtualEntryCount(code)
+    if (!virtual) continue // 壳文件/无条目文件:跳过
+    const r = await migrateAnchors(nonameDir, folder, file)
+    results.push({ file, ...r, entries: virtual })
+  }
+  const done = results.filter((r) => r.ok)
+  if (!done.length) {
+    const firstErr = results.find((r) => r.error)
+    return { ok: false, error: firstErr ? `迁移失败: ${firstErr.file} —— ${firstErr.error}` : '包内没有可锚定的条目(所有文件均为空或无法识别)。' }
+  }
+  return {
+    ok: true,
+    files: done.map((r) => ({ file: r.file, inserted: r.inserted, commas: r.commas, blocks: r.blocks, entries: r.entries })),
+    filesSkipped: files.length - results.filter((r) => r.ok || r.error).length,
+    totalFiles: done.length,
+    totalInserted: done.reduce((n, r) => n + r.inserted, 0),
+    totalCommas: done.reduce((n, r) => n + r.commas, 0),
+    totalBlocks: done.reduce((n, r) => n + r.blocks, 0),
+  }
+}
+
+/** 某文件内可锚定条目数(CONTENT_KINDS 三种 + translate 独立分组)。 */
+function virtualBlocksCount(code, kind) {
+  return virtualBlocks(code, kind).length
+}
+
+/** 某文件内全部可锚定条目数(四种 kind 合计,translate 走独立分组)。 */
+function virtualEntryCount(code) {
+  return CONTENT_KINDS.reduce((n, kind) => n + virtualBlocks(code, kind).length, 0)
+    + virtualTranslateBlocks(code).length
 }
 
 /** 列出某扩展的备份文件(新→旧)。 */
@@ -243,6 +373,9 @@ function extractDisplayNames(code) {
 
 /**
  * 列出扩展包内指定种类的全部条目(工坊「编辑已有武将/卡牌」的目标下拉)。
+ * 聚合全包:单文件条目 + 多文件包子目录模块(const 声明形态)都认;每项带 file 归属。
+ * 显示名全包聚合——多文件包的条目与它的 translate 常分处不同文件
+ * (如英雄杀:条目在 character/character.js,名字在 character/translate.js)。
  * scanBlocks 锚点优先、无锚自动虚拟划分——未迁移老包(含数组形态武将)同样可用。
  * 只读,不写任何文件。
  */
@@ -251,14 +384,27 @@ export async function listEntries(nonameDir, folder, kind) {
     return { ok: false, kind, entries: [], error: 'kind 应为 character 或 card。' }
   }
   const { full } = safeFolderPath(nonameDir, folder)
-  let code
-  try { code = await readFile(join(full, 'extension.js'), 'utf8') } catch {
-    return { ok: false, kind, entries: [], error: '该扩展没有 extension.js。' }
+  const files = await listPackageJsFiles(nonameDir, folder)
+  if (!files.length) return { ok: false, kind, entries: [], error: '扩展包里没有任何 .js 文件。' }
+  const names = new Map()
+  const codes = []
+  for (const f of files) {
+    let code
+    try { code = await readFile(join(full, f), 'utf8') } catch { continue }
+    codes.push({ f, code })
+    for (const [id, name] of extractDisplayNames(code)) if (!names.has(id)) names.set(id, name)
   }
-  const names = extractDisplayNames(code)
-  const entries = scanBlocks(code).blocks
-    .filter((b) => b.kind === kind)
-    .map((b) => ({ id: b.id, lines: b.lines, name: names.get(b.id) || '' }))
+  const entries = []
+  for (const { f, code } of codes) {
+    for (const b of scanBlocks(code).blocks) {
+      if (b.kind !== kind) continue
+      entries.push({ id: b.id, lines: b.lines, name: names.get(b.id) || '', file: f })
+    }
+  }
+  if (!entries.length) {
+    const hasExt = files.includes('extension.js')
+    return { ok: true, kind, entries, error: hasExt ? undefined : '该扩展没有 extension.js。' }
+  }
   return { ok: true, kind, entries }
 }
 
@@ -278,20 +424,25 @@ function entrySkillIds(entryText) {
 }
 
 /** 列出某个条目(武将或卡牌——卡牌也可带 skills 字段)的技能(勾选候选):
- * id + translate 显示名(尽力)。只读。 */
+ * id + translate 显示名(尽力,全包聚合——技能名常在别的文件里)。只读。 */
 export async function listEntrySkills(nonameDir, folder, entryId) {
   if (typeof entryId !== 'string' || !entryId.trim()) {
     return { ok: false, skills: [], error: '缺少条目 id。' }
   }
   const { full } = safeFolderPath(nonameDir, folder)
-  let code
-  try { code = await readFile(join(full, 'extension.js'), 'utf8') } catch {
-    return { ok: false, skills: [], error: '该扩展没有 extension.js。' }
+  const files = await listPackageJsFiles(nonameDir, folder)
+  let entry = null
+  const names = new Map()
+  for (const f of files) {
+    let code
+    try { code = await readFile(join(full, f), 'utf8') } catch { continue }
+    for (const [id, name] of extractDisplayNames(code)) if (!names.has(id)) names.set(id, name)
+    if (!entry) {
+      entry = virtualCharacterBlocks(code).find((b) => b.id === entryId.trim())
+        || virtualCardBlocks(code).find((b) => b.id === entryId.trim())
+    }
   }
-  const entry = virtualCharacterBlocks(code).find((b) => b.id === entryId.trim())
-    || virtualCardBlocks(code).find((b) => b.id === entryId.trim())
   if (!entry) return { ok: true, skills: [] }
-  const names = extractDisplayNames(code)
   const skills = entrySkillIds(entry.text).map((id) => ({ id, name: names.get(id) || '' }))
   return { ok: true, skills }
 }

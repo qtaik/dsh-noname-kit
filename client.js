@@ -220,7 +220,7 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({ folder: form.folder }),
         }).then(function (r) { return r.json() }).then(function (b) {
           patch({ busy: false, currentInfo: b.ok
-            ? '✅ 区块索引已建立:插入 ' + b.inserted + ' 行锚点注释' + (b.commas ? '(另补 ' + b.commas + ' 个收尾逗号)' : '') + ',覆盖 ' + b.blocks + ' 个区块(旧版已备份到 ' + (b.backup || 'backup/') + ')'
+            ? '✅ 区块索引已建立:' + b.totalFiles + ' 个文件 / ' + b.totalBlocks + ' 个区块,插入 ' + b.totalInserted + ' 行锚点注释' + (b.totalCommas ? '(另补 ' + b.totalCommas + ' 个收尾逗号)' : '') + ';各文件原版已备份到同目录 backup/' + (b.filesSkipped ? '(跳过 ' + b.filesSkipped + ' 个无条目文件)' : '')
             : '❌ ' + (b.error || '建立失败') });
         }, function (e) { patch({ busy: false, currentInfo: '❌ 建立失败: ' + (e && e.message || e) }) });
       };
@@ -305,12 +305,13 @@ window.__ModuleLoader__.load({
               ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim() } })
               : [];
             var pickedSkillRows = form.pickedSkills;
+            var entryFile = (form.entryList.filter(function (en) { return en.id === form.entryId })[0] || {}).file || 'extension.js';
             text = [
               '【无名杀工坊·编辑任务】',
               '任务ID: ' + taskId,
               '任务性质: 编辑已有扩展包(已存在)',
               '类型: ' + (type === 'card' ? '卡牌' : '武将'),
-              '编辑目标条目: ' + type + ':' + form.entryId + '(只改这个条目' + (pickedSkillRows.length ? '及其勾选技能' : '') + (newSkillRows.length ? ';新增技能作为新区块加到该条目上' : '') + ',其他武将/卡牌/技能/翻译一律不动)',
+              '编辑目标条目: ' + type + ':' + form.entryId + '(所在文件 ' + entryFile + (entryFile !== 'extension.js' ? ',read/write 都要传 file 参数' : '') + ';只改这个条目' + (pickedSkillRows.length ? '及其勾选技能' : '') + (newSkillRows.length ? ';新增技能作为新区块加到该条目上' : '') + ',其他武将/卡牌/技能/翻译一律不动)',
               (form.title.trim() ? '新名称(显示名,写入 translate;留空即不改名): ' + form.title.trim() : ''),
               '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成代码,不要写文件)' : '自动写入'),
               '目标扩展文件夹: ' + form.folder.trim() + '(已有扩展,老式/新式写法跟随现有代码)',
@@ -322,10 +323,10 @@ window.__ModuleLoader__.load({
               form.reference.trim() ? '── 用户提供的参考代码 ──\n' + form.reference.trim() : '',
               form.image.trim() ? '── 图片 ──\n用户已提供图片路径: ' + form.image.trim() + '\n实现完成后用 noname_copy_images 复制进扩展包 image/ 目录,按目标条目ID(' + form.entryId + ')命名文件,调用时带上任务ID。' : '',
               '── 执行要求(确认协议,逐步执行)──',
-              '第 0 步【需求理解确认·硬门禁】:先 noname_read_extension 按块只读目标条目原文(block:\'' + type + ':' + form.entryId + '\')' + (pickedSkillRows.length ? '与各勾选技能原文(block:\'skill:<技能ID>\')' : '') + '(定位不准时先传 listBlocks 看区块目录),把原文与需求对照,逐项输出【需求理解确认】(' + (form.editNotes.trim() ? '条目项:改什么 / 改动前→改动后 / 影响面' : '') + (form.editNotes.trim() && pickedSkillRows.length ? ';' : '') + (pickedSkillRows.length ? '修改技能项:改动前→改动后' : '') + ((pickedSkillRows.length || form.editNotes.trim()) && newSkillRows.length ? ';' : '') + (newSkillRows.length ? '新增技能按新技能模板逐条:触发/频率/目标/数值/边界' : '') + ')。输出后停下等待用户明确回复确认。',
+              '第 0 步【需求理解确认·硬门禁】:先 noname_read_extension 按块只读目标条目原文(' + (entryFile !== 'extension.js' ? 'file:\'' + entryFile + '\', ' : '') + 'block:\'' + type + ':' + form.entryId + '\')' + (pickedSkillRows.length ? '与各勾选技能原文(block:\'skill:<技能ID>\'' + (entryFile !== 'extension.js' ? ';技能可能在其他文件,用 listBlocks 定位后带对应 file' : '') + ')' : '') + '(定位不准时先传 listBlocks 看区块目录,多文件包的目录每项带 file 归属),把原文与需求对照,逐项输出【需求理解确认】(' + (form.editNotes.trim() ? '条目项:改什么 / 改动前→改动后 / 影响面' : '') + (form.editNotes.trim() && pickedSkillRows.length ? ';' : '') + (pickedSkillRows.length ? '修改技能项:改动前→改动后' : '') + ((pickedSkillRows.length || form.editNotes.trim()) && newSkillRows.length ? ';' : '') + (newSkillRows.length ? '新增技能按新技能模板逐条:触发/频率/目标/数值/边界' : '') + ')。输出后停下等待用户明确回复确认。',
               '有任何歧义必须先用 ask_user_question 提问;禁止猜测。ask_user_question 的回答只消除歧义、不算确认——澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」后才能动笔。',
               '未获用户确认前,禁止生成代码、禁止调用 noname_write_extension。',
-              '用户确认后动手:已有内容的改动只落在目标条目' + (pickedSkillRows.length ? '与其勾选技能' : '') + '对应区块(noname_write_extension 用 blocks 组装或 edits 精确补丁,严禁全文重写)' + (newSkillRows.length ? ';新增技能作为新区块插入(锚点包裹,内部 ID 用下方前缀规则)' : '') + ',除上述区块与新增区块外严禁改动任何其他区块。noname_validate 通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + '。',
+              '用户确认后动手:已有内容的改动只落在目标条目' + (pickedSkillRows.length ? '与其勾选技能' : '') + '对应区块(noname_write_extension 带 file:\'' + entryFile + '\',用 blocks 组装或 edits 精确补丁,严禁全文重写)' + (newSkillRows.length ? ';新增技能作为新区块插入(锚点包裹,内部 ID 用下方前缀规则)' : '') + ',除上述区块与新增区块外严禁改动任何其他区块。noname_validate 通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + '。',
               (newSkillRows.length && form.idPrefix.trim() ? '内部 ID 命名规则:新增技能的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,中文显示名写入 translate。' : ''),
             ].filter(Boolean).join('\n');
           } else if (isEdit) {
@@ -425,7 +426,7 @@ window.__ModuleLoader__.load({
                [h('option', { key: '', value: '' }, '— 选择扩展包 —')].concat(form.extList.map(function (f) {
                  return h('option', { key: f, value: f }, f)
                }))),
-             form.folder ? h('button', { className: 'nnk-smallbtn', disabled: form.busy, onClick: migrateFolder, title: '给老文件插入锚点注释行,启用区块化读写(防抄错+省 token);一个代码字符都不会改,且会先自动备份。ES Module 多文件包(条目在子目录模块)不支持,会明确报错' }, '🔨 建立区块索引') : null,
+             form.folder ? h('button', { className: 'nnk-smallbtn', disabled: form.busy, onClick: migrateFolder, title: '给条目所在的 .js 文件插入锚点注释行,启用区块化读写(防抄错+省 token);一个代码字符都不会改,且会先自动备份。多文件包(条目在子目录模块)会对每个含条目的文件逐一处理' }, '🔨 建立区块索引') : null,
              form.currentInfo ? e('div', 'nnk-hint', form.currentInfo) : null,
              form.folder && form.usedIds && form.usedIds.length
                ? e('div', 'nnk-hint', '已用任务ID: ' + form.usedIds.map(function (u) { return u.id + '(' + u.state + ')' }).join('、') + ' —— 新任务请避开这些')
@@ -437,7 +438,8 @@ window.__ModuleLoader__.load({
           e('label', 'nnk-label', '编辑目标(选择要修改的' + (form.type === 'card' ? '卡牌' : '武将') + ')' + (form.entryLoading ? '(加载中…)' : '')),
           h('select', { className: 'nnk-input', value: form.entryId, onChange: function (ev) { pickEntry(ev.target.value) } },
             [h('option', { key: '', value: '' }, '— 选择要修改的' + (form.type === 'card' ? '卡牌' : '武将') + ' —')].concat(form.entryList.map(function (en) {
-              return h('option', { key: en.id, value: en.id }, en.id + (en.name ? '(' + en.name + ')' : ''))
+              var tag = en.file && en.file !== 'extension.js' ? ' · ' + en.file.replace(/\.js$/, '') : '';
+              return h('option', { key: en.id, value: en.id }, en.id + (en.name ? '(' + en.name + ')' : '') + tag)
             }))),
           !form.entryLoading && form.entryList.length === 0
             ? e('div', 'nnk-hint', '此包没有检测到可编辑的' + (form.type === 'card' ? '卡牌' : '武将') + '(若确实有,先点「🔨 建立区块索引」或确认该包有 extension.js)')

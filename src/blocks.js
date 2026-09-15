@@ -70,19 +70,33 @@ function skipBlockComment(text, i) {
  * 找出所有同名区段(含嵌套,如 package.skill 与 package.skill.skill)。
  * 虚拟划分用:无名杀扩展的布局不止一种,技能/翻译可能藏在任意层级。
  * 导出给 validate.js 的 ID 收集共用(字符串感知,兼容裸键/引号键/任意嵌套)。
+ *
+ * 认两种形态:
+ * 1. 键区段 `name: { … }`——老式 game.import 内联、package 嵌套、ESM 单文件 package 均此形态;
+ * 2. 变量声明 `(export)? const|let|var name = { … }`——ES Module 多文件包
+ *    (英雄杀/杀海拾遗等的 character/character.js:`const character = { … }`)。
+ *    名字精确等于 kind 才认;识别出的条目形态与老式包完全一致,下游链路通用。
  */
 export function findAllSections(code, name) {
-  const re = new RegExp('(?:^|[\\n{,;])\\s*' + name + '\\s*:\\s*\\{', 'g')
   const out = []
-  let m
-  while ((m = re.exec(code))) {
-    const open = code.indexOf('{', m.index + m[0].length - 1)
+  const seen = new Set()
+  const push = (open) => {
+    if (open < 0 || seen.has(open)) return
     const close = matchBrace(code, open)
-    if (close < 0) continue
+    if (close < 0) return
+    seen.add(open)
     out.push({ open, close })
-    re.lastIndex = open + 1
   }
-  return out
+  const patterns = [
+    '(?:^|[\\n{,;])\\s*' + name + '\\s*:\\s*\\{',
+    '(?:^|[\\n;}])\\s*(?:export\\s+)?(?:const|let|var)\\s+' + name + '\\s*=\\s*\\{',
+  ]
+  for (const src of patterns) {
+    const re = new RegExp(src, 'g')
+    let m
+    while ((m = re.exec(code))) push(code.indexOf('{', m.index + m[0].length - 1))
+  }
+  return out.sort((a, b) => a.open - b.open)
 }
 
 /** 结构键黑名单:这些名字是布局骨架,不是内容 ID,绝不当作区块。

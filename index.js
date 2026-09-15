@@ -21,7 +21,7 @@ import { KNOWLEDGE_TEXT } from './src/knowledge.js'
 import { validateExtensionCode } from './src/validate.js'
 import { searchReference } from './src/reference.js'
 import { detectCandidates } from './src/detect.js'
-import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateAnchors, listEntries, listEntrySkills } from './src/write.js'
+import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateAnchors, migrateExtension, listEntries, listEntrySkills } from './src/write.js'
 import { readHistory, archiveTask, listExtensionHistories, recordBackup, deleteNote } from './src/history.js'
 import { copyImages } from './src/images.js'
 import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, completeById, deleteTask, reopenTask, getTask } from './src/tasks.js'
@@ -240,19 +240,22 @@ export function apply(ctx, config) {
     description: 'Read one installed noname extension. Prefer listBlocks/block extraction on large files: list the block directory first, then read only the block you need.',
     parameters: {
       folder: { type: 'string', required: true, description: 'Extension folder name.' },
-      listBlocks: { type: 'boolean', description: 'Return the block directory (id/kind/lines) instead of full text.' },
-      block: { type: 'string', description: 'Read one block only, format kind:id — kind is skill/card/character/translate (e.g. skill:cs_tianfa, card:cs_bangbang).' },
+      file: { type: 'string', description: 'Relative .js path inside the extension package (multi-file packs keep entries in e.g. character/character.js). Defaults to extension.js.' },
+      listBlocks: { type: 'boolean', description: 'Return the block directory (id/kind/lines/file) instead of full text. Without file, aggregates ALL .js files of the package.' },
+      block: { type: 'string', description: 'Read one block only, format kind:id — kind is skill/card/character/translate (e.g. skill:cs_tianfa, card:cs_bangbang). Without file, searches the whole package and returns where it was found.' },
       notes: { type: 'boolean', description: 'Also return this package history notes (engine-level lessons). Fetch only when relevant to the current task.' },
     },
     output: {
       schema: { type: 'object', additionalProperties: false, properties: {
         folder: { type: 'string', required: true },
+        file: { type: 'string' },
         files: { type: 'array', required: true, items: { type: 'string' } },
         code: { type: 'string'},
         info: { type: 'object', additionalProperties: true },
         block: { type: 'object', additionalProperties: false, properties: {
           kind: { type: 'string', required: true },
           id: { type: 'string', required: true },
+          file: { type: 'string' },
         } },
         blocks: { type: 'object', additionalProperties: false, properties: {
           anchored: { type: 'boolean', required: true },
@@ -262,6 +265,12 @@ export function apply(ctx, config) {
             id: { type: 'string', required: true },
             lines: { type: 'integer', required: true },
             virtual: { type: 'boolean', required: true },
+            file: { type: 'string' },
+          } } },
+          files: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+            file: { type: 'string', required: true },
+            anchored: { type: 'boolean', required: true },
+            blocks: { type: 'integer', required: true },
           } } },
         } },
         error: { type: 'string'},
@@ -275,17 +284,20 @@ export function apply(ctx, config) {
           parts.push(`历史注意点 ${value.notes.length} 条:`)
           value.notes.forEach((n, i) => parts.push(`${i + 1}. ${n}`))
         }
+        const fileTag = (f) => (f && f !== 'extension.js' ? ` @ ${f}` : '')
         if (value.blocks) {
+          const fileNames = (value.blocks.files || []).map((f) => `${f.file}(${f.blocks} 块${f.anchored ? ',已锚点化' : ''})`).join('、')
+          if (fileNames) parts.push(`涉及文件: ${fileNames}`)
           parts.push(`区块目录 ${value.blocks.blocks.length} 项(${value.blocks.anchored ? '已锚点化' : '未锚点,虚拟划分'}):`)
-          value.blocks.blocks.forEach((b) => parts.push(`- ${b.key}(${b.lines} 行${b.virtual ? ',虚拟' : ''})`))
-          parts.push(`用 block:'区块key' 读取具体区块内容。`)
+          value.blocks.blocks.forEach((b) => parts.push(`- ${b.key}(${b.lines} 行${b.virtual ? ',虚拟' : ''})${fileTag(b.file)}`))
+          parts.push(`用 block:'区块key' 读取具体区块内容;多文件包的区块读写记得带上对应的 file 参数。`)
         }
         if (value.block) {
-          parts.push(`── 区块 ${value.block.kind}:${value.block.id} ──`)
+          parts.push(`── 区块 ${value.block.kind}:${value.block.id}${fileTag(value.block.file)} ──`)
           parts.push(value.code ?? '(空)')
         } else if (!value.blocks && !value.notes) {
-          parts.push(`── ${value.folder} 全文(共 ${value.code ? value.code.split('\n').length : 0} 行)──`)
-          parts.push(value.code ?? '(无 extension.js)')
+          parts.push(`── ${value.folder}/${value.file ?? 'extension.js'} 全文(共 ${value.code ? value.code.split('\n').length : 0} 行)──`)
+          parts.push(value.code ?? '(该文件不存在或为空)')
         }
         return [{ type: 'text', text: parts.join('\n') }]
       },
@@ -294,7 +306,7 @@ export function apply(ctx, config) {
     async execute(args) {
       if (!active) return { folder: args.folder, files: [], error: '未配置 nonameDir,无法读取游戏目录。' }
       try {
-        const r = await readExtension(nonameDir, args.folder, { listBlocks: args.listBlocks, block: args.block })
+        const r = await readExtension(nonameDir, args.folder, { file: args.file, listBlocks: args.listBlocks, block: args.block })
         if (args.notes && !r.error) r.notes = (await readHistory(nonameDir, args.folder)).notes || []
         return r
       } catch (error) { return { folder: args.folder, files: [], error: error.message } }
@@ -306,6 +318,7 @@ export function apply(ctx, config) {
     description: 'Write a noname extension (validates first; the only write channel). Two modes: full-text (code) for first write or unindexed legacy files (pass editScope so untouched blocks must stay byte-identical); block-assembly (blocks/edits/deletes) for anchored files — the tool keeps everything you do not submit, so transcription errors are structurally impossible.',
     parameters: {
       folder: { type: 'string', required: true, description: 'Extension folder name.' },
+      file: { type: 'string', description: 'Relative .js path inside the extension package for multi-file packs (e.g. character/character.js). Defaults to extension.js. Block-mode requires that file to be anchored (workshop migrate button first).' },
       code: { type: 'string', description: 'Full extension.js content. Required in full-text mode; omit in block mode.' },
       style: { type: 'string', enum: ['classic', 'module'], description: 'Authoring style, default classic.' },
       kind: { type: 'string', enum: ['character', 'card'], description: 'Task type, default character.' },
@@ -706,12 +719,17 @@ export function apply(ctx, config) {
           catch (error) { return json(400, { ok: false, error: error.message }) }
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/blocks/migrate') {
-          // 锚点化迁移:只由用户在工坊手动触发,AI 侧没有任何工具能调它
+          // 锚点化迁移:只由用户在工坊手动触发,AI 侧没有任何工具能调它。
+          // 多文件包:遍历全部 .js,对含条目的文件逐个锚点化(壳文件自动跳过)
           if (!active) return json(503, { ok: false, error: 'noname-kit 未配置 nonameDir' })
           const body = await readBody()
           try {
-            const result = await migrateAnchors(nonameDir, body.folder)
-            if (result.ok && result.backup) await recordBackup(nonameDir, body.folder, result.backup)
+            const result = await migrateExtension(nonameDir, body.folder)
+            if (result.ok) {
+              for (const f of result.files) {
+                if (f.backup) await recordBackup(nonameDir, body.folder, f.backup)
+              }
+            }
             return json(result.ok ? 200 : 400, result)
           } catch (error) { return json(400, { ok: false, error: error.message }) }
         }

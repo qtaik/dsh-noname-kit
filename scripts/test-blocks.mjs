@@ -124,7 +124,7 @@ try {
   // CRLF 下行尾是 ",\r",于是每个区块都被误判成"没逗号"、白补一个,逗号落到下一行
   // 行首 → Unexpected token ','。真实 523 区块的 CRLF 扩展整包迁移失败(靠写前语法
   // 自检拦下、没写坏文件),而当时所有测试样例都是 LF,所以没照出来。
-  const { validateExtensionCode } = await import('../src/validate.js')
+  const { validateExtensionCode, syntaxCheck } = await import('../src/validate.js')
   const syntaxOk = (code) => validateExtensionCode({ code, style: 'classic', kind: 'character' }).ok
   const CRLF = LEGACY.split('\n').join('\r\n')
   const c1 = blocks.migrateCode(CRLF)
@@ -314,6 +314,24 @@ export default function () {
   const newPos = mi.code.indexOf('//#noname-kit-begin translate:ts_r2')
   const cardSecPos = mi.code.indexOf('ts_k1')
   ok(newPos > 0 && newPos < cardSecPos, 'translate:新块落进多数区段(character.translate),不再追加到 card 区')
+
+  // ES Module 多文件包:const 变量声明形态(英雄杀/杀海拾遗的 character/character.js)
+  const ESM_MOD = [
+    "const character = {",
+    "  yxs_a: { sex: 'male', hp: 3, skills: ['yxs_s1'] },",
+    "  yxs_b: ['female', 'shu', 4, ['yxs_s2']],",
+    "};",
+    "export default character;",
+  ].join('\n')
+  ok(blocks.virtualCharacterBlocks(ESM_MOD).length === 2, 'ESM:const character 变量声明形态识别 2 个武将(对象+数组)')
+  ok(blocks.extractBlock(ESM_MOD, 'character', 'yxs_b') !== null, 'ESM:按块提取数组形态武将')
+  const em = blocks.migrateCode(ESM_MOD)
+  const emOk = syntaxCheck(em.code, 'module').ok
+  ok(!em.error && em.blocks === 2 && emOk, 'ESM:const 形态迁移成功且语法通过(module 风格)')
+  ok(blocks.extractBlock(em.code, 'character', 'yxs_a').includes('yxs_s1'), 'ESM:迁移后锚点块仍可提取')
+  ok(blocks.stripAnchors(em.code) === ESM_MOD, 'ESM:迁移自检——剥锚点与原文逐字节一致')
+  const esi = blocks.assembleBlocks(em.code, [{ kind: 'character', id: 'yxs_c', code: "yxs_c: { sex: 'male', hp: 2 }" }])
+  ok(esi.errors.length === 0 && blocks.virtualCharacterBlocks(esi.code).some((b) => b.id === 'yxs_c'), 'ESM:新区块插入 const 形态文件并被识别')
 
   console.log('\n全部通过:' + passed + ' 项')
 } finally {

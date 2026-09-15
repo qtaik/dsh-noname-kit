@@ -74,6 +74,13 @@ function detectStyle(code) {
  * 剥掉 ES Module 语法,保留行号(被剥的行换成等量换行),再用 new Function 编译。
  * 不执行任何代码:new Function 只编译函数体。
  */
+/** 纯语法检查(不跑扩展语义规则):迁移自检用——迁移只加注释行,语法不变,
+ * 而子目录模块文件(如 character/character.js 的 const character = {…})本来
+ * 就不是完整扩展,没有 name 字段,validateExtensionCode 的语义规则对它不适用。 */
+export function syntaxCheck(code, style) {
+  return compileCheck(code, style)
+}
+
 function compileCheck(code, style) {
   if (style === 'classic') {
     try { new Function(code); return { ok: true } } catch (error) {
