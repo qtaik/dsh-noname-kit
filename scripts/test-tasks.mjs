@@ -162,6 +162,19 @@ try {
   const weirdMode = await tasks.createTask(home, { id: '测试包-08', folder: '测试包', type: 'card', title: '占位4', skills: [{ name: '占位4', desc: '' }], writeMode: 'whatever' })
   ok(weirdMode.ok && weirdMode.task.writeMode === 'auto', 'writeMode 非法值归 auto')
 
+  // ── 11) 编辑任务(target)豁免图片条件:立绘已有,全确认即自动完成 ──
+  const editChar = await tasks.createTask(home, {
+    id: '测试包-09', folder: '测试包', type: 'character', title: '',
+    skills: [{ name: '修改 ts_muouou', desc: '改动要求' }, { name: '裂甲', desc: '新技能' }],
+    target: { kind: 'character', id: 'ts_muouou' },
+  })
+  ok(editChar.ok && editChar.task.image === '', '编辑任务未登记图片')
+  await tasks.markSkillsWritten(home, { taskId: '测试包-09', skills: ['修改 ts_muouou', '裂甲'] })
+  const e1 = await tasks.setSkillStatus(home, { taskId: '测试包-09', skill: '修改 ts_muouou', status: 'confirmed' })
+  ok(e1.ok && !e1.autoCompleted, '编辑任务:部分确认不触发自动完成')
+  const e2 = await tasks.setSkillStatus(home, { taskId: '测试包-09', skill: '裂甲', status: 'confirmed' })
+  ok(e2.ok && e2.autoCompleted === true && e2.task.status === 'done', '编辑任务:全确认且无图片需求 → 自动完成(不再卡缺图)')
+
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })

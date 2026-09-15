@@ -62,9 +62,13 @@ function newSkill(item) {
 
 function touch(task) { task.updatedAt = Date.now() }
 
-/** 是否满足自动完成:有图片 且 全部技能 confirmed。 */
+/** 是否满足自动完成:全部技能 confirmed 且图片就位。
+ * 编辑已有条目任务(target 非空)豁免图片条件:立绘通常早已存在,用户没登记
+ * 图片 = 本次不涉及图——实测测试包-03 全确认后因没填图片永远卡在进行中。
+ * (编辑+换图场景用户会填图片路径,登记后照旧走 copy_images/补图链路。) */
 function isCompletable(task) {
-  return Boolean(task.image) && task.skills.length > 0 && task.skills.every((s) => s.status === 'confirmed')
+  const imageOk = task.target ? true : Boolean(task.image)
+  return imageOk && task.skills.length > 0 && task.skills.every((s) => s.status === 'confirmed')
 }
 
 function descriptionOf(skills) {

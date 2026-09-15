@@ -993,7 +993,7 @@ window.__ModuleLoader__.load({
           ),
           e('div', 'nnk-taskmeta', '📂 ' + task.folder + ' · 返工 ' + task.rounds + ' 轮 · ' + fmt(task.updatedAt)),
           skills.length
-            ? e('div', 'nnk-taskmeta', '技能确认进度: ' + skills.filter(function (s) { return s.status === 'confirmed' }).length + '/' + skills.length + (task.image ? '' : ' · 📷 缺图片(不登记图片不会自动完成)'))
+            ? e('div', 'nnk-taskmeta', '技能确认进度: ' + skills.filter(function (s) { return s.status === 'confirmed' }).length + '/' + skills.length + (!task.image && !task.target ? ' · 📷 缺图片(不登记图片不会自动完成)' : (!task.image && task.target ? ' · 编辑任务:不涉及图片' : '')))
             : null,
           h('div', {},
             h('button', { className: 'nnk-smallbtn', onClick: function () { setD({ expanded: expanded ? null : task.id, fbFor: null, msg: '' }) } }, expanded ? '收起' : (skills.length ? '展开技能树' : '展开')),
