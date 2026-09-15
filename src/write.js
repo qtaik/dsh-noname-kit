@@ -6,7 +6,7 @@
 import { mkdir, readFile, readdir, copyFile, writeFile } from 'node:fs/promises'
 import { join, resolve, basename, relative, sep } from 'node:path'
 import { validateExtensionCode, collectDefinedIds } from './validate.js'
-import { scanAnchored, scanBlocks, extractBlock, assembleBlocks, checkFidelity, migrateCode, stripAnchors, findAllSections, sectionProperties, virtualCharacterBlocks } from './blocks.js'
+import { scanAnchored, scanBlocks, extractBlock, assembleBlocks, checkFidelity, migrateCode, stripAnchors, findAllSections, sectionProperties, virtualCharacterBlocks, virtualCardBlocks } from './blocks.js'
 
 const FOLDER_RE = /^[\w\u4e00-\u9fff-]{1,64}$/
 
@@ -277,8 +277,8 @@ function entrySkillIds(entryText) {
   return []
 }
 
-/** 列出某个武将条目的技能(勾选候选):id + translate 显示名(尽力)。
- * 卡牌没有技能数组,返回空。只读。 */
+/** 列出某个条目(武将或卡牌——卡牌也可带 skills 字段)的技能(勾选候选):
+ * id + translate 显示名(尽力)。只读。 */
 export async function listEntrySkills(nonameDir, folder, entryId) {
   if (typeof entryId !== 'string' || !entryId.trim()) {
     return { ok: false, skills: [], error: '缺少条目 id。' }
@@ -289,6 +289,7 @@ export async function listEntrySkills(nonameDir, folder, entryId) {
     return { ok: false, skills: [], error: '该扩展没有 extension.js。' }
   }
   const entry = virtualCharacterBlocks(code).find((b) => b.id === entryId.trim())
+    || virtualCardBlocks(code).find((b) => b.id === entryId.trim())
   if (!entry) return { ok: true, skills: [] }
   const names = extractDisplayNames(code)
   const skills = entrySkillIds(entry.text).map((id) => ({ id, name: names.get(id) || '' }))

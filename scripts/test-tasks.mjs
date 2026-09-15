@@ -134,7 +134,7 @@ try {
     '    },',
     '    card: {',
     '      card: {',
-    "        ts_kapai: { fullimage: true, type: 'trick' },",
+    "        ts_kapai: { fullimage: true, type: 'trick', skills: ['ts_kapai_skill'] },",
     '      },',
     '    },',
     '    translate: {',
@@ -142,6 +142,7 @@ try {
     "      ts_ren2: { name: '霜女' },",
     "      ts_skill1: '挥砍',",
     "      ts_kapai: '疾风符',",
+    "      ts_kapai_skill: '图谋',",
     '    },',
     '  }',
     '});',
@@ -166,7 +167,9 @@ try {
     'listEntrySkills:对象形态武将的 skills 解析(无 translate 名时留空)')
   const es3 = await listEntrySkills(nonameDir, '条目包', '不存在')
   ok(es3.ok && es3.skills.length === 0, 'listEntrySkills:条目不存在 → 空清单')
-
+  const es4 = await listEntrySkills(nonameDir, '条目包', 'ts_kapai')
+  ok(es4.ok && es4.skills.length === 1 && es4.skills[0].id === 'ts_kapai_skill' && es4.skills[0].name === '图谋',
+    'listEntrySkills:卡牌条目的 skills 也解析(卡牌可带技能)')
   const manualTask = await tasks.createTask(home, { id: '测试包-07', folder: '测试包', type: 'card', title: '占位3', skills: [{ name: '占位3', desc: '' }], writeMode: 'manual' })
   ok(manualTask.ok && manualTask.task.writeMode === 'manual', 'writeMode=manual 落库(写入工具以此为准)')
   const weirdMode = await tasks.createTask(home, { id: '测试包-08', folder: '测试包', type: 'card', title: '占位4', skills: [{ name: '占位4', desc: '' }], writeMode: 'whatever' })

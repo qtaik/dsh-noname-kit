@@ -161,7 +161,7 @@ window.__ModuleLoader__.load({
 
       var pickEntry = function (id) {
         setForm(function (prev) { return Object.assign({}, prev, { entryId: id, pickedSkills: [], entrySkills: [], editNotes: '' }) });
-        if (id && form.type === 'character') loadEntrySkills(form.folder, id);
+        if (id) loadEntrySkills(form.folder, id);
       };
 
       var togglePicked = function (id, name) {
@@ -442,20 +442,20 @@ window.__ModuleLoader__.load({
           !form.entryLoading && form.entryList.length === 0
             ? e('div', 'nnk-hint', '此包没有检测到可编辑的' + (form.type === 'card' ? '卡牌' : '武将') + '(若确实有,先点「🔨 建立区块索引」或确认该包有 extension.js)')
             : null,
-          form.entryId && form.type === 'character' && form.entrySkills.length ? [
-            e('label', 'nnk-label', '该武将的技能(勾选要修改的并在框里写清改成什么;不勾 = 不改技能)' + (form.entrySkillsLoading ? '(加载中…)' : '')),
+          form.entryId && form.entrySkills.length ? [
+            e('label', 'nnk-label', '该' + (form.type === 'card' ? '卡牌' : '武将') + '的技能(勾选要修改的并在框里写清改成什么;不勾 = 不改技能)' + (form.entrySkillsLoading ? '(加载中…)' : '')),
             h('div', {}, form.entrySkills.map(function (en) {
               var picked = form.pickedSkills.filter(function (p) { return p.id === en.id })[0];
-              return h('div', { key: en.id, style: { marginBottom: '4px' } },
+              return h('div', { key: en.id, style: { marginBottom: '6px' } },
                 h('label', { className: 'nnk-radio' },
                   h('input', { type: 'checkbox', checked: !!picked, onChange: function () { togglePicked(en.id, en.name) } }),
                   en.id + (en.name ? '(' + en.name + ')' : '')
                 ),
-                picked ? h('input', { className: 'nnk-input', style: { marginLeft: '6px', display: 'inline-block', width: 'auto', minWidth: '220px' }, value: picked.note, placeholder: '要改成什么(必填),例: 伤害 1 改为 2,每回合限一次', onChange: function (ev) { setPickedNote(en.id, ev.target.value) } }) : null
+                picked ? h('input', { className: 'nnk-input', style: { display: 'block', width: '100%', boxSizing: 'border-box', marginTop: '4px' }, value: picked.note, placeholder: '要改成什么(必填),例: 伤害 1 改为 2,每回合限一次', onChange: function (ev) { setPickedNote(en.id, ev.target.value) } }) : null
               );
             }))
           ] : null,
-          form.entryId && form.type === 'character' && !form.entrySkillsLoading && !form.entrySkills.length
+          form.entryId && !form.entrySkillsLoading && !form.entrySkills.length
             ? e('div', 'nnk-hint', '未从该条目解析出技能清单(技能改动可直接写进下面的改动描述,由 AI 在确认阶段澄清)')
             : null,
           e('label', 'nnk-label', (form.type === 'card' ? '卡牌' : '武将') + '改动描述(条目本身的变化:体力/护甲/名称等;可选)'),
