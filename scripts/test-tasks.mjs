@@ -157,6 +157,11 @@ try {
   const leBad = await listEntries(nonameDir, '条目包', 'skill')
   ok(!leBad.ok, 'listEntries 非 character/card 的 kind 被拒')
 
+  const manualTask = await tasks.createTask(home, { id: '测试包-07', folder: '测试包', type: 'card', title: '占位3', skills: [{ name: '占位3', desc: '' }], writeMode: 'manual' })
+  ok(manualTask.ok && manualTask.task.writeMode === 'manual', 'writeMode=manual 落库(写入工具以此为准)')
+  const weirdMode = await tasks.createTask(home, { id: '测试包-08', folder: '测试包', type: 'card', title: '占位4', skills: [{ name: '占位4', desc: '' }], writeMode: 'whatever' })
+  ok(weirdMode.ok && weirdMode.task.writeMode === 'auto', 'writeMode 非法值归 auto')
+
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })

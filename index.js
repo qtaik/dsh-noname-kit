@@ -24,7 +24,7 @@ import { detectCandidates } from './src/detect.js'
 import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateAnchors, listEntries } from './src/write.js'
 import { readHistory, archiveTask, listExtensionHistories, recordBackup, deleteNote } from './src/history.js'
 import { copyImages } from './src/images.js'
-import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, completeById, deleteTask, reopenTask } from './src/tasks.js'
+import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, completeById, deleteTask, reopenTask, getTask } from './src/tasks.js'
 import { bundledPresetDir, installPreset, presetDirOf, presetStatus } from './src/preset.js'
 import { cachedUpdate, checkForUpdate, detectInstall, installHint } from './src/update.js'
 import pkg from './package.json' with { type: 'json' }
@@ -311,7 +311,8 @@ export function apply(ctx, config) {
       kind: { type: 'string', enum: ['character', 'card'], description: 'Task type, default character.' },
       infoJson: { type: 'string', description: 'info.json content (JSON string).' },
       idPrefix: { type: 'string', description: 'ID prefix (e.g. cs_) for the prefix-convention check.' },
-      writeMode: { type: 'string', enum: ['auto', 'manual'], description: 'auto=write; manual=return code only.' },
+      writeMode: { type: 'string', enum: ['auto', 'manual'], description: 'auto=write; manual=return code only. Ignored when taskId is given — the workshop-registered mode (user form choice) wins.' },
+      taskId: { type: 'string', description: 'Task ID from the task message. When given, the task-registered writeMode (user form choice) overrides the writeMode parameter.' },
       blocks: { type: 'array', description: 'Block-assembly mode: submit complete new blocks for the IDs you change; everything else is kept from the old file by the tool.', items: { type: 'object', additionalProperties: false, properties: {
         id: { type: 'string', required: true, description: 'Internal ID, e.g. cs_tianfa.' },
         kind: { type: 'string', enum: ['skill', 'card', 'character', 'translate'], required: true, description: 'Block type.' },
@@ -351,6 +352,14 @@ export function apply(ctx, config) {
         return { ok: false, wrote: false, error: '未配置 nonameDir(游戏本体目录):请在插件配置里填 nonameDir 后重启,或直接复制代码手动保存。' }
       }
       try {
+        // 写入方式是用户在工坊表单里的决定,不以 AI 传参为准:带 taskId 时用任务
+        // 登记的 writeMode 覆盖(实测 AI 曾把「自动写入」任务误按 manual 调用)。
+        if (args.taskId) {
+          const task = await getTask(dshHomeDir, args.taskId)
+          if (task && task.writeMode && task.writeMode !== args.writeMode) {
+            args = { ...args, writeMode: task.writeMode }
+          }
+        }
         const result = await writeExtension(nonameDir, args)
         if (result.wrote && result.backup) await recordBackup(nonameDir, args.folder, result.backup)
         return result
@@ -443,7 +452,18 @@ export function apply(ctx, config) {
     async execute(args) {
       if (!active) return { ok: false, error: '未配置 nonameDir,无法更新任务。' }
       const result = await markSkillsWritten(dshHomeDir, args)
-      if (!result.ok) return { ok: false, error: result.error }
+      if (!result.ok) {
+        // markSkillsWritten 的 missing 分支不设 error 字段——这里绝不能把
+        // undefined 塞进返回对象(lossless JSON 拒收,实测「标记既有技能名」必炸)。
+        const detail = result.error
+          || ((result.missing || []).length
+            ? '这些名称不在任务技能清单里: ' + result.missing.join('、')
+              + ((result.task && result.task.skills || []).length
+                ? '(任务技能节点: ' + result.task.skills.map((s) => s.name).join('、') + ')——skills 参数必须逐字使用任务技能节点的名称'
+                : '')
+            : '任务更新失败。')
+        return { ok: false, error: detail }
+      }
       return { ok: true, marked: result.marked, missing: result.missing, notesStored: result.notesStored || 0, confirmed: result.task.skills.filter((s) => s.status === 'confirmed').length, total: result.task.skills.length, autoCompleted: false }
     },
   }))

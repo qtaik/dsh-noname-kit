@@ -295,7 +295,30 @@ function anchorWrap(key, body) {
 
 function insertPoint(code, kind) {
   const all = scanAnchored(code).filter((b) => b.kind === kind)
-  if (all.length) return all[all.length - 1].end
+  if (all.length) {
+    // 同 kind 的块可能分布在多个同名区段(最典型:translate 分散在 character/card/
+    // skill 各自的 translate 子对象)。直接取「文件最后一个」会把新块追加进错误的
+    // 区段(实测:测试包的 translate:ts_mujia 在 card.translate,新技能翻译被插进
+    // card 区)。改为按区段归属分组,取锚点最多的区段的最后一个锚点之后——多数
+    // 区段即该 kind 的主体所在;都归不了区段时退回旧的「最后一个」。
+    const secs = findAllSections(code, kind)
+    const bySec = new Map()
+    for (const b of all) {
+      const sec = secs.find((s) => b.start > s.open && b.start < s.close)
+      if (!sec) continue
+      if (!bySec.has(sec)) bySec.set(sec, [])
+      bySec.get(sec).push(b)
+    }
+    if (bySec.size) {
+      let bestBlocks = null
+      let bestCount = -1
+      for (const blocks of bySec.values()) {
+        if (blocks.length > bestCount) { bestBlocks = blocks; bestCount = blocks.length }
+      }
+      return bestBlocks[bestBlocks.length - 1].end
+    }
+    return all[all.length - 1].end
+  }
   // 无锚时:挑"真正装着条目"的那个同名区段插入。嵌套布局(老式扩展常见的
   // card:{ card:{…} })里外层容器只有一个同名骨架键、条目全在内层,插到外层
   // 会让新条目挂到错误的对象层级上。

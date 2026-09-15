@@ -283,6 +283,38 @@ export default function () {
   ok(esmErr.error && /ES Module 多文件/.test(esmErr.error), 'ES Module 壳:迁移报多文件专属错误')
   ok(!/全文模式/.test(esmErr.error || ''), 'ES Module 壳:错误里不再出现「走全文模式」误导')
 
+  // 多区段 translate:character/card 各有 translate 子对象时,新增 translate 块
+  // 必须落进多数区段(character),不再无脑追加到文件最后一个同 kind 锚点
+  // (实测:测试包 translate:ts_mujia 在 card.translate,新技能翻译被插进 card 区)
+  const MULTI_TR = [
+    "game.import('extension', function (lib, game, ui, get, ai) {",
+    '  return {',
+    "    name: '多段翻译',",
+    '    character: {',
+    "      character: { ts_r1: { sex: 'male', hp: 3 } },",
+    '      translate: {',
+    '        //#noname-kit-begin translate:ts_r1',
+    "        ts_r1: '人一',",
+    '        //#noname-kit-end translate:ts_r1',
+    '        //#noname-kit-begin translate:ts_r1b',
+    "        ts_r1b: '人一乙',",
+    '        //#noname-kit-end translate:ts_r1b',
+    '      },',
+    '    },',
+    "    card: { card: { ts_k1: { type: 'trick' } }, translate: {",
+    '      //#noname-kit-begin translate:ts_k1',
+    "      ts_k1: '牌一',",
+    '      //#noname-kit-end translate:ts_k1',
+    '    } },',
+    '  }',
+    '});',
+  ].join('\n')
+  const mi = blocks.assembleBlocks(MULTI_TR, [{ kind: 'translate', id: 'ts_r2', code: "ts_r2: '人二'," }])
+  ok(mi.errors.length === 0, 'translate:多区段文件插入新翻译成功')
+  const newPos = mi.code.indexOf('//#noname-kit-begin translate:ts_r2')
+  const cardSecPos = mi.code.indexOf('ts_k1')
+  ok(newPos > 0 && newPos < cardSecPos, 'translate:新块落进多数区段(character.translate),不再追加到 card 区')
+
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })

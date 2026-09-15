@@ -75,8 +75,9 @@ function descriptionOf(skills) {
  * 创建任务。ID 全局唯一;character 任务带 skills 分叉;card 任务单节点。
  * skills: [{name, desc}];card 类型自动生成单节点。
  * target 可选 { kind: 'character'|'card', id }:「编辑已有条目」任务,非法值归 null。
+ * writeMode:'manual' 存手动,其余归 'auto'——写入工具以此为准(AI 传参不覆盖)。
  */
-export async function createTask(dshHome, { id, folder, type, title, charInfo, pile, idPrefix, skills, image, target }) {
+export async function createTask(dshHome, { id, folder, type, title, charInfo, pile, idPrefix, skills, image, target, writeMode }) {
   if (typeof id !== 'string' || !ID_RE.test(id.trim())) {
     return { ok: false, error: `任务ID「${id}」不合法:只允许中文/字母/数字/下划线/连字符,长度 1-64。` }
   }
@@ -108,7 +109,7 @@ export async function createTask(dshHome, { id, folder, type, title, charInfo, p
     image: String(image || '').trim().slice(0, 500),
     skills: skillList,
     style: '',
-    writeMode: 'auto',
+    writeMode: writeMode === 'manual' ? 'manual' : 'auto',
     status: 'open',
     rounds: 0,
     feedbacks: [],

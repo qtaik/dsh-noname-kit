@@ -256,7 +256,7 @@ window.__ModuleLoader__.load({
             : { join: false, entries: '' };
           return fetch('/noname-kit-api/tasks', {
             method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: taskId, folder: form.folder.trim(), type: type, title: form.title.trim(), charInfo: form.charInfo.trim(), pile: pile, idPrefix: form.idPrefix.trim(), skills: skills, image: form.image.trim(), target: editingExisting ? { kind: type, id: form.entryId } : null }),
+            body: JSON.stringify({ id: taskId, folder: form.folder.trim(), type: type, title: form.title.trim(), charInfo: form.charInfo.trim(), pile: pile, idPrefix: form.idPrefix.trim(), skills: skills, image: form.image.trim(), target: editingExisting ? { kind: type, id: form.entryId } : null, writeMode: form.writeMode }),
           }).then(function (r) { return r.json() }).then(function (reg) {
             if (!reg.ok) throw new Error(reg.error || '任务注册失败');
             return { taskId: taskId, pile: pile };
@@ -286,6 +286,7 @@ window.__ModuleLoader__.load({
               (form.notes && form.notes.length ? '该包有历史注意点 ' + form.notes.length + ' 条(过往任务实测结论):与本任务相关时才用 noname_read_extension 传 notes:true 拉取,无关条目忽略,与需求冲突时以需求为准。' : ''),
               (form.editNotes.trim() ? '── 修改描述(对已有内容的改动要求) ──\n' + form.editNotes.trim() : ''),
               (newSkillRows.length ? '── 新增技能(加到目标' + (type === 'card' ? '卡牌' : '武将') + '上,按顺序实现) ──\n' + newSkillRows.map(function (s, i) { return (i + 1) + '. ' + s.name + (s.desc ? ':' + s.desc : '') }).join('\n') : ''),
+              '── 任务技能节点(收口时 noname_skills_written 的 skills 参数必须逐字使用这些名称) ──\n' + skills.map(function (s) { return '- ' + s.name }).join('\n'),
               form.reference.trim() ? '── 用户提供的参考代码 ──\n' + form.reference.trim() : '',
               form.image.trim() ? '── 图片 ──\n用户已提供图片路径: ' + form.image.trim() + '\n实现完成后用 noname_copy_images 复制进扩展包 image/ 目录,按目标条目ID(' + form.entryId + ')命名文件,调用时带上任务ID。' : '',
               '── 执行要求(确认协议,逐步执行)──',

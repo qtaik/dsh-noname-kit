@@ -97,13 +97,14 @@ export async function writeExtension(nonameDir, { folder, code, blocks, edits, d
   // 手动复制模式:所有门禁过了之后,返回组装/校验后的代码,不落盘
   if (writeMode === 'manual') return { ...verdict, wrote: false, code: finalCode }
 
-  // 覆盖前备份
+  // 覆盖前备份(路径记成相对 nonameDir 的全相对路径——render 直接展示给 AI/用户,
+  // 只给 "backup/x.js" 的话对方不知道该在哪个目录下找,实测要试错一次)
   let backup = ''
   if (oldCode) {
     const backupDir = join(full, 'backup')
     await mkdir(backupDir, { recursive: true })
-    backup = join('backup', `extension.${timestamp()}.js`)
-    await copyFile(target, join(full, backup))
+    backup = join(relative(nonameDir, backupDir), `extension.${timestamp()}.js`).split(sep).join('/')
+    await copyFile(target, join(full, basename(backup)))
   }
   await writeFile(target, finalCode, 'utf8')
 
@@ -180,8 +181,8 @@ export async function migrateAnchors(nonameDir, folder) {
   if (!verdict.ok) return { ok: false, error: '迁移后语法校验失败(不应发生,已放弃写入): ' + (verdict.errors[0] && verdict.errors[0].message || '未知') }
   const backupDir = join(full, 'backup')
   await mkdir(backupDir, { recursive: true })
-  const backup = join('backup', `extension.${timestamp()}.js`)
-  await copyFile(target, join(full, backup))
+  const backup = join(relative(nonameDir, backupDir), `extension.${timestamp()}.js`).split(sep).join('/')
+  await copyFile(target, join(full, basename(backup)))
   await writeFile(target, r.code, 'utf8')
   return { ok: true, inserted: r.inserted, commas: r.commas, blocks: r.blocks, backup }
 }
