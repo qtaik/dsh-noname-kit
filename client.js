@@ -102,7 +102,8 @@ window.__ModuleLoader__.load({
         style: 'classic', writeMode: 'auto',
         reference: '', busy: false, err: '',
         extList: [], extLoading: false, currentInfo: '',
-        goal: 'create', entryId: '', entryList: [], entryLoading: false, editNotes: '', addSkills: false
+        goal: 'create', entryId: '', entryList: [], entryLoading: false, editNotes: '', addSkills: false,
+        entrySkills: [], entrySkillsLoading: false, pickedSkills: []
       });
       var form = state[0], setForm = state[1];
       var set = function (key) { return function (v) { setForm(function (prev) { var next = {}; next[key] = v; return Object.assign({}, prev, next) }) } };
@@ -132,32 +133,53 @@ window.__ModuleLoader__.load({
 
       // 「编辑已有武将/卡牌」:列出目标包内条目(锚点/无锚老包通吃)
       var loadEntries = function (folder, kind) {
-        if (!folder) { patch({ entryList: [], entryId: '', entryLoading: false }); return }
+        if (!folder) { patch({ entryList: [], entryId: '', entryLoading: false, entrySkills: [], pickedSkills: [] }); return }
         patch({ entryLoading: true });
         fetch('/noname-kit-api/entries?folder=' + encodeURIComponent(folder) + '&kind=' + kind).then(function (r) { return r.json() }).then(function (b) {
           setForm(function (prev) { return Object.assign({}, prev, {
             entryLoading: false,
             entryList: b.ok ? (b.entries || []) : [],
             entryId: '',
+            entrySkills: [], pickedSkills: [],
             currentInfo: b.ok ? '' : '❌ ' + (b.error || '条目列表加载失败')
           }) });
         }, function () {
-          setForm(function (prev) { return Object.assign({}, prev, { entryLoading: false, entryList: [], entryId: '', currentInfo: '❌ 条目列表加载失败' }) });
+          setForm(function (prev) { return Object.assign({}, prev, { entryLoading: false, entryList: [], entryId: '', entrySkills: [], pickedSkills: [], currentInfo: '❌ 条目列表加载失败' }) });
         });
       };
 
+      // 选中条目后:拉取该武将 skills 数组里的技能(勾选候选)
+      var loadEntrySkills = function (folder, entryId) {
+        patch({ entrySkillsLoading: true });
+        fetch('/noname-kit-api/entry-skills?folder=' + encodeURIComponent(folder) + '&id=' + encodeURIComponent(entryId)).then(function (r) { return r.json() }).then(function (b) {
+          setForm(function (prev) { return Object.assign({}, prev, { entrySkillsLoading: false, entrySkills: b.ok ? (b.skills || []) : [], pickedSkills: [] }) });
+        }, function () {
+          setForm(function (prev) { return Object.assign({}, prev, { entrySkillsLoading: false, entrySkills: [], pickedSkills: [] }) });
+        });
+      };
+
+      var pickEntry = function (id) {
+        setForm(function (prev) { return Object.assign({}, prev, { entryId: id, pickedSkills: [], entrySkills: [], editNotes: '' }) });
+        if (id && form.type === 'character') loadEntrySkills(form.folder, id);
+      };
+
+      var togglePicked = function (id) {
+        var has = form.pickedSkills.indexOf(id) >= 0;
+        patch({ pickedSkills: has ? form.pickedSkills.filter(function (x) { return x !== id }) : form.pickedSkills.concat([id]) });
+      };
+
       var switchGoal = function (goal) {
-        patch({ goal: goal, entryId: '', err: '', currentInfo: '' });
+        patch({ goal: goal, entryId: '', err: '', currentInfo: '', entrySkills: [], pickedSkills: [], editNotes: '' });
         if (goal === 'edit') loadEntries(form.folder, form.type);
       };
 
       var switchType = function (t) {
-        setForm(function (prev) { return Object.assign({}, prev, { type: t, entryId: '' }) });
+        setForm(function (prev) { return Object.assign({}, prev, { type: t, entryId: '', entrySkills: [], pickedSkills: [] }) });
         if (form.mode === 'edit' && form.goal === 'edit') loadEntries(form.folder, t);
       };
 
       var pickExisting = function (folder) {
-        patch({ folder: folder, currentInfo: '', usedIds: [], entryId: '', entryList: [] });
+        patch({ folder: folder, currentInfo: '', usedIds: [], entryId: '', entryList: [], entrySkills: [], pickedSkills: [] });
         if (!folder) return;
         if (form.goal === 'edit') loadEntries(folder, form.type);
         fetch('/noname-kit-api/extension?folder=' + encodeURIComponent(folder)).then(function (r) { return r.json() }).then(function (body) {
@@ -226,7 +248,7 @@ window.__ModuleLoader__.load({
           if (!form.folder.trim()) { errSet('目标扩展文件夹不能为空'); return }
           if (!form.entryId) { errSet('请先选择要修改的' + (form.type === 'card' ? '卡牌' : '武将')); return }
           var addSkillFilled = form.addSkills && form.type === 'character' && form.skills.some(function (s) { return s.name.trim() || s.desc.trim() });
-          if (!form.editNotes.trim() && !addSkillFilled) { errSet('请填写修改描述,或选「新增技能」并至少填一个技能'); return }
+          if (!form.editNotes.trim() && !form.pickedSkills.length && !addSkillFilled) { errSet('请勾选要修改的技能、填写改动描述,或选「新增技能」——至少填一项'); return }
         } else {
           if (!filledSkills.length) { errSet('请至少填写一个技能(技能名和效果至少填一处)'); return }
           if (!form.folder.trim()) { errSet('目标扩展文件夹不能为空'); return }
@@ -236,9 +258,14 @@ window.__ModuleLoader__.load({
         setForm(function (prev) { return Object.assign({}, prev, { busy: true, err: '' }) });
 
         var type = form.type;
+        var entryNameOf = function (id) {
+          var hit = (form.entrySkills || []).filter(function (x) { return x.id === id })[0];
+          return hit && hit.name ? hit.name : id;
+        };
         var skills = editingExisting
           ? [].concat(
               form.editNotes.trim() ? [{ name: '修改 ' + form.entryId, desc: form.editNotes.trim() }] : [],
+              form.pickedSkills.map(function (id) { return { name: entryNameOf(id), desc: '' } }),
               form.addSkills && type === 'character'
                 ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim() } })
                 : []
@@ -274,26 +301,28 @@ window.__ModuleLoader__.load({
             var newSkillRows = form.addSkills && type === 'character'
               ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim() } })
               : [];
+            var pickedSkillRows = form.pickedSkills.map(function (id) { return { id: id, name: entryNameOf(id) } });
             text = [
               '【无名杀工坊·编辑任务】',
               '任务ID: ' + taskId,
               '任务性质: 编辑已有扩展包(已存在)',
               '类型: ' + (type === 'card' ? '卡牌' : '武将'),
-              '编辑目标条目: ' + type + ':' + form.entryId + '(' + (newSkillRows.length ? '已有内容的改动只落在这个条目;新增技能作为新区块加到该条目上' : '只改这个条目') + ',其他武将/卡牌/技能/翻译一律不动)',
+              '编辑目标条目: ' + type + ':' + form.entryId + '(只改这个条目' + (pickedSkillRows.length ? '及其勾选技能' : '') + (newSkillRows.length ? ';新增技能作为新区块加到该条目上' : '') + ',其他武将/卡牌/技能/翻译一律不动)',
               (form.title.trim() ? '新名称(显示名,写入 translate;留空即不改名): ' + form.title.trim() : ''),
               '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成代码,不要写文件)' : '自动写入'),
               '目标扩展文件夹: ' + form.folder.trim() + '(已有扩展,老式/新式写法跟随现有代码)',
               (form.notes && form.notes.length ? '该包有历史注意点 ' + form.notes.length + ' 条(过往任务实测结论):与本任务相关时才用 noname_read_extension 传 notes:true 拉取,无关条目忽略,与需求冲突时以需求为准。' : ''),
-              (form.editNotes.trim() ? '── 修改描述(对已有内容的改动要求) ──\n' + form.editNotes.trim() : ''),
+              (form.editNotes.trim() ? '── ' + (type === 'card' ? '卡牌' : '武将') + '改动(条目本身:体力/护甲/名称等) ──\n' + form.editNotes.trim() : ''),
+              (pickedSkillRows.length ? '── 修改技能(各技能的具体改动以确认协议向用户澄清) ──\n' + pickedSkillRows.map(function (p, i) { return (i + 1) + '. ' + p.name + '(内部ID ' + p.id + ')——只改此技能对应区块' }).join('\n') : ''),
               (newSkillRows.length ? '── 新增技能(加到目标' + (type === 'card' ? '卡牌' : '武将') + '上,按顺序实现) ──\n' + newSkillRows.map(function (s, i) { return (i + 1) + '. ' + s.name + (s.desc ? ':' + s.desc : '') }).join('\n') : ''),
               '── 任务技能节点(收口时 noname_skills_written 的 skills 参数必须逐字使用这些名称) ──\n' + skills.map(function (s) { return '- ' + s.name }).join('\n'),
               form.reference.trim() ? '── 用户提供的参考代码 ──\n' + form.reference.trim() : '',
               form.image.trim() ? '── 图片 ──\n用户已提供图片路径: ' + form.image.trim() + '\n实现完成后用 noname_copy_images 复制进扩展包 image/ 目录,按目标条目ID(' + form.entryId + ')命名文件,调用时带上任务ID。' : '',
               '── 执行要求(确认协议,逐步执行)──',
-              '第 0 步【需求理解确认·硬门禁】:先 noname_read_extension 传 block:\'' + type + ':' + form.entryId + '\' 只读目标区块原文(定位不准时先传 listBlocks 看区块目录),把原文与需求对照,逐项输出【需求理解确认】(' + (form.editNotes.trim() ? '修改项每条:改什么 / 改动前→改动后 / 影响面' : '') + (form.editNotes.trim() && newSkillRows.length ? ';' : '') + (newSkillRows.length ? '新增技能按新技能模板逐条:触发/频率/目标/数值/边界' : '') + ')。输出后停下等待用户明确回复确认。',
+              '第 0 步【需求理解确认·硬门禁】:先 noname_read_extension 按块只读目标条目原文(block:\'' + type + ':' + form.entryId + '\')' + (pickedSkillRows.length ? '与各勾选技能原文(block:\'skill:<技能ID>\')' : '') + '(定位不准时先传 listBlocks 看区块目录),把原文与需求对照,逐项输出【需求理解确认】(' + (form.editNotes.trim() ? '条目项:改什么 / 改动前→改动后 / 影响面' : '') + (form.editNotes.trim() && pickedSkillRows.length ? ';' : '') + (pickedSkillRows.length ? '修改技能项:改动前→改动后' : '') + ((pickedSkillRows.length || form.editNotes.trim()) && newSkillRows.length ? ';' : '') + (newSkillRows.length ? '新增技能按新技能模板逐条:触发/频率/目标/数值/边界' : '') + ')。输出后停下等待用户明确回复确认。',
               '有任何歧义必须先用 ask_user_question 提问;禁止猜测。ask_user_question 的回答只消除歧义、不算确认——澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」后才能动笔。',
               '未获用户确认前,禁止生成代码、禁止调用 noname_write_extension。',
-              '用户确认后动手:已有内容的改动只落在目标区块 ' + type + ':' + form.entryId + '(noname_write_extension 用 blocks 组装或 edits 精确补丁,严禁全文重写)' + (newSkillRows.length ? ';新增技能作为新区块插入(锚点包裹,内部 ID 用下方前缀规则)' : '') + ',除目标区块与新增区块外严禁改动任何其他区块。noname_validate 通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + '。',
+              '用户确认后动手:已有内容的改动只落在目标条目' + (pickedSkillRows.length ? '与其勾选技能' : '') + '对应区块(noname_write_extension 用 blocks 组装或 edits 精确补丁,严禁全文重写)' + (newSkillRows.length ? ';新增技能作为新区块插入(锚点包裹,内部 ID 用下方前缀规则)' : '') + ',除上述区块与新增区块外严禁改动任何其他区块。noname_validate 通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + '。',
               (newSkillRows.length && form.idPrefix.trim() ? '内部 ID 命名规则:新增技能的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,中文显示名写入 translate。' : ''),
             ].filter(Boolean).join('\n');
           } else if (isEdit) {
@@ -401,6 +430,32 @@ window.__ModuleLoader__.load({
           : [textField('新扩展包名称(游戏 extension/ 下的文件夹名)', form.folder, set('folder'))],
         radioGroup('类型', form.type, [{ value: 'character', text: '⚔️ 武将' }, { value: 'card', text: '🃏 卡牌' }], switchType),
         isEdit ? radioGroup('目标', form.goal, [{ value: 'create', text: '✨ 创建新' }, { value: 'edit', text: '✏️ 编辑已有' }], switchGoal) : null,
+        editingExisting ? [
+          e('label', 'nnk-label', '编辑目标(选择要修改的' + (form.type === 'card' ? '卡牌' : '武将') + ')' + (form.entryLoading ? '(加载中…)' : '')),
+          h('select', { className: 'nnk-input', value: form.entryId, onChange: function (ev) { pickEntry(ev.target.value) } },
+            [h('option', { key: '', value: '' }, '— 选择要修改的' + (form.type === 'card' ? '卡牌' : '武将') + ' —')].concat(form.entryList.map(function (en) {
+              return h('option', { key: en.id, value: en.id }, en.id + (en.name ? '(' + en.name + ')' : ''))
+            }))),
+          !form.entryLoading && form.entryList.length === 0
+            ? e('div', 'nnk-hint', '此包没有检测到可编辑的' + (form.type === 'card' ? '卡牌' : '武将') + '(若确实有,先点「🔨 建立区块索引」或确认该包有 extension.js)')
+            : null,
+          form.entryId && form.type === 'character' && form.entrySkills.length ? [
+            e('label', 'nnk-label', '该武将的技能(勾选要修改的;不勾 = 不改技能)' + (form.entrySkillsLoading ? '(加载中…)' : '')),
+            h('div', {}, form.entrySkills.map(function (en) {
+              return h('label', { key: en.id, className: 'nnk-radio' },
+                h('input', { type: 'checkbox', checked: form.pickedSkills.indexOf(en.id) >= 0, onChange: function () { togglePicked(en.id) } }),
+                en.id + (en.name ? '(' + en.name + ')' : '')
+              );
+            }))
+          ] : null,
+          form.entryId && form.type === 'character' && !form.entrySkillsLoading && !form.entrySkills.length
+            ? e('div', 'nnk-hint', '未从该条目解析出技能清单(技能改动可直接写进下面的改动描述,由 AI 在确认阶段澄清)')
+            : null,
+          e('label', 'nnk-label', (form.type === 'card' ? '卡牌' : '武将') + '改动描述(条目本身的变化:体力/护甲/名称等;可选)'),
+          h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.editNotes, placeholder: '例: 初始体力信息改为 3/4/1(3 点体力、4 点上限、1 点护甲);显示名保持不变', onChange: function (ev) { set('editNotes')(ev.target.value) } }),
+          form.type === 'character' ? radioGroup('是否新增技能', form.addSkills ? 'yes' : 'no', [{ value: 'no', text: '不新增' }, { value: 'yes', text: '新增技能(填下面的技能列表)' }], function (v) { patch({ addSkills: v === 'yes' }) }) : null,
+          form.addSkills && form.type === 'character' ? skillRows() : null
+        ] : null,
         textField((form.type === 'card' ? '卡牌名称' : '武将名称') + (editingExisting ? '(新显示名,可选;留空 = 不改名)' : '(显示名,会写入 translate)'), form.title, set('title'), { placeholder: form.type === 'card' ? '例: 疾风符' : '例: 凌霜' }),
         (editingExisting && !(form.addSkills && form.type === 'character')) ? null : textField('ID 前缀(防止与其他扩展包的技能/武将/卡牌重名;可选但强烈建议)', form.idPrefix, set('idPrefix'), { placeholder: '例: cs_ (则内部 ID 形如 cs_tianfa)' }),
         !editingExisting && form.type === 'character' ? textField('武将基本信息(势力、体力、性别…;可选)', form.charInfo, set('charInfo'), { placeholder: '例:群势力,3 体力,男性,风格偏辅助' }) : null,
@@ -408,20 +463,7 @@ window.__ModuleLoader__.load({
           e('label', 'nnk-label', '图片路径(武将立绘/卡牌图;可选)'),
           h('input', { className: 'nnk-input', value: form.image, placeholder: '例: D:\\pic\\hero.png —— AI 复制进扩展包 image/ 后按 ID 命名', onChange: function (ev) { set('image')(ev.target.value) } })
         ),
-        editingExisting ? [
-          e('label', 'nnk-label', '编辑目标' + (form.entryLoading ? '(加载中…)' : '')),
-          h('select', { className: 'nnk-input', value: form.entryId, onChange: function (ev) { set('entryId')(ev.target.value) } },
-            [h('option', { key: '', value: '' }, '— 选择要修改的' + (form.type === 'card' ? '卡牌' : '武将') + ' —')].concat(form.entryList.map(function (en) {
-              return h('option', { key: en.id, value: en.id }, en.id + (en.name ? '(' + en.name + ')' : ''))
-            }))),
-          !form.entryLoading && form.entryList.length === 0
-            ? e('div', 'nnk-hint', '此包没有检测到可编辑的' + (form.type === 'card' ? '卡牌' : '武将') + '(若确实有,先点「🔨 建立区块索引」或确认该包有 extension.js)')
-            : null,
-          e('label', 'nnk-label', '修改描述(对已有内容的改动建议,写清要改什么)'),
-          h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.editNotes, placeholder: '例:【天罚】伤害 1 改为 2,技能描述同步修改;【凌波】增加「每回合限一次」限制', onChange: function (ev) { set('editNotes')(ev.target.value) } }),
-          form.type === 'character' ? radioGroup('是否新增技能', form.addSkills ? 'yes' : 'no', [{ value: 'no', text: '不新增' }, { value: 'yes', text: '新增技能(填下面的技能列表)' }], function (v) { patch({ addSkills: v === 'yes' }) }) : null,
-          form.addSkills && form.type === 'character' ? skillRows() : null
-        ] : (form.type === 'character' ? skillRows() : [
+        editingExisting ? null : (form.type === 'character' ? skillRows() : [
           e('label', 'nnk-label', '卡牌效果'),
           h('textarea', { className: 'nnk-textarea', value: form.skills[0].desc, placeholder: '效果:类型/花色点数需求/效果/边界', onChange: (function () {
             return function (ev) {

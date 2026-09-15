@@ -6,7 +6,7 @@
 import { mkdir, readFile, readdir, copyFile, writeFile } from 'node:fs/promises'
 import { join, resolve, basename, relative, sep } from 'node:path'
 import { validateExtensionCode, collectDefinedIds } from './validate.js'
-import { scanAnchored, scanBlocks, extractBlock, assembleBlocks, checkFidelity, migrateCode, stripAnchors, findAllSections, sectionProperties } from './blocks.js'
+import { scanAnchored, scanBlocks, extractBlock, assembleBlocks, checkFidelity, migrateCode, stripAnchors, findAllSections, sectionProperties, virtualCharacterBlocks } from './blocks.js'
 
 const FOLDER_RE = /^[\w\u4e00-\u9fff-]{1,64}$/
 
@@ -260,4 +260,37 @@ export async function listEntries(nonameDir, folder, kind) {
     .filter((b) => b.kind === kind)
     .map((b) => ({ id: b.id, lines: b.lines, name: names.get(b.id) || '' }))
   return { ok: true, kind, entries }
+}
+
+/** 从武将条目源码提取 skills 数组里的技能 id(工坊「编辑已有武将」的技能勾选)。
+ * 两种形态:对象 `skills: ["a","b"]`;老式数组 `["male","wei",4,["a","b"],...]`
+ * (skills 固定在第 4 个元素)。都认不出就返回空数组。 */
+function entrySkillIds(entryText) {
+  const clean = (raw) => raw.split(',')
+    .map((s) => s.trim().replace(/^['"`]|['"`]$/g, '').replace(/\/\/.*$/, '').trim())
+    .filter(Boolean)
+  const obj = /skills\s*:\s*\[([^\]]*)\]/.exec(entryText)
+  if (obj) return clean(obj[1])
+  // 数组形态的条目 text 以「id: [」开头(非裸数组),匹配 sex,group,hp,[skills] 前缀
+  const arr = /:\s*\[\s*(['"])[\w-]+\1\s*,\s*(['"])[\w-]+\2\s*,\s*\d+\s*,\s*\[([^\]]*)\]/.exec(entryText)
+  if (arr) return clean(arr[3])
+  return []
+}
+
+/** 列出某个武将条目的技能(勾选候选):id + translate 显示名(尽力)。
+ * 卡牌没有技能数组,返回空。只读。 */
+export async function listEntrySkills(nonameDir, folder, entryId) {
+  if (typeof entryId !== 'string' || !entryId.trim()) {
+    return { ok: false, skills: [], error: '缺少条目 id。' }
+  }
+  const { full } = safeFolderPath(nonameDir, folder)
+  let code
+  try { code = await readFile(join(full, 'extension.js'), 'utf8') } catch {
+    return { ok: false, skills: [], error: '该扩展没有 extension.js。' }
+  }
+  const entry = virtualCharacterBlocks(code).find((b) => b.id === entryId.trim())
+  if (!entry) return { ok: true, skills: [] }
+  const names = extractDisplayNames(code)
+  const skills = entrySkillIds(entry.text).map((id) => ({ id, name: names.get(id) || '' }))
+  return { ok: true, skills }
 }

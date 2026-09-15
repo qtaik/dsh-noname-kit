@@ -21,7 +21,7 @@ import { KNOWLEDGE_TEXT } from './src/knowledge.js'
 import { validateExtensionCode } from './src/validate.js'
 import { searchReference } from './src/reference.js'
 import { detectCandidates } from './src/detect.js'
-import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateAnchors, listEntries } from './src/write.js'
+import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateAnchors, listEntries, listEntrySkills } from './src/write.js'
 import { readHistory, archiveTask, listExtensionHistories, recordBackup, deleteNote } from './src/history.js'
 import { copyImages } from './src/images.js'
 import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, completeById, deleteTask, reopenTask, getTask } from './src/tasks.js'
@@ -681,6 +681,14 @@ export function apply(ctx, config) {
           const kind = url.searchParams.get('kind') || ''
           try { return json(200, await listEntries(nonameDir, folder, kind)) } catch (error) {
             return json(200, { ok: false, kind, entries: [], error: error.message })
+          }
+        }
+        if (req.method === 'GET' && url.pathname === '/noname-kit-api/entry-skills') {
+          // 工坊「编辑已有武将」:列出选中条目 skills 数组里的技能(勾选候选,只读)
+          const folder = url.searchParams.get('folder') || ''
+          const entryId = url.searchParams.get('id') || ''
+          try { return json(200, await listEntrySkills(nonameDir, folder, entryId)) } catch (error) {
+            return json(200, { ok: false, skills: [], error: error.message })
           }
         }
         if (req.method === 'GET' && url.pathname === '/noname-kit-api/history') {

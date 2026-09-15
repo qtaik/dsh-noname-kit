@@ -140,6 +140,7 @@ try {
     '    translate: {',
     "      ts_ren1: ['凌霜', '武将描述'],",
     "      ts_ren2: { name: '霜女' },",
+    "      ts_skill1: '挥砍',",
     "      ts_kapai: '疾风符',",
     '    },',
     '  }',
@@ -156,6 +157,15 @@ try {
   ok(leCard.ok && leCard.entries.length === 1 && leCard.entries[0].id === 'ts_kapai' && leCard.entries[0].name === '疾风符', 'listEntries 列出卡牌(嵌套 card.card 布局)+ 字符串 translate 名')
   const leBad = await listEntries(nonameDir, '条目包', 'skill')
   ok(!leBad.ok, 'listEntries 非 character/card 的 kind 被拒')
+  const { listEntrySkills } = await import('../src/write.js')
+  const es1 = await listEntrySkills(nonameDir, '条目包', 'ts_ren1')
+  ok(es1.ok && es1.skills.length === 1 && es1.skills[0].id === 'ts_skill1' && es1.skills[0].name === '挥砍',
+    'listEntrySkills:数组形态武将的 skills 解析 + translate 显示名')
+  const es2 = await listEntrySkills(nonameDir, '条目包', 'ts_ren2')
+  ok(es2.ok && es2.skills.length === 1 && es2.skills[0].id === 'ts_skill2' && es2.skills[0].name === '',
+    'listEntrySkills:对象形态武将的 skills 解析(无 translate 名时留空)')
+  const es3 = await listEntrySkills(nonameDir, '条目包', '不存在')
+  ok(es3.ok && es3.skills.length === 0, 'listEntrySkills:条目不存在 → 空清单')
 
   const manualTask = await tasks.createTask(home, { id: '测试包-07', folder: '测试包', type: 'card', title: '占位3', skills: [{ name: '占位3', desc: '' }], writeMode: 'manual' })
   ok(manualTask.ok && manualTask.task.writeMode === 'manual', 'writeMode=manual 落库(写入工具以此为准)')
