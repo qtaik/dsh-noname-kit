@@ -276,6 +276,13 @@ export default function () {
   ok(!carrM.error && carrM.blocks === 2 && syntaxOk(carrM.code), 'character:数组形态条目迁移后语法通过')
   ok(carrM.code.includes('//#noname-kit-begin character:Miku'), 'character:数组形态条目也打上锚点')
 
+  // ES Module 多文件壳(英雄杀式):extension.js 无区段、条目在子目录模块——
+  // 必须报「多文件结构」专属错误,不能误导用户去走全文模式(全文写的也是壳文件)
+  const ESM_SHELL = 'import { lib, game } from "noname";\nconst extensionPackage = { name: "英雄杀" };\nexport let type = "extension";\nexport default extensionPackage;\n'
+  const esmErr = blocks.migrateCode(ESM_SHELL)
+  ok(esmErr.error && /ES Module 多文件/.test(esmErr.error), 'ES Module 壳:迁移报多文件专属错误')
+  ok(!/全文模式/.test(esmErr.error || ''), 'ES Module 壳:错误里不再出现「走全文模式」误导')
+
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })

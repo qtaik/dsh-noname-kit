@@ -424,6 +424,12 @@ export function migrateCode(oldCode) {
   const items = []
   for (const kind of [...CONTENT_KINDS, 'translate']) items.push(...virtualBlocks(base, kind))
   if (!items.length) {
+    // 新式 ES Module 多文件包(如懒人包预装的英雄杀):extension.js 只是入口壳,
+    // 条目在子目录模块(const character = {...} + export)。锚点化与全文写入的
+    // 目标都是 extension.js,对壳文件动手毫无意义——必须给专属文案,不能引导"走全文模式"。
+    if (/(^|\n)\s*import\s+[\w{*\s"']/.test(base) || /(^|\n)\s*export\s+(default|let|const|var|\{)/.test(base)) {
+      return { error: '该扩展是新式 ES Module 多文件结构(extension.js 只是入口壳,武将/技能/翻译定义在子目录的模块文件里)——工具当前版本的锚点化与写入仅支持单文件扩展,暂不支持此类包。' }
+    }
     return { error: '未能识别出可锚定的区块(skill/card/character/translate 区段)——该文件可能是非常规格式,请走全文模式处理。' }
   }
   // 按位置聚合插入(同一边界:前块 end 锚先于后块 begin 锚),再从后往前落位
