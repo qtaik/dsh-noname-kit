@@ -90,7 +90,7 @@ export async function createTask(dshHome, { id, folder, type, title, charInfo, p
   }
   const taskType = type === 'card' ? 'card' : 'character'
   const skillList = taskType === 'card'
-    ? [newSkill({ name: title || '新卡牌', desc: descriptionOf(skills) })]
+    ? [newSkill({ name: title || (Array.isArray(skills) && skills[0] && skills[0].name) || '新卡牌', desc: descriptionOf(skills) })]
     : ((Array.isArray(skills) && skills.length ? skills : [{ name: title || '新技能', desc: '' }]).map(newSkill))
   const taskTarget = target && (target.kind === 'character' || target.kind === 'card')
     && typeof target.id === 'string' && ID_RE.test(target.id.trim())

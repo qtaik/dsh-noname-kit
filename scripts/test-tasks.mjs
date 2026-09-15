@@ -116,6 +116,13 @@ try {
   ok(badTarget.ok && badTarget.task.target === null, '非法 target(kind 不认/ID 不合法)归 null')
   const noTarget = await tasks.createTask(home, { id: '测试包-05', folder: '测试包', type: 'card', title: '占位2', skills: [{ name: '占位2', desc: '' }] })
   ok(noTarget.ok && noTarget.task.target === null, '不传 target → null(创建任务不受影响)')
+  const editCard = await tasks.createTask(home, {
+    id: '测试包-06', folder: '测试包', type: 'card',
+    skills: [{ name: '修改 tumoubugui', desc: '伤害 1 改为 2' }],
+    target: { kind: 'card', id: 'tumoubugui' },
+  })
+  ok(editCard.ok && editCard.task.skills.length === 1 && editCard.task.skills[0].name === '修改 tumoubugui',
+    '编辑卡牌任务(无 title)节点名取 skills[0].name,不再显示「新卡牌」')
 
   const entriesCode = [
     "game.import('extension', function (lib, game, ui, get, ai) {",

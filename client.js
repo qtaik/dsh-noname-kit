@@ -225,7 +225,7 @@ window.__ModuleLoader__.load({
         if (editingExisting) {
           if (!form.folder.trim()) { errSet('目标扩展文件夹不能为空'); return }
           if (!form.entryId) { errSet('请先选择要修改的' + (form.type === 'card' ? '卡牌' : '武将')); return }
-          var addSkillFilled = form.addSkills && form.skills.some(function (s) { return s.name.trim() || s.desc.trim() });
+          var addSkillFilled = form.addSkills && form.type === 'character' && form.skills.some(function (s) { return s.name.trim() || s.desc.trim() });
           if (!form.editNotes.trim() && !addSkillFilled) { errSet('请填写修改描述,或选「新增技能」并至少填一个技能'); return }
         } else {
           if (!filledSkills.length) { errSet('请至少填写一个技能(技能名和效果至少填一处)'); return }
@@ -239,7 +239,7 @@ window.__ModuleLoader__.load({
         var skills = editingExisting
           ? [].concat(
               form.editNotes.trim() ? [{ name: '修改 ' + form.entryId, desc: form.editNotes.trim() }] : [],
-              form.addSkills
+              form.addSkills && type === 'character'
                 ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim() } })
                 : []
             )
@@ -271,7 +271,7 @@ window.__ModuleLoader__.load({
           else pileText = '(武将无牌堆)';
           var text;
           if (editingExisting) {
-            var newSkillRows = form.addSkills
+            var newSkillRows = form.addSkills && type === 'character'
               ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim() } })
               : [];
             text = [
@@ -401,7 +401,7 @@ window.__ModuleLoader__.load({
         radioGroup('类型', form.type, [{ value: 'character', text: '⚔️ 武将' }, { value: 'card', text: '🃏 卡牌' }], switchType),
         isEdit ? radioGroup('目标', form.goal, [{ value: 'create', text: '✨ 创建新' }, { value: 'edit', text: '✏️ 编辑已有' }], switchGoal) : null,
         textField((form.type === 'card' ? '卡牌名称' : '武将名称') + (editingExisting ? '(新显示名,可选;留空 = 不改名)' : '(显示名,会写入 translate)'), form.title, set('title'), { placeholder: form.type === 'card' ? '例: 疾风符' : '例: 凌霜' }),
-        (editingExisting && !form.addSkills) ? null : textField('ID 前缀(防止与其他扩展包的技能/武将/卡牌重名;可选但强烈建议)', form.idPrefix, set('idPrefix'), { placeholder: '例: cs_ (则内部 ID 形如 cs_tianfa)' }),
+        (editingExisting && !(form.addSkills && form.type === 'character')) ? null : textField('ID 前缀(防止与其他扩展包的技能/武将/卡牌重名;可选但强烈建议)', form.idPrefix, set('idPrefix'), { placeholder: '例: cs_ (则内部 ID 形如 cs_tianfa)' }),
         !editingExisting && form.type === 'character' ? textField('武将基本信息(势力、体力、性别…;可选)', form.charInfo, set('charInfo'), { placeholder: '例:群势力,3 体力,男性,风格偏辅助' }) : null,
         h('div', { key: 'img' },
           e('label', 'nnk-label', '图片路径(武将立绘/卡牌图;可选)'),
@@ -417,9 +417,9 @@ window.__ModuleLoader__.load({
             ? e('div', 'nnk-hint', '此包没有检测到可编辑的' + (form.type === 'card' ? '卡牌' : '武将') + '(若确实有,先点「🔨 建立区块索引」或确认该包有 extension.js)')
             : null,
           e('label', 'nnk-label', '修改描述(对已有内容的改动建议,写清要改什么)'),
-          h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.editNotes, placeholder: '例: 把天罚的伤害从 1 改成 2,描述文案同步更新;大招改成每回合限一次', onChange: function (ev) { set('editNotes')(ev.target.value) } }),
-          radioGroup('是否新增技能', form.addSkills ? 'yes' : 'no', [{ value: 'no', text: '不新增' }, { value: 'yes', text: '新增技能(填下面的技能列表)' }], function (v) { patch({ addSkills: v === 'yes' }) }),
-          form.addSkills ? skillRows() : null
+          h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.editNotes, placeholder: '例:【天罚】伤害 1 改为 2,技能描述同步修改;【凌波】增加「每回合限一次」限制', onChange: function (ev) { set('editNotes')(ev.target.value) } }),
+          form.type === 'character' ? radioGroup('是否新增技能', form.addSkills ? 'yes' : 'no', [{ value: 'no', text: '不新增' }, { value: 'yes', text: '新增技能(填下面的技能列表)' }], function (v) { patch({ addSkills: v === 'yes' }) }) : null,
+          form.addSkills && form.type === 'character' ? skillRows() : null
         ] : (form.type === 'character' ? skillRows() : [
           e('label', 'nnk-label', '卡牌效果'),
           h('textarea', { className: 'nnk-textarea', value: form.skills[0].desc, placeholder: '效果:类型/花色点数需求/效果/边界', onChange: (function () {
