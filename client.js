@@ -277,10 +277,17 @@ window.__ModuleLoader__.load({
           ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim() } })
           : [{ name: form.title.trim() || '新卡牌', desc: (form.skills[0] && form.skills[0].desc ? form.skills[0].desc.trim() : '') }]);
 
+        // 游戏目录随任务消息下发给 AI(persona complete:true 会压掉插件 systemPrompt,
+        // systemPrompt 里的环境小节到不了模型——任务消息是唯一保证可见的通道)
+        var settingsP = fetch('/noname-kit-api/settings').then(function (r) { return r.json() }, function () { return {} });
         var ensureId = form.taskId.trim()
           ? Promise.resolve(form.taskId.trim())
           : genTaskId(form.folder.trim(), (form.usedIds || []).map(function (u) { return u.id }));
-        ensureId.then(function (taskId) {
+        Promise.all([ensureId, settingsP]).then(function (arr) {
+          var taskId = arr[0];
+          var settings = arr[1] || {};
+          var gameDir = settings.nonameDir || '';
+          var gameDirPosix = gameDir.replace(/^([A-Za-z]):[\\/]/, function (m, d) { return '/' + d.toLowerCase() + '/' }).replace(/\\/g, '/');
           var pile = type === 'card' && form.pileJoin
             ? { join: true, entries: form.pileRows.filter(function (r) { return r.point !== '' }).map(function (r) { return r.suit + ' ' + r.point }).join('\n') }
             : { join: false, entries: '' };
@@ -315,6 +322,7 @@ window.__ModuleLoader__.load({
               (form.title.trim() ? '新名称(显示名,写入 translate;留空即不改名): ' + form.title.trim() : ''),
               '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成代码,不要写文件)' : '自动写入'),
               '目标扩展文件夹: ' + form.folder.trim() + '(已有扩展,老式/新式写法跟随现有代码)',
+              (gameDir ? '游戏目录(所有读写的根;bash 里写作 ' + gameDirPosix + '): ' + gameDir : ''),
               (form.notes && form.notes.length ? '该包有历史注意点 ' + form.notes.length + ' 条(过往任务实测结论):与本任务相关时才用 noname_read_extension 传 notes:true 拉取,无关条目忽略,与需求冲突时以需求为准。' : ''),
               (form.editNotes.trim() ? '── ' + (type === 'card' ? '卡牌' : '武将') + '改动(条目本身:体力/护甲/名称等) ──\n' + form.editNotes.trim() : ''),
               (pickedSkillRows.length ? '── 修改技能(用户逐技能写明的改动要求) ──\n' + pickedSkillRows.map(function (p, i) { return (i + 1) + '. ' + p.name + '(内部ID ' + p.id + '):' + p.note.trim() }).join('\n') : ''),
@@ -338,6 +346,7 @@ window.__ModuleLoader__.load({
               (form.title.trim() ? '名称(显示名,写入 translate): ' + form.title.trim() : ''),
               '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成代码,不要写文件)' : '自动写入'),
               '目标扩展文件夹: ' + form.folder.trim() + '(已有扩展,老式/新式写法跟随现有代码)',
+              (gameDir ? '游戏目录(所有读写的根;bash 里写作 ' + gameDirPosix + '): ' + gameDir : ''),
               (form.charInfo.trim() ? '── 武将/卡牌基本信息(势力/体力/性别等)──\n' + form.charInfo.trim() : ''),
               (form.notes && form.notes.length ? '该包有历史注意点 ' + form.notes.length + ' 条(过往任务实测结论):与本任务相关时才用 noname_read_extension 传 notes:true 拉取,无关条目忽略,与需求冲突时以需求为准。' : ''),
               '── 技能/卡牌清单(按顺序实现) ──',
@@ -367,6 +376,7 @@ window.__ModuleLoader__.load({
               '写法: ' + (form.style === 'module' ? '新版 ES Module' : '老版 game.import'),
               '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成代码,不要写文件)' : '自动写入'),
               '目标扩展文件夹: ' + form.folder.trim(),
+              (gameDir ? '游戏目录(所有读写的根;bash 里写作 ' + gameDirPosix + '): ' + gameDir : ''),
               form.charInfo.trim() ? '── 基本信息 ──\n' + form.charInfo.trim() : '',
               '── 技能/卡牌清单(按顺序实现) ──',
               skillLines,
