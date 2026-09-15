@@ -51,6 +51,13 @@ dsh plugin --profile web add https://github.com/qtaik/dsh-noname-kit.git
 游戏里发现问题就在任务列表点「🔁 反馈」,把现象或报错发给 AI;每轮反馈自动
 累计轮次,逐技能确认无误、图片也就位后,任务自动归档。
 
+已有的扩展包不用从零开始:任务模式选「📂 编辑已有扩展包」,选包后照常走确认
+协议。「🔨 建立区块索引」可以给老文件插入锚点注释(只加注释行、先自动备份),
+AI 就能按区块读写大文件,不必整文件翻。编辑已有武将/卡牌时,选中目标会列出
+它关联的技能——勾选要改的并当场写清改成什么,每个勾选技能就是一个独立任务
+节点;改动描述留给体力/护甲/名称这类条目本身的变化。立绘本来就有、本次不
+涉及图片的编辑任务,技能全确认后直接自动归档,不会被「缺图片」卡住。
+
 ### 六个 AI 工具
 
 | 工具 | 作用 |
@@ -96,14 +103,17 @@ GitHub tag 取,查不通只显示一行「检查失败」,不影响使用;「启
 - 运行期错误(逻辑对不对)插件管不了,仍要进游戏验证后走「问题反馈」。
 - 引擎默认不去扩展的 image/ 子目录找立绘,武将/卡牌定义里要显式写 img 字段,
   工坊的任务流程和规范文本里都有说明。
+- 新式 ES Module 多文件扩展包(条目分散在子目录模块里,如懒人包预装的英雄杀)
+  暂不支持读写——工具只针对单文件的 extension.js;对这类包建立区块索引会得到
+  明确报错,不会误写。
 
 ## 测试
 
 ```sh
-node scripts/test-tasks.mjs    # 任务状态机,27 项
-node scripts/test-blocks.mjs   # 区块读写,46 项
-node scripts/test-update.mjs   # 版本比较与更新检查,96 项
-node scripts/test-preset.mjs   # preset 自检与安装,39 项
+node scripts/test-tasks.mjs    # 任务状态机,46 项
+node scripts/test-blocks.mjs   # 区块读写,78 项
+node scripts/test-update.mjs   # 版本比较与更新检查,104 项
+node scripts/test-preset.mjs   # preset 自检与安装,59 项
 ```
 
 ## 反馈
