@@ -425,7 +425,7 @@ window.__ModuleLoader__.load({
                [h('option', { key: '', value: '' }, '— 选择扩展包 —')].concat(form.extList.map(function (f) {
                  return h('option', { key: f, value: f }, f)
                }))),
-             form.folder ? h('button', { className: 'nnk-smallbtn', disabled: form.busy, onClick: migrateFolder, title: '给老文件插入锚点注释行,启用区块化读写(防抄错+省 token);一个代码字符都不会改,且会先自动备份' }, '🔨 建立区块索引') : null,
+             form.folder ? h('button', { className: 'nnk-smallbtn', disabled: form.busy, onClick: migrateFolder, title: '给老文件插入锚点注释行,启用区块化读写(防抄错+省 token);一个代码字符都不会改,且会先自动备份。ES Module 多文件包(条目在子目录模块)不支持,会明确报错' }, '🔨 建立区块索引') : null,
              form.currentInfo ? e('div', 'nnk-hint', form.currentInfo) : null,
              form.folder && form.usedIds && form.usedIds.length
                ? e('div', 'nnk-hint', '已用任务ID: ' + form.usedIds.map(function (u) { return u.id + '(' + u.state + ')' }).join('、') + ' —— 新任务请避开这些')
