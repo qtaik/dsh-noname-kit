@@ -458,8 +458,8 @@ window.__ModuleLoader__.load({
           form.entryId && !form.entrySkillsLoading && !form.entrySkills.length
             ? e('div', 'nnk-hint', '未从该条目解析出技能清单(技能改动可直接写进下面的改动描述,由 AI 在确认阶段澄清)')
             : null,
-          e('label', 'nnk-label', (form.type === 'card' ? '卡牌' : '武将') + '改动描述(条目本身的变化:体力/护甲/名称等;可选)'),
-          h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.editNotes, placeholder: '例: 初始体力信息改为 3/4/1(3 点体力、4 点上限、1 点护甲);显示名保持不变', onChange: function (ev) { set('editNotes')(ev.target.value) } }),
+          e('label', 'nnk-label', (form.type === 'card' ? '卡牌' : '武将') + '改动描述(条目本身的变化:' + (form.type === 'card' ? '类别/花色点数/名称等' : '体力/护甲/名称等') + ';可选)'),
+          h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.editNotes, placeholder: form.type === 'card' ? '例: 类别改为锦囊牌,花色点数改为黑桃 5;卡面描述同步修改' : '例: 初始体力信息改为 3/4/1(3 点体力、4 点上限、1 点护甲);显示名保持不变', onChange: function (ev) { set('editNotes')(ev.target.value) } }),
           form.type === 'character' ? radioGroup('是否新增技能', form.addSkills ? 'yes' : 'no', [{ value: 'no', text: '不新增' }, { value: 'yes', text: '新增技能(填下面的技能列表)' }], function (v) { patch({ addSkills: v === 'yes' }) }) : null,
           form.addSkills && form.type === 'character' ? skillRows() : null
         ] : null,
