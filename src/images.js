@@ -4,10 +4,9 @@
  * 安全校验:源必须存在且为图片扩展名;目标名只允许安全字符;目录不得逃逸。
  */
 import { copyFile, mkdir, stat } from 'node:fs/promises'
-import { join, basename, extname } from 'node:path'
+import { join, basename } from 'node:path'
 import { safeFolderPath } from './write.js'
 
-const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp']
 const TARGET_NAME_RE = /^[\w\u4e00-\u9fff-]+\.(jpg|jpeg|png|gif|webp)$/i
 
 /**
@@ -33,8 +32,8 @@ export async function copyImages(nonameDir, { folder, images }) {
     try {
       const source = String(item.source || '')
       const target = String(item.target || basename(source))
-      if (!IMAGE_EXTS.includes(extname(target).toLowerCase())) {
-        throw new Error(`目标名「${target}」不是支持的图片格式(jpg/png/gif/webp)`)
+      if (!TARGET_NAME_RE.test(target)) {
+        throw new Error(`目标名「${target}」不合法:只允许中文/字母/数字/下划线/连字符 + 图片扩展名(jpg/png/gif/webp),请先重命名`)
       }
       if (target !== basename(target) || /[/\\]/.test(target)) throw new Error('目标名只能是一个文件名')
       await stat(source)

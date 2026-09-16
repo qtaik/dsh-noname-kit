@@ -89,9 +89,12 @@ function compileCheck(code, style) {
   }
   const stripped = code
     .replace(/^import\s*\{[^}]*\}\s*from\s*(['"])[^'"]*\1\s*;?[ \t]*$/gm, (m) => '\n'.repeat(m.split('\n').length - 1))
+    .replace(/^import\s+\*\s+as\s+\w+\s+from\s*(['"])[^'"]*\1\s*;?[ \t]*$/gm, (m) => '\n'.repeat(m.split('\n').length - 1))
     .replace(/^import\s+\w+\s+from\s*(['"])[^'"]*\1\s*;?[ \t]*$/gm, (m) => '\n'.repeat(m.split('\n').length - 1))
+    .replace(/^import\s*(['"])[^'"]*\1\s*;?[ \t]*$/gm, (m) => '\n'.repeat(m.split('\n').length - 1))
     .replace(/^export\s+default\s+/gm, 'var __nonameDefault = ')
-    .replace(/^export\s+(?=(const|let|var|function|class)\b)/gm, '')
+    .replace(/^export\s*\{[^}]*\}\s*;?[ \t]*$/gm, (m) => '\n'.repeat(m.split('\n').length - 1))
+    .replace(/^export\s+(?=(async\s+)?(const|let|var|function|class)\b)/gm, '')
   try { new Function(stripped); return { ok: true } } catch (error) {
     return { ok: false, message: `语法错误: ${error.message}` }
   }

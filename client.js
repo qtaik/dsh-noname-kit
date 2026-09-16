@@ -123,7 +123,8 @@ window.__ModuleLoader__.load({
       };
 
       var switchMode = function (mode) {
-        patch({ mode: mode, err: '', currentInfo: '', usedIds: [], notes: [] });
+        patch({ mode: mode, err: '', currentInfo: '', usedIds: [], notes: [],
+          goal: 'create', entryId: '', entryList: [], entrySkills: [], pickedSkills: [], editNotes: '', addSkills: false });
         if (mode === 'edit' && form.extList.length === 0 && !form.extLoading) {
           patch({ extLoading: true });
           fetch('/noname-kit-api/history').then(function (r) { return r.json() }).then(function (body) {
@@ -132,11 +133,15 @@ window.__ModuleLoader__.load({
         }
       };
 
-      // 「编辑已有武将/卡牌」:列出目标包内条目(锚点/无锚老包通吃)
+      // 「编辑已有武将/卡牌」:列出目标包内条目(锚点/无锚老包通吃)。
+      // seq 守卫防竞态:快速连点时先发后至的旧响应不得覆盖新状态
+      var entrySeq = 0, entrySkillSeq = 0;
       var loadEntries = function (folder, kind) {
+        var seq = ++entrySeq;
         if (!folder) { patch({ entryList: [], entryId: '', entryLoading: false, entrySkills: [], pickedSkills: [] }); return }
         patch({ entryLoading: true });
         fetch('/noname-kit-api/entries?folder=' + encodeURIComponent(folder) + '&kind=' + kind).then(function (r) { return r.json() }).then(function (b) {
+          if (seq !== entrySeq) return;
           setForm(function (prev) { return Object.assign({}, prev, {
             entryLoading: false,
             entryList: b.ok ? (b.entries || []) : [],
@@ -145,16 +150,20 @@ window.__ModuleLoader__.load({
             currentInfo: b.ok ? '' : '❌ ' + (b.error || '条目列表加载失败')
           }) });
         }, function () {
+          if (seq !== entrySeq) return;
           setForm(function (prev) { return Object.assign({}, prev, { entryLoading: false, entryList: [], entryId: '', entrySkills: [], pickedSkills: [], currentInfo: '❌ 条目列表加载失败' }) });
         });
       };
 
       // 选中条目后:拉取该武将 skills 数组里的技能(勾选候选)
       var loadEntrySkills = function (folder, entryId) {
+        var seq = ++entrySkillSeq;
         patch({ entrySkillsLoading: true });
         fetch('/noname-kit-api/entry-skills?folder=' + encodeURIComponent(folder) + '&id=' + encodeURIComponent(entryId)).then(function (r) { return r.json() }).then(function (b) {
+          if (seq !== entrySkillSeq) return;
           setForm(function (prev) { return Object.assign({}, prev, { entrySkillsLoading: false, entrySkills: b.ok ? (b.skills || []) : [], pickedSkills: [] }) });
         }, function () {
+          if (seq !== entrySkillSeq) return;
           setForm(function (prev) { return Object.assign({}, prev, { entrySkillsLoading: false, entrySkills: [], pickedSkills: [] }) });
         });
       };
@@ -179,12 +188,12 @@ window.__ModuleLoader__.load({
       };
 
       var switchType = function (t) {
-        setForm(function (prev) { return Object.assign({}, prev, { type: t, entryId: '', entrySkills: [], pickedSkills: [] }) });
+        setForm(function (prev) { return Object.assign({}, prev, { type: t, entryId: '', entrySkills: [], pickedSkills: [], editNotes: '', addSkills: false }) });
         if (form.mode === 'edit' && form.goal === 'edit') loadEntries(form.folder, t);
       };
 
       var pickExisting = function (folder) {
-        patch({ folder: folder, currentInfo: '', usedIds: [], entryId: '', entryList: [], entrySkills: [], pickedSkills: [] });
+        patch({ folder: folder, currentInfo: '', usedIds: [], entryId: '', entryList: [], entrySkills: [], pickedSkills: [], editNotes: '', addSkills: false });
         if (!folder) return;
         if (form.goal === 'edit') loadEntries(folder, form.type);
         fetch('/noname-kit-api/extension?folder=' + encodeURIComponent(folder)).then(function (r) { return r.json() }).then(function (body) {
@@ -338,7 +347,7 @@ window.__ModuleLoader__.load({
               '第 0 步【需求理解确认·硬门禁】:先 noname_read_extension 按块只读目标条目原文(' + (entryFile !== 'extension.js' ? 'file:\'' + entryFile + '\', ' : '') + 'block:\'' + type + ':' + form.entryId + '\')' + (pickedSkillRows.length ? '与各勾选技能原文(block:\'skill:<技能ID>\'' + (entryFile !== 'extension.js' ? ';技能可能在其他文件,用 listBlocks 定位后带对应 file' : '') + ')' : '') + '(定位不准时先传 listBlocks 看区块目录,多文件包的目录每项带 file 归属),把原文与需求对照,逐项输出【需求理解确认】(' + (form.editNotes.trim() ? '条目项:改什么 / 改动前→改动后 / 影响面' : '') + (form.editNotes.trim() && pickedSkillRows.length ? ';' : '') + (pickedSkillRows.length ? '修改技能项:改动前→改动后' : '') + ((pickedSkillRows.length || form.editNotes.trim()) && newSkillRows.length ? ';' : '') + (newSkillRows.length ? '新增技能按新技能模板逐条:触发/频率/目标/数值/边界' : '') + ')。输出后停下等待用户明确回复确认。',
               '有任何歧义必须先用 ask_user_question 提问;禁止猜测。ask_user_question 的回答只消除歧义、不算确认——澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」后才能动笔。',
               '未获用户确认前,禁止生成代码、禁止调用 noname_write_extension。',
-              '用户确认后动手:已有内容的改动只落在目标条目' + (pickedSkillRows.length ? '与其勾选技能' : '') + '对应区块(noname_write_extension 带 file:\'' + entryFile + '\',用 blocks 组装或 edits 精确补丁,严禁全文重写)' + (newSkillRows.length ? ';新增技能作为新区块插入(锚点包裹,内部 ID 用下方前缀规则)' : '') + ',除上述区块与新增区块外严禁改动任何其他区块。noname_validate 通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + '。',
+              '用户确认后动手:已有内容的改动只落在目标条目' + (pickedSkillRows.length ? '与其勾选技能' : '') + '对应区块(noname_write_extension' + (entryFile !== 'extension.js' ? ' 带 file:\'' + entryFile + '\'' : '') + ',用 blocks 组装或 edits 精确补丁,严禁全文重写)' + (newSkillRows.length ? ';新增技能作为新区块插入(锚点包裹,内部 ID 用下方前缀规则)' : '') + ',除上述区块与新增区块外严禁改动任何其他区块。noname_validate 通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + '。',
               (newSkillRows.length && form.idPrefix.trim() ? '内部 ID 命名规则:新增技能的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,中文显示名写入 translate。' : ''),
             ].filter(Boolean).join('\n');
           } else if (isEdit) {
@@ -549,6 +558,8 @@ window.__ModuleLoader__.load({
       var openDetail = function (folder) {
         fetch('/noname-kit-api/history?folder=' + encodeURIComponent(folder)).then(function (r) { return r.json() }).then(function (body) {
           setData(function (prev) { return Object.assign({}, prev, { detail: body }) })
+        }, function () {
+          setData(function (prev) { return Object.assign({}, prev, { msg: '读取备份详情失败(历史服务不可用)' }) });
         });
       };
       var rollback = function (folder, backup) {
@@ -559,6 +570,8 @@ window.__ModuleLoader__.load({
         }).then(function (r) { return r.json() }).then(function (body) {
           setData(function (prev) { return Object.assign({}, prev, { msg: body.ok ? '已回滚 ' + backup : ('回滚失败: ' + body.error) }) });
           openDetail(folder);
+        }, function () {
+          setData(function (prev) { return Object.assign({}, prev, { msg: '回滚请求失败(历史服务不可用),未执行回滚' }) });
         });
       };
       var deleteNote = function (folder, index) {
@@ -1131,14 +1144,17 @@ window.__ModuleLoader__.load({
       // 拖动:标题栏 mousedown → document mousemove/mouseup
       var startDrag = function (ev) {
         var startX = ev.clientX - pos.x, startY = ev.clientY - pos.y;
+        var latest = null;
         var move = function (e2) {
           var next = { x: Math.max(0, e2.clientX - startX), y: Math.max(0, e2.clientY - startY) };
+          latest = next;
           setPos(next);
         };
         var up = function () {
           document.removeEventListener('mousemove', move);
           document.removeEventListener('mouseup', up);
-          try { localStorage.setItem('dsh-noname-kit.panelPos', JSON.stringify(pos)) } catch (e) {}
+          // 闭包里的 pos 是拖动前的快照,必须存 move 里更新过的 latest
+          try { localStorage.setItem('dsh-noname-kit.panelPos', JSON.stringify(latest || pos)) } catch (e) {}
         };
         document.addEventListener('mousemove', move);
         document.addEventListener('mouseup', up);
@@ -1257,11 +1273,12 @@ window.__ModuleLoader__.load({
       React.useEffect(function () { return workshopBus.sub(function (v) { setIsOpen(v) }) }, []);
       var startDrag = function (ev) {
         var startX = ev.clientX - pos.x, startY = ev.clientY - pos.y;
-        var move = function (e2) { setPos({ x: Math.max(0, e2.clientX - startX), y: Math.max(0, e2.clientY - startY) }) };
+        var latest = null;
+        var move = function (e2) { var next = { x: Math.max(0, e2.clientX - startX), y: Math.max(0, e2.clientY - startY) }; latest = next; setPos(next) };
         var up = function () {
           document.removeEventListener('mousemove', move);
           document.removeEventListener('mouseup', up);
-          try { localStorage.setItem('dsh-noname-kit.workshopPanelPos', JSON.stringify(pos)) } catch (e) {}
+          try { localStorage.setItem('dsh-noname-kit.workshopPanelPos', JSON.stringify(latest || pos)) } catch (e) {}
         };
         document.addEventListener('mousemove', move);
         document.addEventListener('mouseup', up);

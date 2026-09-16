@@ -3,7 +3,7 @@
  * 任务 = 一个武将(多技能分叉)或一张卡牌(单节点):
  *   task = { id, folder, type: 'character'|'card', title, charInfo, image, idPrefix,
  *            target: { kind: 'character'|'card', id } | null,
- *            pile: { join: boolean, entries: [{suit, point}] },
+ *            pile: { join: boolean, entries: string(每行「花色 点数」) },
  *            skills: [{name, desc, status: open|written|confirmed, rounds, feedbacks[] }],
  *            status: open|done, style, writeMode, createdAt, updatedAt }
  * target 非空 = 「编辑已有条目」任务:只改该条目对应区块,其他内容不动。

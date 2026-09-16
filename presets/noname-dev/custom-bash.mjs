@@ -102,6 +102,11 @@ function detectGitBash() {
  * `grep "see / this"` 这类误伤。误拦的代价可控:模型看到拒绝理由后写明确路径即可恢复。
  */
 export function rootSearchIssue(command) {
+  // 引号内整体恰好是根形态的,摘引号前先单独拦(find "/" / grep -r x '~' ——
+  // 引号摘除防误伤的副作用是这类命令会漏,它们正是要拦的盘根检索)
+  if (/(["'])\s*(\/|\/[a-z]\/?|[a-z]:[\\\/]?|~)\s*\1/i.test(String(command || ''))) {
+    return '检索起点是文件系统根(写在引号里也一样),会扫到大量无关内容。游戏与扩展的路径已在系统提示的「当前环境」小节里给出:核对引擎源码直接在给出的目录下窄窗口 grep,检索官方实现用 noname_search_reference——不需要寻找路径,也不许再列盘根。'
+  }
   // 先摘掉引号字符串:里面的 "/" 是文案不是检索起点
   const text = String(command || '')
     .replace(/"(?:[^"\\]|\\.)*"/g, '""')

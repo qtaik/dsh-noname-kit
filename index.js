@@ -21,7 +21,7 @@ import { KNOWLEDGE_TEXT } from './src/knowledge.js'
 import { validateExtensionCode } from './src/validate.js'
 import { searchReference } from './src/reference.js'
 import { detectCandidates } from './src/detect.js'
-import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateAnchors, migrateExtension, listEntries, listEntrySkills } from './src/write.js'
+import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateExtension, listEntries, listEntrySkills } from './src/write.js'
 import { readHistory, archiveTask, listExtensionHistories, recordBackup, deleteNote } from './src/history.js'
 import { copyImages } from './src/images.js'
 import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, completeById, deleteTask, reopenTask, getTask } from './src/tasks.js'
@@ -345,7 +345,7 @@ export function apply(ctx, config) {
         style: { type: 'string'},
         path: { type: 'string'},
         backup: { type: 'string'},
-        errors: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { message: { type: 'string', required: true } } } },
+        errors: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { message: { type: 'string', required: true }, line: { type: 'integer' } } } },
         warnings: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { message: { type: 'string', required: true } } } },
         code: { type: 'string'},
         infoWritten: { type: 'boolean' },

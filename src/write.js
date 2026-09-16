@@ -91,7 +91,8 @@ export async function writeExtension(nonameDir, { folder, file, code, blocks, ed
   const blockMode = Array.isArray(blocks) || Array.isArray(edits) || Array.isArray(deletes)
   const { root, full } = safeFolderPath(nonameDir, folder)
   await mkdir(full, { recursive: true })
-  const target = safeEntryFilePath(nonameDir, folder, file).full
+  const entryPath = safeEntryFilePath(nonameDir, folder, file)
+  const target = entryPath.full
 
   // 旧文件:两种模式都先读(区块模式组装、全文模式保真/防丢都依赖它)
   let oldCode = null
@@ -122,10 +123,12 @@ export async function writeExtension(nonameDir, { folder, file, code, blocks, ed
   }
 
   // 模块文件(多文件包的子目录 .js,如 character/character.js)不是完整扩展,
-  // 没有 name/translate,扩展语义规则对它不适用——只做纯语法检查。
-  const isModuleFile = file != null && file !== ''
+  // 没有 name/translate,扩展语义规则对它不适用——只做纯语法检查(且强制按
+  // module 剥离 import/export,子目录模块按定义就是 ESM,不信任调用方 style)。
+  // 判定用归一化后的 rel:AI 显式传 'extension.js' 时仍是入口文件,门禁不降级。
+  const isModuleFile = entryPath.rel !== 'extension.js'
   const verdict = isModuleFile
-    ? syntaxCheck(finalCode, style || 'module')
+    ? syntaxCheck(finalCode, 'module')
     : validateExtensionCode({ code: finalCode, style, kind, folder, idPrefix })
   if (!verdict.ok) {
     if (isModuleFile) return { ok: false, wrote: false, errors: [{ message: verdict.message || '语法错误' }], warnings: [] }
@@ -243,7 +246,12 @@ export async function readExtension(nonameDir, folder, opts = {}) {
     result.code = code
   }
   if (names.includes('info.json')) {
-    try { result.info = JSON.parse(await readFile(join(full, 'info.json'), 'utf8')) } catch { result.info = {} }
+    try {
+      const parsedInfo = JSON.parse(await readFile(join(full, 'info.json'), 'utf8'))
+      // 顶层必须是对象(写入通道不拦数组/字符串等非常规 JSON,但返回给工具前要
+      // 过 schema——info 声明为 object,非对象会让整个读取结果被拒收)
+      result.info = parsedInfo && typeof parsedInfo === 'object' && !Array.isArray(parsedInfo) ? parsedInfo : {}
+    } catch { result.info = {} }
   }
   return result
 }
@@ -297,8 +305,9 @@ export async function migrateExtension(nonameDir, folder) {
   }
   return {
     ok: true,
-    files: done.map((r) => ({ file: r.file, inserted: r.inserted, commas: r.commas, blocks: r.blocks, entries: r.entries })),
+    files: done.map((r) => ({ file: r.file, inserted: r.inserted, commas: r.commas, blocks: r.blocks, entries: r.entries, backup: r.backup })),
     filesSkipped: files.length - results.filter((r) => r.ok || r.error).length,
+    failed: results.filter((r) => r.error).map((r) => ({ file: r.file, error: r.error })),
     totalFiles: done.length,
     totalInserted: done.reduce((n, r) => n + r.inserted, 0),
     totalCommas: done.reduce((n, r) => n + r.commas, 0),
