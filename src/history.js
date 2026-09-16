@@ -102,7 +102,9 @@ export async function pruneBackupRecords(nonameDir, folder, removedFiles) {
     history.backups = history.backups.filter((b) => {
       const f = norm(b && b.file)
       if (!f) return true
-      return !removed.has(f) && !removedBase.has(f.split('/').pop())
+      const base = f.split('/').pop()
+      // basename 匹配只用于无路径的登记(如「回滚自 x」文案),防跨目录同名误删
+      return !removed.has(f) && !(removedBase.has(base) && !f.includes('/'))
     })
   })
 }

@@ -130,7 +130,7 @@ async function collectBackupDirs(folderFull) {
     for (const e of entries) {
       if (!e.isDirectory() || e.name.startsWith('.')) continue
       const child = join(dir, e.name)
-      if (e.name === 'backup') { dirs.push(child); continue } // no nested backup dirs
+      if (e.name === 'backup') { dirs.push(child); continue } // backup 内不再嵌套,不递归
       if (SKIP_DIRS.has(e.name)) continue
       await walk(child)
     }
@@ -139,10 +139,11 @@ async function collectBackupDirs(folderFull) {
   return dirs
 }
 
-/** prune every backup/ dir of the package (workshop history panel button):
- *  keep the newest 3 in each dir, and sync history.backups records. */
+/** 主动清理整个扩展包的全部 backup/(工坊历史面板按钮):
+ *  每目录保留最新 3 个,并同步清除 history 里指向被删文件的登记。 */
 export async function prunePackageBackups(nonameDir, folder) {
   const { full } = safeFolderPath(nonameDir, folder)
+  try { await readdir(full) } catch { return { ok: false, error: '扩展包不存在。' } }
   const dirs = await collectBackupDirs(full)
   const allRemoved = []
   let touchedDirs = 0
