@@ -1,12 +1,13 @@
 /**
- * noname-kit 任务登记处 v2:层级任务树。
- * 任务 = 一个武将(多技能分叉)或一张卡牌(单节点):
- *   task = { id, folder, type: 'character'|'card', title, charInfo, image, idPrefix,
+ * noname-kit 任务登记处:任务 = 一个武将(多技能)或一张卡牌(单技能)。
+ *   task = { id, folder, type: 'character'|'card', title, charInfo, image,
  *            target: { kind: 'character'|'card', id } | null,
  *            pile: { join: boolean, entries: string(每行「花色 点数」) },
  *            skills: [{name, desc, status: open|written|confirmed, rounds, feedbacks[] }],
- *            status: open|done, style, writeMode, createdAt, updatedAt }
- * target 非空 = 「编辑已有条目」任务:只改该条目对应区块,其他内容不动。
+ *            status: open|done, writeMode: auto|manual,
+ *            rounds, feedbacks[], notes[], summary?, createdAt, updatedAt }
+ * target 非空 = 「编辑已有条目」任务:只改该条目对应区块,其他内容不动;
+ * 这类任务豁免图片条件(立绘通常已有)。
  * 每个技能独立状态机:待实现(open)→ 待测试(written)→ 确认无误(confirmed);
  * 反馈把技能打回 open 并记录日志。全部技能 confirmed 且图片就位 → 任务自动 done。
  * 删除任务 = 从登记处移除整树;不动扩展代码/备份/history 归档。
@@ -44,10 +45,6 @@ async function writeRegistry(dshHome, registry) {
   await writeFile(tasksPath(dshHome), JSON.stringify(registry, null, 2), 'utf8')
 }
 
-/**
- * 创建任务。ID 全局唯一;folder 只做名字合法性检查(目录在首次写入时才创建)。
- * @returns {{ok:boolean, task?:object, error?:string}}
- */
 const SKILL_STATUS = new Set(['open', 'written', 'confirmed'])
 
 function newSkill(item) {
@@ -81,7 +78,7 @@ function descriptionOf(skills) {
  * target 可选 { kind: 'character'|'card', id }:「编辑已有条目」任务,非法值归 null。
  * writeMode:'manual' 存手动,其余归 'auto'——写入工具以此为准(AI 传参不覆盖)。
  */
-export async function createTask(dshHome, { id, folder, type, title, charInfo, pile, idPrefix, skills, image, target, writeMode }) {
+export async function createTask(dshHome, { id, folder, type, title, charInfo, pile, skills, image, target, writeMode }) {
   if (typeof id !== 'string' || !ID_RE.test(id.trim())) {
     return { ok: false, error: `任务ID「${id}」不合法:只允许中文/字母/数字/下划线/连字符,长度 1-64。` }
   }
@@ -109,10 +106,8 @@ export async function createTask(dshHome, { id, folder, type, title, charInfo, p
     title: String(title || '').slice(0, 60),
     charInfo: String(charInfo || '').slice(0, 500),
     pile: pile && pile.join ? { join: true, entries: String(pile.entries || '').slice(0, 2000) } : { join: false, entries: '' },
-    idPrefix: String(idPrefix || '').slice(0, 20),
     image: String(image || '').trim().slice(0, 500),
     skills: skillList,
-    style: '',
     writeMode: writeMode === 'manual' ? 'manual' : 'auto',
     status: 'open',
     rounds: 0,

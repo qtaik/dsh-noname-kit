@@ -76,8 +76,8 @@ try {
 
   eq(update.repoFromSpec('github:qtaik/dsh-noname-kit'), 'qtaik/dsh-noname-kit', '从 github: spec 抠仓库')
   eq(update.repoFromSpec('https://github.com/qtaik/dsh-noname-kit.git'), 'qtaik/dsh-noname-kit', '从 https spec 抠仓库')
-  eq(update.repoFromRepositoryField({ url: 'git+https://github.com/qtaik/dsh-noname-kit.git' }), 'qtaik/dsh-noname-kit', '从 repository 字段抠仓库')
-  eq(update.repoFromRepositoryField(''), null, '空 repository 返回 null')
+
+
 
   // ── 4) 安装形态探测(造假的 DSH 家目录)──
   const dshHome = join(home, '.dsh')

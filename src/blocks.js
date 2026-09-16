@@ -247,8 +247,6 @@ export function scanAnchored(code) {
   return out
 }
 
-export function hasAnchors(code) { return scanAnchored(code).length > 0 }
-
 /** 区块目录:锚点优先;无锚时虚拟划分(skill/card/character 区段属性 + translate 条目分组)。 */
 export function scanBlocks(code) {
   const anchored = scanAnchored(code)

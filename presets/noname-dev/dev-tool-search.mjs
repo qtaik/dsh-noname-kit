@@ -65,7 +65,7 @@ export function apply(ctx) {
     description: [
       'Discover and unlock tools that are NOT currently available.',
       '',
-      'This session starts with a minimal resident set: bash, str_replace_editor, skill_search, skill_load. Everything else is unlocked on demand through this tool.',
+      'This session starts with a resident set: bash/pwsh, str_replace_editor, skill_search, skill_load, dev_tool_search, plus the resident noname dev toolchain (noname_* tools). Everything else is unlocked on demand through this tool.',
       '',
       'If the current task needs any of the following, call dev_tool_search FIRST — do not try to work around them with bash:',
       ...UNLOCKABLE_INDEX.map((line) => `- ${line}`),

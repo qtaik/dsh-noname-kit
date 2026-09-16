@@ -210,8 +210,8 @@ export function apply(ctx, config) {
     description: 'Validate a noname extension file. Run before any write.',
     parameters: {
       code: { type: 'string', required: true, description: 'Full extension.js content.' },
-      style: { type: 'string', enum: ['classic', 'module'], description: 'Authoring style, default classic.' },
-      kind: { type: 'string', enum: ['character', 'card'], description: 'Task type, default character.' },
+      style: { type: 'string', enum: ['classic', 'module'], description: 'Authoring style hint — the tool detects the actual style and only warns on mismatch. Sub-directory module files of multi-file packs are always checked as ESM.' },
+      kind: { type: 'string', enum: ['character', 'card'], description: 'Structure hints to apply (character/card). Omit to skip.' },
       folder: { type: 'string', description: 'Target folder, for name-consistency check.' },
       idPrefix: { type: 'string', description: 'ID prefix (e.g. cs_) for the prefix-convention check.' },
     },
@@ -321,8 +321,8 @@ export function apply(ctx, config) {
       folder: { type: 'string', required: true, description: 'Extension folder name.' },
       file: { type: 'string', description: 'Relative .js path inside the extension package for multi-file packs (e.g. character/character.js). Defaults to extension.js. Block-mode requires that file to be anchored (workshop migrate button first).' },
       code: { type: 'string', description: 'Full extension.js content. Required in full-text mode; omit in block mode.' },
-      style: { type: 'string', enum: ['classic', 'module'], description: 'Authoring style, default classic.' },
-      kind: { type: 'string', enum: ['character', 'card'], description: 'Task type, default character.' },
+      style: { type: 'string', enum: ['classic', 'module'], description: 'Authoring style hint — the tool detects the actual style and only warns on mismatch. Sub-directory module files of multi-file packs are always checked as ESM.' },
+      kind: { type: 'string', enum: ['character', 'card'], description: 'Structure hints to apply (character/card). Omit to skip.' },
       infoJson: { type: 'string', description: 'info.json content (JSON string).' },
       idPrefix: { type: 'string', description: 'ID prefix (e.g. cs_) for the prefix-convention check.' },
       writeMode: { type: 'string', enum: ['auto', 'manual'], description: 'auto=write; manual=return code only. Ignored when taskId is given — the workshop-registered mode (user form choice) wins.' },
@@ -396,7 +396,7 @@ export function apply(ctx, config) {
           type: 'object', additionalProperties: false,
           properties: {
             source: { type: 'string', required: true, description: 'Absolute local source path.' },
-            target: { type: 'string', required: true, description: 'File name inside image/, e.g. image/ts_muou.jpg or ts_muou.jpg.' },
+            target: { type: 'string', required: true, description: 'Plain file name only, e.g. ts_muou.jpg (no subpaths, no directories).' },
           },
         },
       },
@@ -427,7 +427,7 @@ export function apply(ctx, config) {
         if (done.autoCompleted) {
           result.autoCompleted = true
           await archiveTask(nonameDir, {
-            folder: args.folder, taskId: args.taskId,
+            folder: args.folder, taskId: args.taskId, kind: done.task.type,
             summary: '全部技能确认无误(AI 复图后自动完成)', rounds: done.task.rounds,
             notes: done.task.notes,
           }).catch(() => ({ totalTasks: 0 }))
@@ -655,7 +655,7 @@ export function apply(ctx, config) {
           const done = await completeById(dshHomeDir, body)
           if (!done.ok) return json(400, done)
           const archived = await archiveTask(nonameDir, {
-            folder: done.task.folder, taskId: done.task.id, kind: done.task.kind,
+            folder: done.task.folder, taskId: done.task.id, kind: done.task.type,
             summary: body.summary || done.task.summary || '手动标记完成',
             notes: body.notes, rounds: Math.max(body.rounds || 1, done.task.rounds || 1),
           }).catch(() => ({ totalTasks: 0 }))

@@ -118,11 +118,12 @@ async function pruneHistoryBackups(nonameDir, folder, removedFiles) {
  *   (范围外区块必须与旧文件逐字节一致,否则拒写)。
  * - 区块模式(提交 blocks/edits/deletes 之一即触发):AI 只提交改动的区块,
  *   其余文本由工具从旧文件逐字节保留——未提交区域物理上不可能被改。
- * @returns 校验失败 → {ok:false, errors, warnings};成功 → {ok:true, path, backup}
+ * @returns 校验失败 → {ok:false, wrote:false, errors, warnings};成功 → {ok:true, wrote:true, path, backup, infoWritten};
+ *          manual 模式 → {ok:true, wrote:false, code};file 指向模块文件时语义门禁降级为纯语法检查
  */
 export async function writeExtension(nonameDir, { folder, file, code, blocks, edits, deletes, editScope, style, kind, infoJson, idPrefix, writeMode }) {
   const blockMode = Array.isArray(blocks) || Array.isArray(edits) || Array.isArray(deletes)
-  const { root, full } = safeFolderPath(nonameDir, folder)
+  const full = safeFolderPath(nonameDir, folder).full
   await mkdir(full, { recursive: true })
   const entryPath = safeEntryFilePath(nonameDir, folder, file)
   const target = entryPath.full
@@ -229,7 +230,7 @@ export async function writeExtension(nonameDir, { folder, file, code, blocks, ed
  * - opts.listBlocks=true:未指定 file 时**聚合全包**(每块带 file 归属、顶层 files
  *   清单);指定 file 时只返回该文件的目录
  * - opts.block='kind:id':file 给定 → 只在该文件找;未给定 → 先 extension.js,
- *   找不到再扫全包(命中唯一文件即返回,块带 file)
+ *   找不到再按序扫全包,首个命中即返回(块带 file)
  */
 export async function readExtension(nonameDir, folder, opts = {}) {
   const { full } = safeFolderPath(nonameDir, folder)
@@ -293,11 +294,10 @@ export async function readExtension(nonameDir, folder, opts = {}) {
 
 /**
  * 锚点化迁移(用户在工坊手动触发,AI 侧没有任何工具能调它):对无锚老文件插入
- * 锚点注释行,一个代码字符不动;写前自动备份,写后跑语法校验自证。
+ * 锚点注释行,一个代码字符不动;写前跑语法校验(不过不落盘),通过后自动备份再写。
  * file 缺省 = extension.js;多文件包对子目录模块文件逐个迁移。
  */
 export async function migrateAnchors(nonameDir, folder, file) {
-  const { full } = safeFolderPath(nonameDir, folder)
   const target = safeEntryFilePath(nonameDir, folder, file).full
   let oldCode
   try { oldCode = await readFile(target, 'utf8') } catch { return { ok: false, error: '该文件不存在。' } }
@@ -349,11 +349,6 @@ export async function migrateExtension(nonameDir, folder) {
     totalCommas: done.reduce((n, r) => n + r.commas, 0),
     totalBlocks: done.reduce((n, r) => n + r.blocks, 0),
   }
-}
-
-/** 某文件内可锚定条目数(CONTENT_KINDS 三种 + translate 独立分组)。 */
-function virtualBlocksCount(code, kind) {
-  return virtualBlocks(code, kind).length
 }
 
 /** 某文件内全部可锚定条目数(四种 kind 合计,translate 走独立分组)。 */

@@ -64,15 +64,6 @@ export function repoFromSpec(spec) {
   return null
 }
 
-/** 从 package.json 的 repository 字段抠出 'owner/repo'。 */
-export function repoFromRepositoryField(url) {
-  if (!url) return null
-  const text = typeof url === 'string' ? url : url.url
-  if (!text) return null
-  const matched = /github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?$/i.exec(String(text))
-  return matched ? matched[1] : null
-}
-
 /**
  * 扫描 DSH 各个 profile 的 package.json,找出本插件是怎么装的。
  * 多个 profile 都装了时,优先取非 link 的那个(link 意味着"开发中,不适用更新")。

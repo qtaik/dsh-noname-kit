@@ -93,7 +93,6 @@ window.__ModuleLoader__.load({
 
     // ── 任务表单:武将区 / 卡牌区 ──────────────────────────────────
     function NewTaskForm(props) {
-      var sessionId = props.sessionId;
       var send = props.send;
       var state = React.useState({
         mode: 'new', type: 'character', folder: '我的扩展', taskId: '', title: '', idPrefix: '',
@@ -155,7 +154,7 @@ window.__ModuleLoader__.load({
         });
       };
 
-      // 选中条目后:拉取该武将 skills 数组里的技能(勾选候选)
+      // 选中条目后:拉取该武将/卡牌 skills 数组里的技能(勾选候选)
       var loadEntrySkills = function (folder, entryId) {
         var seq = ++entrySkillSeq;
         patch({ entrySkillsLoading: true });
@@ -202,7 +201,7 @@ window.__ModuleLoader__.load({
           var style = body.code && body.code.indexOf('game.import(') >= 0 ? 'classic' : 'module';
           setForm(function (prev) { return Object.assign({}, prev, {
             currentInfo: '✅ ' + folder + ':约 ' + lines + ' 行,' + style + '写法',
-            style: body.code && body.code.indexOf('game.import(') >= 0 ? 'classic' : 'module',
+            style: style,
           }) });
         }, function () { setForm(function (prev) { return Object.assign({}, prev, { currentInfo: '读取失败' }) }) });
         // 已用任务ID + 历史注意点:登记处(进行中/已完成)+ 该包归档历史,合并去重
@@ -376,10 +375,6 @@ window.__ModuleLoader__.load({
               form.idPrefix.trim() ? '内部 ID 命名规则:新增技能/武将/卡牌的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,中文显示名写入 translate。' : '',
             ].filter(Boolean).join('\n');
           } else {
-            var pileText;
-            if (type === 'card' && pile.join && pile.entries) pileText = '加入牌堆,条目(每行「花色 点数」;花色只允许 spade/heart/club/diamond/none,none=无花色):\n' + pile.entries;
-            else if (type === 'card') pileText = '不加入牌堆(仅作技能素材牌)';
-            else pileText = '(武将无牌堆)';
             text = [
               '【无名杀工坊·新任务】',
               '任务ID: ' + taskId,
@@ -932,7 +927,6 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /** 导出:apply 注册页签 + 三张工具卡片。 */
     // ── 悬浮任务列表小窗(全局,shell.overlay + 侧栏按钮) ───────
     var panelBus = {
       open: false,
@@ -1007,7 +1001,7 @@ window.__ModuleLoader__.load({
                 '先 noname_read_extension 读取当前代码,定位问题并说明原因,修复后 noname_validate,校验通过后写入。修复后调用 noname_skills_written,原样带回任务ID ' + task.id + '。',
               ].filter(Boolean).join('\n');
               Promise.resolve(sessions.binding(sid).session.prompt([{ type: 'text', text: text }], 'queue')).catch(function (e) {
-                setData(function (prev) { return Object.assign({}, prev, { err: '反馈已记录,但发送失败: ' + (e && e.message || e) }) });
+                setD(function (prev) { return Object.assign({}, prev, { err: '反馈已记录,但发送失败: ' + (e && e.message || e) }) });
               });
             } else {
               sendErr = '已记录反馈,但当前没有打开的会话——请打开会话后重试,或把反馈粘贴到对话里';
@@ -1226,12 +1220,6 @@ window.__ModuleLoader__.load({
           .then(function (body) { return self.adopt(body) },
             function () { self.set({ loaded: true, failed: true }); return null });
       },
-      /** 是否需要提醒用户:有新版本,或 preset 没装/与插件版本不一致。 */
-      needsAttention: function () {
-        var s = this.state;
-        if (s.failed) return false;
-        return Boolean((s.update && s.update.hasUpdate) || (s.preset && s.preset.state !== 'ok' && s.preset.state !== 'unknown'));
-      },
       attentionText: function () {
         var s = this.state;
         if (s.preset && s.preset.state === 'missing') return '「无名杀开发模式」preset 未安装'
@@ -1335,7 +1323,6 @@ window.__ModuleLoader__.load({
       card('noname_skills_written', CompleteCard);
 
       // 悬浮任务列表:侧栏按钮开关 + shell 浮层渲染(传 sessions 供浮窗反馈发消息)
-      var sessionsForPanel = ctx.get('sessions');
       ctx.slots.inject('sidebar.footer.action', function () {
         return ctx.slots.register({ name: 'sidebar.footer.action', id: 'noname-kit-tasks', order: 5 }, function (props) {
           return React.createElement(SidebarTaskButton, props);
@@ -1343,7 +1330,7 @@ window.__ModuleLoader__.load({
       });
       ctx.slots.inject('shell.overlay', function () {
         return ctx.slots.register({ name: 'shell.overlay', id: 'noname-kit-tasks' }, function (props) {
-          return React.createElement(TaskPanelWindow, Object.assign({}, props, { sessions: sessionsForPanel }));
+          return React.createElement(TaskPanelWindow, Object.assign({}, props, { sessions: sessions }));
         });
       });
 
@@ -1356,7 +1343,7 @@ window.__ModuleLoader__.load({
       });
       ctx.slots.inject('shell.overlay', function () {
         return ctx.slots.register({ name: 'shell.overlay', id: 'noname-kit-workshop' }, function (props) {
-          return React.createElement(WorkshopPanelWindow, Object.assign({}, props, { sessions: sessionsForPanel }));
+          return React.createElement(WorkshopPanelWindow, Object.assign({}, props, { sessions: sessions }));
         });
       });
     };

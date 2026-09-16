@@ -61,7 +61,6 @@ export const name = 'zero-tool-bootstrap'
  * stays the OUTERMOST waterfall transform (see the anchored copy for the full
  * registration-order reasoning).
  */
-export const inject = []
 
 /** Same automatic injections the anchored variant strips by default. */
 const DEFAULT_SUPPRESSED_SOURCES = ['skill-catalog', 'agent-instructions']

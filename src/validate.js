@@ -71,12 +71,10 @@ function detectStyle(code) {
 }
 
 /**
- * 剥掉 ES Module 语法,保留行号(被剥的行换成等量换行),再用 new Function 编译。
- * 不执行任何代码:new Function 只编译函数体。
+ * 纯语法检查:剥掉 ES Module 语法(保留行号,被剥的行换成等量换行)后用 new
+ * Function 编译(不执行任何代码)。用于迁移自检与多文件包模块文件的写入门禁——
+ * 这两类场景只有语法在变化/需要验证,扩展语义规则(name 必有等)不适用。
  */
-/** 纯语法检查(不跑扩展语义规则):迁移自检用——迁移只加注释行,语法不变,
- * 而子目录模块文件(如 character/character.js 的 const character = {…})本来
- * 就不是完整扩展,没有 name 字段,validateExtensionCode 的语义规则对它不适用。 */
 export function syntaxCheck(code, style) {
   return compileCheck(code, style)
 }
@@ -106,11 +104,6 @@ function extractName(code) {
   return m ? m[2] : null
 }
 
-/**
- * 启发式收集代码里定义的内部 ID(技能/武将/卡牌键名)。
- * 覆盖常见写法:pack.skill.xxx / pack.character.xxx / pack.card.xxx 赋值、
- * 对象键 "id": {...}、lib.translate.<id> =(只统计像 ID 的 ASCII 键)。
- */
 /**
  * 启发式收集代码里定义的内部 ID(技能/武将/卡牌键名)。
  * 主路径=字符串感知的区段枚举(skill/character/card 各区段的 depth-1 属性,
