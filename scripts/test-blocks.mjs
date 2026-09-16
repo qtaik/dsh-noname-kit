@@ -332,6 +332,13 @@ export default function () {
   ok(blocks.stripAnchors(em.code) === ESM_MOD, 'ESM:迁移自检——剥锚点与原文逐字节一致')
   const esi = blocks.assembleBlocks(em.code, [{ kind: 'character', id: 'yxs_c', code: "yxs_c: { sex: 'male', hp: 2 }" }])
   ok(esi.errors.length === 0 && blocks.virtualCharacterBlocks(esi.code).some((b) => b.id === 'yxs_c'), 'ESM:新区块插入 const 形态文件并被识别')
+  const PHANTOM = [
+    'const meta = {',
+    "  doc: 'const character = { fake: 1 },',",
+    '};',
+    'export default meta;',
+  ].join('\n')
+  ok(blocks.virtualCharacterBlocks(PHANTOM).length === 0, 'ESM:字符串字面量里的幻影区段不被识别(掩码排除)')
 
   console.log('\n全部通过:' + passed + ' 项')
 } finally {

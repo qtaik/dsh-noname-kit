@@ -238,6 +238,7 @@ export async function skillFeedback(dshHome, { taskId, skill, issue }) {
   if (!Array.isArray(task.feedbacks)) task.feedbacks = []
   task.rounds += 1
   task.status = 'open'
+  let unknownSkill = null
   if (skill) {
     const node = findSkill(task, skill)
     if (node) {
@@ -245,13 +246,14 @@ export async function skillFeedback(dshHome, { taskId, skill, issue }) {
       node.rounds += 1
       node.feedbacks.push({ at: Date.now(), issue: issueText })
       if (node.feedbacks.length > 50) node.feedbacks = node.feedbacks.slice(-50)
-    }
+    } else unknownSkill = skill
   }
   task.feedbacks.push({ at: Date.now(), skill: skill || '', issue: issueText })
   if (task.feedbacks.length > 100) task.feedbacks = task.feedbacks.slice(-100)
   touch(task)
   await writeRegistry(dshHome, registry)
-  return { ok: true, task }
+  // unknownSkill 非空 = 技能名不在任务清单里(日志/API 可见;状态照常打回 open)
+  return { ok: true, unknownSkill, task }
 }
 
 /** 补图:设置任务图片路径(路径由用户在表单填写)。

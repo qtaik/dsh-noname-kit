@@ -176,7 +176,7 @@ export async function writeExtension(nonameDir, { folder, file, code, blocks, ed
       await writeFile(infoPath, JSON.stringify(parsed, null, 2), 'utf8')
       infoWritten = true
     } catch (error) {
-      return { ...verdict, wrote: true, path: relative(nonameDir, target), backup, infoError: `info.json 不是合法 JSON,未写入: ${error.message}` }
+      return { ...verdict, wrote: true, path: relative(nonameDir, target).split(sep).join('/'), backup, infoError: `info.json 不是合法 JSON,未写入: ${error.message}` }
     }
   } else {
     // 没提供 info.json 时,若也不存在则写一份最小可用的
@@ -229,6 +229,7 @@ export async function readExtension(nonameDir, folder, opts = {}) {
     const m = /^(\w+):([\w-]+)$/.exec(String(opts.block))
     if (!m) result.error = 'block 参数格式应为 kind:id,例如 skill:cs_tianfa。'
     else {
+      let fileMissing = false
       // 查找范围:指定 file → 只查该文件;未指定 → 先 extension.js,再扫全包
       // (多文件包的壳 extension.js 里没有条目,不能因为它存在就停止查找)
       let tryFiles
@@ -236,11 +237,11 @@ export async function readExtension(nonameDir, folder, opts = {}) {
       else tryFiles = ['extension.js', ...(await listPackageJsFiles(nonameDir, folder)).filter((f) => f !== 'extension.js')]
       for (const f of tryFiles) {
         let c
-        try { c = await readFile(join(full, f), 'utf8') } catch { continue }
+        try { c = await readFile(join(full, f), 'utf8') } catch { if (f === fileRel) fileMissing = true; continue }
         const text = extractBlock(c, m[1], m[2])
         if (text != null) { result.code = text; result.block = { kind: m[1], id: m[2], file: f }; break }
       }
-      if (result.code === undefined) result.error = `未找到区块「${opts.block}」(可用 listBlocks 查看目录)。`
+      if (result.code === undefined) result.error = fileMissing ? `文件 ${fileRel} 不存在。` : `未找到区块「${opts.block}」(可用 listBlocks 查看目录)。`
     }
   } else if (code !== undefined) {
     result.code = code
@@ -404,9 +405,12 @@ export async function listEntries(nonameDir, folder, kind) {
     for (const [id, name] of extractDisplayNames(code)) if (!names.has(id)) names.set(id, name)
   }
   const entries = []
+  const seenIds = new Set()
   for (const { f, code } of codes) {
     for (const b of scanBlocks(code).blocks) {
       if (b.kind !== kind) continue
+      if (seenIds.has(b.id)) continue // 跨文件同名:保留先见文件(extension.js 优先)
+      seenIds.add(b.id)
       entries.push({ id: b.id, lines: b.lines, name: names.get(b.id) || '', file: f })
     }
   }

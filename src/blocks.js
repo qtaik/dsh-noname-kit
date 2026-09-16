@@ -67,6 +67,39 @@ function skipBlockComment(text, i) {
 }
 
 /**
+ * 字符串/注释区间掩码:返回 [[start, end], …](线性扫描,区间含端点)。
+ * findAllSections 用它排除字符串字面量与注释里的「幻影区段」命中
+ * (如示例代码字符串里的 `const character = {`)。
+ */
+function stringAndCommentRanges(code) {
+  const ranges = []
+  let i = 0
+  const n = code.length
+  while (i < n) {
+    const c = code[i]
+    if (c === "'" || c === '"' || c === '`') {
+      const start = i
+      i = skipString(code, i) + 1 // skipString 返回闭引号下标,+1 跳过它,否则闭引号会被再当成新字符串起点
+      ranges.push([start, i])
+    } else if (c === '/' && code[i + 1] === '/') {
+      const start = i
+      i = skipLineComment(code, i)
+      ranges.push([start, i])
+    } else if (c === '/' && code[i + 1] === '*') {
+      const start = i
+      i = skipBlockComment(code, i)
+      ranges.push([start, i])
+    } else i++
+  }
+  return ranges
+}
+
+function insideRanges(ranges, index) {
+  for (const r of ranges) if (index >= r[0] && index < r[1]) return true
+  return false
+}
+
+/**
  * 找出所有同名区段(含嵌套,如 package.skill 与 package.skill.skill)。
  * 虚拟划分用:无名杀扩展的布局不止一种,技能/翻译可能藏在任意层级。
  * 导出给 validate.js 的 ID 收集共用(字符串感知,兼容裸键/引号键/任意嵌套)。
@@ -76,6 +109,7 @@ function skipBlockComment(text, i) {
  * 2. 变量声明 `(export)? const|let|var name = { … }`——ES Module 多文件包
  *    (英雄杀/杀海拾遗等的 character/character.js:`const character = { … }`)。
  *    名字精确等于 kind 才认;识别出的条目形态与老式包完全一致,下游链路通用。
+ * 字符串/注释内的命中一律丢弃(掩码排除幻影区段)。
  */
 export function findAllSections(code, name) {
   const out = []
@@ -87,6 +121,7 @@ export function findAllSections(code, name) {
     seen.add(open)
     out.push({ open, close })
   }
+  const mask = stringAndCommentRanges(code)
   const patterns = [
     '(?:^|[\\n{,;])\\s*' + name + '\\s*:\\s*\\{',
     '(?:^|[\\n;}])\\s*(?:export\\s+)?(?:const|let|var)\\s+' + name + '\\s*=\\s*\\{',
@@ -94,7 +129,11 @@ export function findAllSections(code, name) {
   for (const src of patterns) {
     const re = new RegExp(src, 'g')
     let m
-    while ((m = re.exec(code))) push(code.indexOf('{', m.index + m[0].length - 1))
+    while ((m = re.exec(code))) {
+      const open = code.indexOf('{', m.index + m[0].length - 1)
+      if (insideRanges(mask, open)) continue
+      push(open)
+    }
   }
   return out.sort((a, b) => a.open - b.open)
 }

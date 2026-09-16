@@ -298,6 +298,7 @@ export function apply(ctx, config) {
         } else if (!value.blocks && !value.notes) {
           parts.push(`── ${value.folder}/${value.file ?? 'extension.js'} 全文(共 ${value.code ? value.code.split('\n').length : 0} 行)──`)
           parts.push(value.code ?? '(该文件不存在或为空)')
+          if (value.files && value.files.length) parts.push(`包内文件: ${value.files.join('、')}(条目可能在子目录模块,listBlocks 聚合可见)`)
         }
         return [{ type: 'text', text: parts.join('\n') }]
       },

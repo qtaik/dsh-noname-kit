@@ -1006,7 +1006,9 @@ window.__ModuleLoader__.load({
                 '── 执行要求 ──',
                 '先 noname_read_extension 读取当前代码,定位问题并说明原因,修复后 noname_validate,校验通过后写入。修复后调用 noname_skills_written,原样带回任务ID ' + task.id + '。',
               ].filter(Boolean).join('\n');
-              sessions.binding(sid).session.prompt([{ type: 'text', text: text }], 'queue');
+              Promise.resolve(sessions.binding(sid).session.prompt([{ type: 'text', text: text }], 'queue')).catch(function (e) {
+                setData(function (prev) { return Object.assign({}, prev, { err: '反馈已记录,但发送失败: ' + (e && e.message || e) }) });
+              });
             } else {
               sendErr = '已记录反馈,但当前没有打开的会话——请打开会话后重试,或把反馈粘贴到对话里';
             }

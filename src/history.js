@@ -22,7 +22,11 @@ export async function readHistory(nonameDir, folder) {
   try {
     const raw = await readFile(join(folderPath(nonameDir, folder), HISTORY_FILE), 'utf8')
     const parsed = JSON.parse(raw)
-    return { ...emptyHistory(), ...parsed }
+    const history = { ...emptyHistory(), ...parsed }
+    // 形状容错:字段被手改坏(如 tasks:null)时回退默认,别让历史面板整页 500
+    if (!Array.isArray(history.tasks)) history.tasks = []
+    if (!Array.isArray(history.notes)) history.notes = []
+    return history
   } catch {
     return emptyHistory()
   }
