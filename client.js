@@ -296,11 +296,15 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ id: taskId, folder: form.folder.trim(), type: type, title: form.title.trim(), charInfo: form.charInfo.trim(), pile: pile, idPrefix: form.idPrefix.trim(), skills: skills, image: form.image.trim(), target: editingExisting ? { kind: type, id: form.entryId } : null, writeMode: form.writeMode }),
           }).then(function (r) { return r.json() }).then(function (reg) {
             if (!reg.ok) throw new Error(reg.error || '任务注册失败');
-            return { taskId: taskId, pile: pile };
+            // gameDir/gameDirPosix 必须随 ctx 传给下一个 then(各自独立作用域,
+            // 跨回调直接引用会 ReferenceError: gameDir is not defined)
+            return { taskId: taskId, pile: pile, gameDir: gameDir, gameDirPosix: gameDirPosix };
           });
         }).then(function (ctx2) {
           var taskId = ctx2.taskId;
           var pile = ctx2.pile;
+          var gameDir = ctx2.gameDir || '';
+          var gameDirPosix = ctx2.gameDirPosix || '';
           var skillLines = skills.map(function (s, i) { return (i + 1) + '. ' + s.name + (s.desc ? ':' + s.desc : '') }).join('\n');
           var pileText;
           if (type === 'card' && pile.join && pile.entries) pileText = '加入牌堆,条目(每行「花色 点数」;花色只允许 spade/heart/club/diamond/none,none=无花色):\n' + pile.entries;
