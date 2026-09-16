@@ -21,7 +21,7 @@ import { KNOWLEDGE_TEXT } from './src/knowledge.js'
 import { validateExtensionCode } from './src/validate.js'
 import { searchReference } from './src/reference.js'
 import { detectCandidates } from './src/detect.js'
-import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateExtension, listEntries, listEntrySkills } from './src/write.js'
+import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateExtension, prunePackageBackups, listEntries, listEntrySkills } from './src/write.js'
 import { readHistory, archiveTask, listExtensionHistories, recordBackup, deleteNote } from './src/history.js'
 import { copyImages } from './src/images.js'
 import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, completeById, deleteTask, reopenTask, getTask } from './src/tasks.js'
@@ -733,6 +733,13 @@ export function apply(ctx, config) {
             }
             return json(result.ok ? 200 : 400, result)
           } catch (error) { return json(400, { ok: false, error: error.message }) }
+        }
+        if (req.method === 'POST' && url.pathname === '/noname-kit-api/backups/prune') {
+          // 备份滚动清理(工坊历史面板按钮):包内所有 backup/ 只保留最新 3 个
+          if (!active) return json(503, { ok: false, error: 'noname-kit 未配置 nonameDir' })
+          const body = await readBody()
+          try { return json(200, await prunePackageBackups(nonameDir, body.folder)) }
+          catch (error) { return json(400, { ok: false, error: error.message }) }
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/rollback') {
           const body = await readBody()

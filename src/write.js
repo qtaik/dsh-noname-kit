@@ -121,6 +121,39 @@ async function pruneHistoryBackups(nonameDir, folder, removedFiles) {
  * @returns 校验失败 → {ok:false, wrote:false, errors, warnings};成功 → {ok:true, wrote:true, path, backup, infoWritten};
  *          manual 模式 → {ok:true, wrote:false, code};file 指向模块文件时语义门禁降级为纯语法检查
  */
+/** collect all backup/ dirs inside the package (subdir modules each keep their own). */
+async function collectBackupDirs(folderFull) {
+  const dirs = []
+  async function walk(dir) {
+    let entries
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith('.')) continue
+      const child = join(dir, e.name)
+      if (e.name === 'backup') { dirs.push(child); continue } // no nested backup dirs
+      if (SKIP_DIRS.has(e.name)) continue
+      await walk(child)
+    }
+  }
+  await walk(folderFull)
+  return dirs
+}
+
+/** prune every backup/ dir of the package (workshop history panel button):
+ *  keep the newest 3 in each dir, and sync history.backups records. */
+export async function prunePackageBackups(nonameDir, folder) {
+  const { full } = safeFolderPath(nonameDir, folder)
+  const dirs = await collectBackupDirs(full)
+  const allRemoved = []
+  let touchedDirs = 0
+  for (const d of dirs) {
+    const removed = await pruneBackups(d, relative(nonameDir, d))
+    if (removed.length) { touchedDirs++; allRemoved.push(...removed) }
+  }
+  await pruneHistoryBackups(nonameDir, folder, allRemoved)
+  return { ok: true, removedCount: allRemoved.length, dirs: touchedDirs }
+}
+
 export async function writeExtension(nonameDir, { folder, file, code, blocks, edits, deletes, editScope, style, kind, infoJson, idPrefix, writeMode }) {
   const blockMode = Array.isArray(blocks) || Array.isArray(edits) || Array.isArray(deletes)
   const full = safeFolderPath(nonameDir, folder).full

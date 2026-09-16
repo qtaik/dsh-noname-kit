@@ -569,6 +569,18 @@ window.__ModuleLoader__.load({
           setData(function (prev) { return Object.assign({}, prev, { msg: '回滚请求失败(历史服务不可用),未执行回滚' }) });
         });
       };
+      var pruneBackupsNow = function (folder) {
+        setData(function (prev) { return Object.assign({}, prev, { pruning: true, msg: '' }) });
+        fetch('/noname-kit-api/backups/prune', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ folder: folder }),
+        }).then(function (r) { return r.json() }).then(function (b) {
+          setData(function (prev) { return Object.assign({}, prev, { pruning: false, msg: b.ok ? '已清理 ' + b.removedCount + ' 个旧备份(每个 backup/ 保留最新 3 个)' : ('清理失败: ' + b.error) }) });
+          openDetail(folder);
+        }, function () {
+          setData(function (prev) { return Object.assign({}, prev, { pruning: false, msg: '清理请求失败' }) });
+        });
+      };
       var deleteNote = function (folder, index) {
         fetch('/noname-kit-api/history/note-delete', {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -598,6 +610,9 @@ window.__ModuleLoader__.load({
                 return h('button', { key: b, className: 'nnk-copy', style: { marginRight: '8px', marginBottom: '4px' }, onClick: function () { rollback(detail.folder, b) } }, '⏪ ' + b)
               }))
             ] : e('div', 'nnk-hint', '该包还没有备份——每次覆盖写入前都会自动生成一份。'),
+            h('div', { style: { marginTop: '8px' } },
+              h('button', { className: 'nnk-smallbtn', disabled: !!data.pruning, onClick: function () { pruneBackupsNow(detail.folder) } },
+                data.pruning ? '清理中…' : '🧹 清理旧备份(每个 backup/ 保留最新 3 个)')),
             (detail.history && detail.history.notes && detail.history.notes.length) ? [
               e('div', 'nnk-label', '注意点清单(无关/过时的单条删除,AI 仅按需拉取)'),
               detail.history.notes.map(function (n, i) {

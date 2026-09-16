@@ -241,6 +241,18 @@ try {
   const hist = await rh2(nonameDir, mf)
   ok(Array.isArray(hist.backups), 'pruneBackupRecords:空移除列表不破坏 history 结构')
 
+  // ── 15) 主动清理:prunePackageBackups 遍历包内全部 backup/ ──
+  const bdir = join(nonameDir, 'extension', mf, 'character', 'backup')
+  const existingBk = await rdFs(bdir)
+  const { copyFile: cpFs } = await import('node:fs/promises')
+  await cpFs(join(bdir, existingBk[0]), join(bdir, 'character.99999999-000001.js'))
+  await cpFs(join(bdir, existingBk[0]), join(bdir, 'character.99999999-000002.js'))
+  const { prunePackageBackups: ppb } = await import('../src/write.js')
+  const pr = await ppb(nonameDir, mf)
+  ok(pr.ok && pr.removedCount === 2, '主动清理:删除超出保留数的 2 个备份')
+  const leftAfter = (await rdFs(bdir)).filter((n) => /\.js$/i.test(n)).length
+  ok(leftAfter === 3, '主动清理:仍保留最新 3 个')
+
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })
