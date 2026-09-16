@@ -52,7 +52,8 @@ dsh plugin --profile web add https://github.com/qtaik/dsh-noname-kit.git
 新版 ES Module)、填技能描述。提交后 AI 会先给需求理解确认,有歧义会先提问;收到明确的「确认」回复后才会动笔——写完自动校验、写入,并提醒进游戏测试。
 
 游戏里发现问题就在任务列表点「🔁 反馈」,把现象或报错发给 AI;每轮反馈自动
-累计轮次,逐技能确认无误、图片也就位后,任务自动归档。
+累计轮次。新建任务在逐技能确认无误、图片也就位后自动归档;编辑已有条目的
+任务不强制补图,技能全部确认后即归档。
 
 已有的扩展包不用从零开始:任务模式选「📂 编辑已有扩展包」,选中扩展包后照常
 走确认协议。老文件可以先点「🔨 建立区块索引」,给条目所在的 .js 文件插入锚点
@@ -72,7 +73,7 @@ dsh plugin --profile web add https://github.com/qtaik/dsh-noname-kit.git
 | noname_validate | 语法编译检查 + 静态规则校验(不执行代码) |
 | noname_read_extension | 读扩展当前代码(先读后改) |
 | noname_write_extension | 唯一写入通道:先校验,error 拒写,覆盖前自动备份 |
-| noname_skills_written | 标记技能「已写入待测试」,全确认+图片就位后自动收口 |
+| noname_skills_written | 标记技能「已写入待测试」,全部确认后自动收口(新建任务还需图片就位) |
 | noname_copy_images | 把本地图片复制进扩展包 image/ 目录 |
 
 普通 write/edit/bash 对游戏 extension 目录的写入会被守卫拒绝,不用担心
@@ -116,9 +117,9 @@ GitHub tag 取,查不通只显示一行「检查失败」,不影响使用;「启
 ## 测试
 
 ```sh
-node scripts/test-tasks.mjs    # 任务状态机,46 项
-node scripts/test-blocks.mjs   # 区块读写,78 项
-node scripts/test-update.mjs   # 版本比较与更新检查,104 项
+node scripts/test-tasks.mjs    # 任务状态机,64 项
+node scripts/test-blocks.mjs   # 区块读写,85 项
+node scripts/test-update.mjs   # 版本比较与更新检查,102 项
 node scripts/test-preset.mjs   # preset 自检与安装,59 项
 ```
 
