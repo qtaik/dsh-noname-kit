@@ -227,6 +227,20 @@ try {
   try { await import('node:fs/promises').then((fs) => fs.readdir(join(nonameDir, 'extension', mf, 'character', 'backup'))).then((n) => { backupOk = n.some((x) => x.startsWith('character.')) }) } catch { }
   ok(backupOk, '多文件包:备份落在目标文件同目录 backup/')
 
+  // ── 14) 备份滚动清理:每个 backup/ 只保留最新 3 个 ──
+  const charCode = "const character = {\n  yxs_a: { sex: 'male', group: 'wei', hp: 3, skills: ['yxs_s1'] },\n  yxs_b: ['female', 'shu', 4, ['yxs_s2']],\n};\nexport default character;\n"
+  for (let i = 0; i < 5; i++) {
+    const wR = await writeExtension(nonameDir, { folder: mf, file: 'character/character.js', kind: 'character', style: 'module', code: charCode })
+    ok(wR.ok, '滚动清理:第 ' + (i + 1) + ' 次写入成功')
+  }
+  const { readdir: rdFs } = await import('node:fs/promises')
+  const backupsLeft = (await rdFs(join(nonameDir, 'extension', mf, 'character', 'backup'))).filter((n) => /\.js$/i.test(n))
+  ok(backupsLeft.length <= 3, '滚动清理:连续写入后 backup/ 只保留 ≤3 个备份(实际 ' + backupsLeft.length + ')')
+  const { pruneBackupRecords, readHistory: rh2 } = await import('../src/history.js')
+  await pruneBackupRecords(nonameDir, mf, [])
+  const hist = await rh2(nonameDir, mf)
+  ok(Array.isArray(hist.backups), 'pruneBackupRecords:空移除列表不破坏 history 结构')
+
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })

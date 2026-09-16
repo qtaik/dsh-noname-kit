@@ -88,6 +88,25 @@ export async function recordBackup(nonameDir, folder, backupFile) {
   })
 }
 
+/**
+ * 备份滚动清理的登记同步:备份文件被 pruneBackups 删除后,把 history.backups
+ * 里指向它们的条目(含「回滚自 x」类文案条目)一并移除,避免登记指向不存在的文件。
+ */
+export async function pruneBackupRecords(nonameDir, folder, removedFiles) {
+  if (!Array.isArray(removedFiles) || !removedFiles.length) return
+  const norm = (s) => String(s || '').split('\\').join('/')
+  const removed = new Set(removedFiles.map(norm))
+  const removedBase = new Set(removedFiles.map((f) => norm(f).split('/').pop()))
+  await updateHistory(nonameDir, folder, (history) => {
+    if (!Array.isArray(history.backups)) return
+    history.backups = history.backups.filter((b) => {
+      const f = norm(b && b.file)
+      if (!f) return true
+      return !removed.has(f) && !removedBase.has(f.split('/').pop())
+    })
+  })
+}
+
 /** 删除一条注意点(历史页修剪用;不动 tasks 归档)。 */
 export async function deleteNote(nonameDir, folder, index) {
   const full = folderPath(nonameDir, folder)

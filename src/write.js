@@ -3,7 +3,7 @@
  * 路径安全:文件夹名只允许安全字符,解析后必须仍在 extension 目录内
  * (防路径逃逸)。覆盖前自动备份到 <文件夹>/backup/。
  */
-import { mkdir, readFile, readdir, copyFile, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, readdir, writeFile, unlink, stat } from 'node:fs/promises'
 import { join, resolve, basename, relative, sep, dirname } from 'node:path'
 import { validateExtensionCode, syntaxCheck, collectDefinedIds } from './validate.js'
 import { scanAnchored, scanBlocks, extractBlock, assembleBlocks, checkFidelity, migrateCode, stripAnchors, findAllSections, sectionProperties, virtualCharacterBlocks, virtualCardBlocks, virtualBlocks, virtualTranslateBlocks, CONTENT_KINDS } from './blocks.js'
@@ -77,6 +77,39 @@ function timestamp() {
   const d = new Date()
   const p = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+}
+
+/** 每个备份目录保留的最新备份数(超出按文件修改时间从旧到新删除)。 */
+const BACKUP_KEEP = 3
+
+/**
+ * 备份滚动清理:backupDir 里只保留最新 BACKUP_KEEP 个 .js 备份,其余删除。
+ * 返回被删文件的相对路径(相对 nonameDir,POSIX)——供调用方同步清理
+ * history.backups 登记,避免登记指向已不存在的文件。
+ */
+async function pruneBackups(backupDir, relBase) {
+  let names
+  try { names = await readdir(backupDir) } catch { return [] }
+  const stats = []
+  for (const n of names) {
+    if (!/\.js$/i.test(n)) continue
+    try { stats.push({ n, m: (await stat(join(backupDir, n))).mtimeMs }) } catch { /* 刚被并发删掉 */ }
+  }
+  stats.sort((a, b) => b.m - a.m)
+  const removed = []
+  for (const s of stats.slice(BACKUP_KEEP)) {
+    try { await unlink(join(backupDir, s.n)); removed.push((relBase + '/' + s.n).replace(/\\/g, '/')) } catch { /* 已不存在 */ }
+  }
+  return removed
+}
+
+/** 备份文件清理后,同步清掉 history 里指向它们的登记(含「回滚自 x」类文案条目)。 */
+async function pruneHistoryBackups(nonameDir, folder, removedFiles) {
+  if (!removedFiles.length) return
+  try {
+    const h = await import('./history.js') // 动态加载避免 write↔history 循环依赖
+    await h.pruneBackupRecords(nonameDir, folder, removedFiles)
+  } catch { /* 登记清理失败不影响写入主流程 */ }
 }
 
 /**
@@ -163,6 +196,7 @@ export async function writeExtension(nonameDir, { folder, file, code, blocks, ed
     await mkdir(backupDir, { recursive: true })
     backup = join(relative(nonameDir, backupDir), `extension.${timestamp()}.js`).split(sep).join('/')
     await copyFile(target, join(backupDir, basename(backup)))
+    await pruneHistoryBackups(nonameDir, folder, await pruneBackups(backupDir, relative(nonameDir, backupDir)))
   }
   await writeFile(target, finalCode, 'utf8')
 
@@ -278,6 +312,7 @@ export async function migrateAnchors(nonameDir, folder, file) {
   await mkdir(backupDir, { recursive: true })
   const backup = join(relative(nonameDir, backupDir), `${basename(target, '.js')}.${timestamp()}.js`).split(sep).join('/')
   await copyFile(target, join(backupDir, basename(backup)))
+  await pruneHistoryBackups(nonameDir, folder, await pruneBackups(backupDir, relative(nonameDir, backupDir)))
   await writeFile(target, r.code, 'utf8')
   return { ok: true, inserted: r.inserted, commas: r.commas, blocks: r.blocks, backup }
 }
@@ -352,6 +387,7 @@ export async function rollbackExtension(nonameDir, folder, backupName) {
     const backupDir = join(full, 'backup')
     await mkdir(backupDir, { recursive: true })
     await copyFile(target, join(backupDir, `extension.pre-rollback.${timestamp()}.js`))
+    await pruneHistoryBackups(nonameDir, folder, await pruneBackups(backupDir, relative(nonameDir, backupDir)))
   } catch { /* 当前不存在 */ }
   await copyFile(backupPath, target)
   return { folder, restored: backupName }
