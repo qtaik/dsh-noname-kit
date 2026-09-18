@@ -862,9 +862,12 @@ window.__ModuleLoader__.load({
       var send = function (text) {
         var session = sessionId;
         return Promise.resolve(session).then(function (id) {
-          // sessions 服务由插件 inject 提供;绑定当前会话并发送结构化消息
+          // sessions 服务由插件 inject 提供;绑定当前会话并发送结构化消息。
+          // 新版对未打开的会话 binding() 返回 undefined——判空让调用方走报错,而不是 TypeError
           var sessions = props.sessions;
-          return sessions.binding(id).session.prompt([{ type: 'text', text: text }], 'queue');
+          var binding = sessions.binding(id);
+          if (!binding || !binding.session) throw new Error('目标会话未打开或已关闭');
+          return binding.session.prompt([{ type: 'text', text: text }], 'queue');
         });
       };
       if (phase === null) return e('div', 'nnk-hint', '正在检查插件配置…');
@@ -878,7 +881,7 @@ window.__ModuleLoader__.load({
         ),
         phase === false && active === 'new' ? e('div', 'nnk-err', '⚠️ 还没配置游戏目录——到「⚙ 设置」页填一下就能自动写入;暂时不配也行,把写入方式设为「手动复制」。') : null,
         active === 'new' ? h(NewTaskForm, { sessionId: sessionId, send: send }) : null,
-        active === 'tasklist' ? h(TaskListContent, { sessions: props.sessions, compact: false }) : null,
+        active === 'tasklist' ? h(TaskListContent, { sessions: props.sessions, uiSession: props.uiSession, compact: false }) : null,
         active === 'history' ? h(HistoryPanel) : null,
         active === 'settings' ? h(SettingsPanel) : null
       );
@@ -950,9 +953,37 @@ window.__ModuleLoader__.load({
       sub: function (f) { var self = this; this.subs.push(f); return function () { self.subs = self.subs.filter(function (x) { return x !== f }) } },
     };
 
+    /**
+     * 读「当前打开会话」的 id,兼容新旧两版 DSH(上游 0.1.6 起旧版字段被移除):
+     * 1) uiSession.adapter.current.getSnapshot().key —— 两版都在的 UI 层读法,首选;
+     * 2) sessions.list.getSnapshot().current —— 旧版专用,0.1.6 起读不到;
+     * 3) sessions.list.getSnapshot().byId 里 retainedBy.mainView > 0 —— 新版官方姿势。
+     * 任一步形状不对就跳下一步;全失败返回 null,调用方走「没有会话」提示。
+     */
+    function readCurrentSessionId(sessions, uiSession) {
+      try {
+        var current = uiSession && uiSession.adapter && uiSession.adapter.current;
+        var bound = current && current.getSnapshot ? current.getSnapshot() : null;
+        if (bound && bound.key) return bound.key;
+      } catch (e) {}
+      try {
+        var snap = sessions && sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
+        if (snap && snap.current) return snap.current;
+        if (snap && snap.byId) {
+          var ids = Object.keys(snap.byId);
+          for (var i = 0; i < ids.length; i++) {
+            var row = snap.byId[ids[i]];
+            if (row && row.retainedBy && (row.retainedBy.mainView || 0) > 0) return row.id;
+          }
+        }
+      } catch (e) {}
+      return null;
+    }
+
     /** 任务列表内容(浮窗与工坊子页共用):进行中/已完成分区、反馈、删除。 */
     function TaskListContent(props) {
       var sessions = props && props.sessions;
+      var uiSession = props && props.uiSession;
       var data = React.useState({ list: [], loading: false, expanded: null, fbFor: null, issue: '', busy: false, err: '', msg: '' });
       var box = data[0], setBox = data[1];
       var setD = function (patch) { setBox(function (prev) { return Object.assign({}, prev, patch) }) };
@@ -1002,7 +1033,7 @@ window.__ModuleLoader__.load({
           if (!fb.ok) throw new Error(fb.error || '记录失败');
           var sendErr = null;
           try {
-            var sid = sessions && sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot().current : null;
+            var sid = readCurrentSessionId(sessions, uiSession);
             if (sid) {
               var text = [
                 '【无名杀工坊·问题反馈】',
@@ -1015,9 +1046,14 @@ window.__ModuleLoader__.load({
                 '── 执行要求 ──',
                 '先 noname_read_extension 读取当前代码,定位问题并说明原因,修复后 noname_validate,校验通过后写入。修复后调用 noname_skills_written,原样带回任务ID ' + task.id + '。',
               ].filter(Boolean).join('\n');
-              Promise.resolve(sessions.binding(sid).session.prompt([{ type: 'text', text: text }], 'queue')).catch(function (e) {
-                setD(function (prev) { return Object.assign({}, prev, { err: '反馈已记录,但发送失败: ' + (e && e.message || e) }) });
-              });
+              var binding = sessions.binding(sid);
+              if (!binding || !binding.session) {
+                sendErr = '反馈已记录,但目标会话已关闭——请打开会话后重试';
+              } else {
+                Promise.resolve(binding.session.prompt([{ type: 'text', text: text }], 'queue')).catch(function (e) {
+                  setD(function (prev) { return Object.assign({}, prev, { err: '反馈已记录,但发送失败: ' + (e && e.message || e) }) });
+                });
+              }
             } else {
               sendErr = '已记录反馈,但当前没有打开的会话——请打开会话后重试,或把反馈粘贴到对话里';
             }
@@ -1143,6 +1179,7 @@ window.__ModuleLoader__.load({
     /** 悬浮窗框架:拖动/位置记忆/开关,内容复用 TaskListContent。 */
     function TaskPanelWindow(props) {
       var sessions = props && props.sessions;
+      var uiSession = props && props.uiSession;
       var openState = React.useState(panelBus.open);
       var isOpen = openState[0], setIsOpen = openState[1];
       var posState = React.useState(function () {
@@ -1177,7 +1214,7 @@ window.__ModuleLoader__.load({
           e('span', 'nnk-panel-title', '📋 无名杀任务列表'),
           h('button', { className: 'nnk-panel-close', onClick: function () { panelBus.set(false) } }, '✕')
         ),
-        h('div', { className: 'nnk-panel-body' }, h(TaskListContent, { sessions: sessions }))
+        h('div', { className: 'nnk-panel-body' }, h(TaskListContent, { sessions: sessions, uiSession: uiSession }))
       );
     }
 
@@ -1269,6 +1306,7 @@ window.__ModuleLoader__.load({
     /** 工坊浮窗:初始屏/任意会话用浮层承载整个工坊页;任务发进当前会话。 */
     function WorkshopPanelWindow(props) {
       var sessions = props && props.sessions;
+      var uiSession = props && props.uiSession;
       var openState = React.useState(workshopBus.open);
       var isOpen = openState[0], setIsOpen = openState[1];
       var posState = React.useState(function () {
@@ -1289,7 +1327,7 @@ window.__ModuleLoader__.load({
         document.addEventListener('mouseup', up);
       };
       if (!isOpen) return null;
-      var sid = sessions && sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot().current : null;
+      var sid = readCurrentSessionId(sessions, uiSession);
       return h('div', { className: 'nnk-panel', style: { left: pos.x + 'px', top: pos.y + 'px', width: '420px', maxHeight: '640px' } },
         h('div', { className: 'nnk-panel-head', onMouseDown: startDrag },
           e('span', 'nnk-panel-title', '🛠 无名杀工坊'),
@@ -1297,7 +1335,7 @@ window.__ModuleLoader__.load({
         ),
         h('div', { className: 'nnk-panel-body' },
           sid
-            ? h(WorkshopView, { sessionId: sid, sessions: sessions })
+            ? h(WorkshopView, { sessionId: sid, sessions: sessions, uiSession: uiSession })
             : e('div', 'nnk-hint', '当前没有会话——先新建会话,再用工坊派任务。')
         )
       );
@@ -1306,6 +1344,9 @@ window.__ModuleLoader__.load({
     exports.apply = function (ctx) {
       var slots = ctx.get('slots');
       var sessions = ctx.get('sessions');
+      // uiSession 容错取:不进 inject——某版缺这个服务时只降级「当前会话」读法,不拖垮插件
+      var uiSession = null;
+      try { uiSession = ctx.get('uiSession') || null } catch (e) {}
 
       // 顶部页签(与官方"轨迹"同一插槽,order 排在后面)
       slots.inject('conversation.view', function () {
@@ -1321,7 +1362,7 @@ window.__ModuleLoader__.load({
           // 工坊内容贴左渲染时,左侧按钮的点击会被它吃掉(现象=点了没反应)。
           // 留出安全边距让内容避开手柄热区;手柄压在空白上,拖拽功能不受影响。
           return React.createElement('div', { style: { paddingLeft: '48px' } },
-            React.createElement(WorkshopView, Object.assign({}, props, { sessions: sessions })));
+            React.createElement(WorkshopView, Object.assign({}, props, { sessions: sessions, uiSession: uiSession })));
         });
       });
 
@@ -1345,7 +1386,7 @@ window.__ModuleLoader__.load({
       });
       ctx.slots.inject('shell.overlay', function () {
         return ctx.slots.register({ name: 'shell.overlay', id: 'noname-kit-tasks' }, function (props) {
-          return React.createElement(TaskPanelWindow, Object.assign({}, props, { sessions: sessions }));
+          return React.createElement(TaskPanelWindow, Object.assign({}, props, { sessions: sessions, uiSession: uiSession }));
         });
       });
 
@@ -1358,7 +1399,7 @@ window.__ModuleLoader__.load({
       });
       ctx.slots.inject('shell.overlay', function () {
         return ctx.slots.register({ name: 'shell.overlay', id: 'noname-kit-workshop' }, function (props) {
-          return React.createElement(WorkshopPanelWindow, Object.assign({}, props, { sessions: sessions }));
+          return React.createElement(WorkshopPanelWindow, Object.assign({}, props, { sessions: sessions, uiSession: uiSession }));
         });
       });
     };
