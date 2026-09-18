@@ -27,6 +27,12 @@ whenToUse: 需要编写、修改或审查无名杀扩展代码(武将技能/卡�
 - 图片(立绘/卡面图)统一**平铺**放扩展文件夹的 image/ 子目录,文件名 = `<内部ID>.jpg`(用 noname_copy_images 复制;其目标只能是纯文件名,不支持子目录);不要散放根目录。
 - **引擎默认立绘路径是扩展根目录**(extension/<包名>/<武将ID>.jpg),不会自动找 image/ 子目录——图片复制进 image/ 后,武将条目必须显式写 `img: "extension/<包名>/image/<武将ID>.jpg"`;卡面图在卡牌定义里同理显式写 `image: "extension/<包名>/image/<卡牌ID>.jpg"`(配 fullimage: true),否则游戏里显示默认图。
 - 没有图片时,交付说明必须提醒用户补图。
+
+## 配音约定(音频只放扩展包内,绝不放游戏本体 audio/ 目录)
+- **技能配音**:技能对象写 `audio: "ext:<包名>/audio/skill:<句数>"`(两句就是 :2,一个技能任意多句),文件放 extension/<包名>/audio/skill/<技能内部ID>1.mp3、<ID>2.mp3……(mp3,内部ID+从 1 连号,句数与 audio 数字一致)。**禁止写不带 ext: 的 audio**(如 audio: 2 / audio: true)——那会去游戏本体 audio/skill/ 找文件;校验器会报 warning。
+- **阵亡语音:零代码**——引擎对扩展武将默认自动找 extension/<包名>/audio/die/<武将内部ID>.mp3(可多句),武将条目不用写任何字段。
+- 复制配音用 `noname_copy_audio`:target 必须是 `skill/<内部ID><序号>.mp3` 或 `die/<武将ID><序号>.mp3`;技能配音条目带 `skill` 参数(任务里的技能显示名),交付才计入任务收口。任务消息带「配音/阵亡语音」区块时按列出的句数与路径逐条复制。
+
 ## 扩展骨架(两种,绝不混用;检测:含 game.import( 为老式,含 export default 为新式)
 
 锚点格式(区块化读写与防抄错依赖它,每个技能与其名称/描述条目都这样包):
@@ -81,7 +87,7 @@ export default function () {
 ## 技能三段式(filter → cost → content)
 ```js
 {
-  audio: 2,
+  audio: "ext:包名/audio/skill:2",  // 技能配音:两句,文件 audio/skill/<内部ID>1.mp3、<ID>2.mp3(禁止不带 ext:)
   enable: "phaseUse",        // 主动技;或 trigger: { player: "phaseBegin" }
   usable: 1,
   forced: false, locked: false, frequent: false,

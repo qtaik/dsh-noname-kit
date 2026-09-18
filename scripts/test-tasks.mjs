@@ -253,6 +253,46 @@ try {
   const leftAfter = (await rdFs(bdir)).filter((n) => /\.js$/i.test(n)).length
   ok(leftAfter === 3, '主动清理:仍保留最新 3 个')
 
+  // ── 16) 配音登记与收口门禁:一技能多音频逐条交付 ──
+  const voiced = await tasks.createTask(home, {
+    id: '测试包-10', folder: '测试包', type: 'character', title: '配音武将',
+    skills: [
+      { name: '天罚', desc: '效果', audios: ['D:/a/1.mp3', 'D:/a/2.mp3', 'D:/a/3.mp3'] },
+      { name: '无配音', desc: '效果' },
+    ],
+    dieAudios: ['D:/a/die1.mp3', 'D:/a/die2.mp3'],
+    image: 'D:/pic/v.png',
+  })
+  ok(voiced.ok, '创建带配音的武将任务')
+  ok(voiced.task.skills[0].audios.length === 3 && voiced.task.skills[0].audioFiles.length === 0, '技能配音源路径登记 3 条,交付为空')
+  ok(voiced.task.dieAudios.length === 2 && voiced.task.dieAudioFiles.length === 0, '阵亡语音登记 2 条')
+  const unvoiced = await tasks.createTask(home, {
+    id: '测试包-11', folder: '测试包', type: 'character', title: '无声武将',
+    skills: [{ name: '普通', desc: '效果', audios: 'D:/x.mp3, , D:/y.mp3;D:/z.mp3' }],
+  })
+  ok(unvoiced.task.skills[0].audios.length === 3 && unvoiced.task.skills[0].audios[0] === 'D:/x.mp3', '配音路径按逗号/分号拆分并去空')
+  await tasks.markSkillsWritten(home, { taskId: '测试包-10', skills: ['天罚', '无配音'] })
+  await tasks.setSkillStatus(home, { taskId: '测试包-10', skill: '天罚', status: 'confirmed' })
+  const c4 = await tasks.setSkillStatus(home, { taskId: '测试包-10', skill: '无配音', status: 'confirmed' })
+  ok(c4.ok && !c4.autoCompleted && c4.task.status === 'open', '全确认但配音未交付 → 不自动完成')
+  const p1 = await tasks.setSkillAudioFiles(home, { taskId: '测试包-10', skill: '天罚', files: ['skill/tf1.mp3'] })
+  ok(p1.ok && !p1.autoCompleted, '配音部分交付(1/3)仍不自动完成')
+  const p2 = await tasks.setSkillAudioFiles(home, { taskId: '测试包-10', skill: '天罚', files: ['skill/tf2.mp3', 'skill/tf3.mp3'] })
+  ok(p2.ok && p2.task.skills[0].audioFiles.length === 3 && !p2.autoCompleted, '技能配音交付齐全(3/3),但阵亡语音未交付仍不完成')
+  const miss = await tasks.setSkillAudioFiles(home, { taskId: '测试包-10', skill: '不存在', files: ['skill/x.mp3'] })
+  ok(!miss.ok, '配音登记到不存在的技能被拒')
+  const d1 = await tasks.setDieAudioFiles(home, { taskId: '测试包-10', files: ['die/wj1.mp3'] })
+  ok(d1.ok && !d1.autoCompleted, '阵亡语音部分交付(1/2)仍不自动完成')
+  const d2 = await tasks.setDieAudioFiles(home, { taskId: '测试包-10', files: ['die/wj1.mp3', 'die/wj2.mp3'] })
+  ok(d2.ok && d2.autoCompleted === true && d2.task.status === 'done', '阵亡语音交付齐全 → 全条件满足自动完成置 done')
+  ok(d2.task.dieAudioFiles.length === 2, '重复文件名去重后计数正确')
+  // 老任务兼容:audios 为空数组(或存量任务缺失该字段)时不卡门禁
+  const legacy = await tasks.createTask(home, { id: '测试包-12', folder: '测试包', type: 'character', title: '旧任务', skills: [{ name: '老技能', desc: '' }], image: 'D:/pic/old.png' })
+  ok(legacy.task.skills[0].audios.length === 0, '未填配音的技能 audios 为空数组')
+  await tasks.markSkillsWritten(home, { taskId: '测试包-12', skills: ['老技能'] })
+  const c5 = await tasks.setSkillStatus(home, { taskId: '测试包-12', skill: '老技能', status: 'confirmed' })
+  ok(c5.ok && c5.autoCompleted === true && c5.task.status === 'done', '空 audios 不卡门禁:全确认+有图直接自动完成')
+
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })

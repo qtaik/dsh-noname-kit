@@ -173,6 +173,33 @@ export function validateExtensionCode({ code, style, kind, folder, idPrefix }) {
     }
   }
 
+  // 2.6) 配音路径约定:代码区的 audio 字段不带 ext: 会去游戏本体 audio/ 找文件
+  // (扩展音频只应放扩展包内 audio/,规范禁止)。字符串里的 "ext:..." 不受影响;
+  // 数组形式 audio:["其他技能",n] 是引用别处配音的合法写法,不报。
+  {
+    const mask = buildCodeMask(code)
+    let masked = ''
+    for (let i = 0; i < code.length; i++) masked += mask[i] ? ' ' : code[i]
+    const bareAudio = (masked.match(/\baudio\s*:\s*(?:true\b|\d+)/g) || []).length
+    if (bareAudio > 0) {
+      warnings.push({
+        message: `检测到 ${bareAudio} 处 audio 字段未用 ext: 路径(如 audio: 2)——引擎会去游戏本体 audio/skill/ 找文件,扩展的音频只放扩展包内。请写成 audio: "ext:<包名>/audio/skill:<句数>",并把 mp3 放进包内 audio/skill/(命名:<技能内部ID>从1连号.mp3)。`,
+      })
+    }
+    if (folder) {
+      const pkgRefs = new Set()
+      for (const m of code.matchAll(/["']([^"']*)["']/g)) {
+        for (const mm of m[1].matchAll(/ext:([^/\\'":]+)/g)) pkgRefs.add(mm[1].trim())
+      }
+      const wrong = [...pkgRefs].filter((p) => p && p !== folder)
+      if (wrong.length > 0) {
+        warnings.push({
+          message: `检测到 ext: 路径指向了别的包名(${wrong.slice(0, 3).join('、')})——本包是「${folder}」,扩展内引用应写成 ext:${folder}/audio/...,否则会去别的包找文件。`,
+        })
+      }
+    }
+  }
+
   // 3) name 字段与文件夹一致性
   const name = extractName(code)
   if (!name) {

@@ -96,7 +96,7 @@ window.__ModuleLoader__.load({
       var send = props.send;
       var state = React.useState({
         mode: 'new', type: 'character', folder: '我的扩展', taskId: '', title: '', idPrefix: '',
-        charInfo: '', skills: [{ name: '', desc: '' }], image: '', usedIds: [], notes: [],
+        charInfo: '', skills: [{ name: '', desc: '', audios: '' }], image: '', dieAudios: '', usedIds: [], notes: [],
         pileJoin: false, pileRows: [{ suit: 'spade', point: '' }],
         style: 'classic', writeMode: 'auto',
         reference: '', busy: false, err: '',
@@ -233,7 +233,7 @@ window.__ModuleLoader__.load({
         }, function (e) { patch({ busy: false, currentInfo: '❌ 建立失败: ' + (e && e.message || e) }) });
       };
 
-      // 技能列表行:{ name, desc }
+      // 技能列表行:{ name, desc, audios }(audios = 配音源路径,逗号分隔的原始输入)
       var addSkill = function () { patch({ skills: form.skills.concat([{ name: '', desc: '' }]) }) };
       var removeSkill = function (idx) {
         var skills = form.skills.filter(function (row, i) { return i !== idx });
@@ -273,17 +273,22 @@ window.__ModuleLoader__.load({
         setForm(function (prev) { return Object.assign({}, prev, { busy: true, err: '' }) });
 
         var type = form.type;
+        // 配音源路径:逗号/分号/换行分隔,一条到多条随意(服务端截到 10 条)
+        var splitAudioPaths = function (v) {
+          return String(v || '').split(/[,，;；\n]/).map(function (t) { return t.trim() }).filter(Boolean).slice(0, 10);
+        };
         var skills = editingExisting
           ? [].concat(
               form.editNotes.trim() ? [{ name: '修改 ' + form.entryId, desc: form.editNotes.trim() }] : [],
               form.pickedSkills.map(function (p) { return { name: p.name || p.id, desc: p.note.trim() } }),
               form.addSkills && type === 'character'
-                ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim() } })
+                ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim(), audios: splitAudioPaths(s.audios) } })
                 : []
             )
           : (type === 'character'
-          ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim() } })
+          ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim(), audios: splitAudioPaths(s.audios) } })
           : [{ name: form.title.trim() || '新卡牌', desc: (form.skills[0] && form.skills[0].desc ? form.skills[0].desc.trim() : '') }]);
+        var dieAudioList = (type === 'character' && !editingExisting) ? splitAudioPaths(form.dieAudios) : [];
 
         // 游戏目录随任务消息下发给 AI(persona complete:true 会压掉插件 systemPrompt,
         // systemPrompt 里的环境小节到不了模型——任务消息是唯一保证可见的通道)
@@ -301,7 +306,7 @@ window.__ModuleLoader__.load({
             : { join: false, entries: '' };
           return fetch('/noname-kit-api/tasks', {
             method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: taskId, folder: form.folder.trim(), type: type, title: form.title.trim(), charInfo: form.charInfo.trim(), pile: pile, idPrefix: form.idPrefix.trim(), skills: skills, image: form.image.trim(), target: editingExisting ? { kind: type, id: form.entryId } : null, writeMode: form.writeMode }),
+            body: JSON.stringify({ id: taskId, folder: form.folder.trim(), type: type, title: form.title.trim(), charInfo: form.charInfo.trim(), pile: pile, skills: skills, image: form.image.trim(), dieAudios: dieAudioList, target: editingExisting ? { kind: type, id: form.entryId } : null, writeMode: form.writeMode }),
           }).then(function (r) { return r.json() }).then(function (reg) {
             if (!reg.ok) throw new Error(reg.error || '任务注册失败');
             // gameDir/gameDirPosix 必须随 ctx 传给下一个 then(各自独立作用域,
@@ -314,6 +319,19 @@ window.__ModuleLoader__.load({
           var gameDir = ctx2.gameDir || '';
           var gameDirPosix = ctx2.gameDirPosix || '';
           var skillLines = skills.map(function (s, i) { return (i + 1) + '. ' + s.name + (s.desc ? ':' + s.desc : '') }).join('\n');
+          // 配音区块:只列登记了配音的技能;目标文件名由 AI 按内部 ID 命名(此处不知道 ID)
+          var audioLines = skills.filter(function (s) { return s.audios && s.audios.length })
+            .map(function (s) { return '- ' + s.name + '(' + s.audios.length + ' 句): ' + s.audios.join('、') }).join('\n');
+          var audioBlock = audioLines
+            ? '── 配音(技能发动语音,只放扩展包内 audio/,禁止动本体目录) ──\n' + audioLines +
+              '\n技能代码必须写 audio: "ext:' + form.folder.trim() + '/audio/skill:<句数>"(如两句就是 :2;禁止写不带 ext: 的 audio,那会去游戏本体目录找文件)。' +
+              '实现完成后用 noname_copy_audio 把每句复制为 audio/skill/<技能内部ID><序号>.mp3(序号从 1 连号,句数与 audio 字段一致),调用时带上任务ID与归属技能名(任务里的技能显示名)。'
+            : '';
+          var dieAudioBlock = dieAudioList.length
+            ? '── 阵亡语音(零代码,引擎自动播放) ──\n文件: ' + dieAudioList.join('、') +
+              '\n实现完成后用 noname_copy_audio 复制为 audio/die/<武将内部ID>.mp3(多句:<ID>1.mp3、<ID>2.mp3…)。' +
+              '扩展武将的阵亡语音由引擎默认自动查找,武将代码无需写任何字段;调用时带任务ID,target 以 die/ 开头。'
+            : '';
           var pileText;
           if (type === 'card' && pile.join && pile.entries) pileText = '加入牌堆,条目(每行「花色 点数」;花色只允许 spade/heart/club/diamond/none,none=无花色):\n' + pile.entries;
           else if (type === 'card') pileText = '不加入牌堆(仅作技能素材牌)';
@@ -342,6 +360,7 @@ window.__ModuleLoader__.load({
               '── 任务技能节点(收口时 noname_skills_written 的 skills 参数必须逐字使用这些名称) ──\n' + skills.map(function (s) { return '- ' + s.name }).join('\n'),
               form.reference.trim() ? '── 用户提供的参考代码 ──\n' + form.reference.trim() : '',
               form.image.trim() ? '── 图片 ──\n用户已提供图片路径: ' + form.image.trim() + '\n实现完成后用 noname_copy_images 复制进扩展包 image/ 目录,按目标条目ID(' + form.entryId + ')命名文件,调用时带上任务ID。' : '',
+              (audioBlock || ''),
               '── 执行要求(确认协议,逐步执行)──',
               '第 0 步【需求理解确认·硬门禁】:先 noname_read_extension 按块只读目标条目原文(' + (entryFile !== 'extension.js' ? 'file:\'' + entryFile + '\', ' : '') + 'block:\'' + type + ':' + form.entryId + '\')' + (pickedSkillRows.length ? '与各勾选技能原文(block:\'skill:<技能ID>\'' + (entryFile !== 'extension.js' ? ';技能可能在其他文件,用 listBlocks 定位后带对应 file' : '') + ')' : '') + '(定位不准时先传 listBlocks 看区块目录,多文件包的目录每项带 file 归属),把原文与需求对照,逐项输出【需求理解确认】(' + (form.editNotes.trim() ? '条目项:改什么 / 改动前→改动后 / 影响面' : '') + (form.editNotes.trim() && pickedSkillRows.length ? ';' : '') + (pickedSkillRows.length ? '修改技能项:改动前→改动后' : '') + ((pickedSkillRows.length || form.editNotes.trim()) && newSkillRows.length ? ';' : '') + (newSkillRows.length ? '新增技能按新技能模板逐条:触发/频率/目标/数值/边界' : '') + ')。输出后停下等待用户明确回复确认。',
               '有任何歧义必须先用 ask_user_question 提问;禁止猜测。ask_user_question 的回答只消除歧义、不算确认——澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」后才能动笔。',
@@ -367,6 +386,8 @@ window.__ModuleLoader__.load({
               pileText,
               form.reference.trim() ? '── 用户提供的参考代码 ──\n' + form.reference.trim() : '',
               form.image.trim() ? '── 图片 ──\n用户已提供图片路径: ' + form.image.trim() + '\n实现完成后用 noname_copy_images 复制进扩展包 image/ 目录,按 武将ID/卡牌ID 命名文件,调用时带上任务ID。' : '',
+              (audioBlock || ''),
+              (dieAudioBlock || ''),
               '── 执行要求(确认协议,逐步执行)──',
               '第 0 步【需求理解确认·硬门禁】:先 noname_read_extension 读取当前代码(大文件先传 listBlocks 看区块目录,再按 block:\'skill:ID\' 只读涉及的块),然后逐技能输出【需求理解确认】(每个技能一条:触发/频率/目标/数值/边界)。输出后停下等待用户明确回复确认。',
               '有任何歧义必须先用 ask_user_question 提问;禁止猜测。ask_user_question 的回答只消除歧义、不算确认——澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」后才能动笔。',
@@ -392,6 +413,8 @@ window.__ModuleLoader__.load({
               pileText,
               form.reference.trim() ? '── 用户提供的参考代码 ──\n' + form.reference.trim() : '',
               form.image.trim() ? '── 图片 ──\n用户已提供图片路径: ' + form.image.trim() + '\n实现完成后用 noname_copy_images 复制进扩展包 image/ 目录,按 武将ID/卡牌ID 命名文件,调用时带上任务ID。' : '',
+              (audioBlock || ''),
+              (dieAudioBlock || ''),
               '── 执行要求(确认协议,逐步执行)──',
               '第 0 步【需求理解确认·硬门禁】:逐技能输出【需求理解确认】(每个技能一条:触发/频率/目标/数值/边界)。输出后停下等待用户明确回复确认。',
               '有任何歧义必须先用 ask_user_question 提问;禁止猜测。ask_user_question 的回答只消除歧义、不算确认——澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」后才能动笔。',
@@ -423,7 +446,8 @@ window.__ModuleLoader__.load({
                 h('button', { className: 'nnk-smallbtn', onClick: function () { removeSkill(idx) }, disabled: form.skills.length <= 1 }, '✕')
               ),
               h('input', { className: 'nnk-input', value: s.name, placeholder: '技能名(显示名,例: 挥砍)', style: { marginBottom: '4px' }, onChange: function (ev) { setSkill(idx, 'name')(ev.target.value) } }),
-              h('textarea', { className: 'nnk-textarea', style: { minHeight: '60px' }, value: s.desc, placeholder: '效果:触发/频率/目标/数值/边界', onChange: function (ev) { setSkill(idx, 'desc')(ev.target.value) } })
+              h('textarea', { className: 'nnk-textarea', style: { minHeight: '60px' }, value: s.desc, placeholder: '效果:触发/频率/目标/数值/边界', onChange: function (ev) { setSkill(idx, 'desc')(ev.target.value) } }),
+              h('input', { className: 'nnk-input', value: s.audios || '', placeholder: '配音文件(可选;本地 mp3 路径,多句用逗号分隔)——复制进包内 audio/skill/ 后按 内部ID1.mp3、内部ID2.mp3 编号', style: { marginTop: '4px' }, onChange: function (ev) { setSkill(idx, 'audios')(ev.target.value) } })
             );
           }),
           h('button', { className: 'nnk-smallbtn', onClick: addSkill }, '➕ 添加技能')
@@ -490,6 +514,10 @@ window.__ModuleLoader__.load({
           e('label', 'nnk-label', '图片路径(武将立绘/卡牌图;可选)'),
           h('input', { className: 'nnk-input', value: form.image, placeholder: '例: D:\\pic\\hero.png —— AI 复制进扩展包 image/ 后按 ID 命名', onChange: function (ev) { set('image')(ev.target.value) } })
         ),
+        !editingExisting && form.type === 'character' ? h('div', { key: 'dieaudio' },
+          e('label', 'nnk-label', '阵亡语音文件(可选;本地 mp3,多句逗号分隔)'),
+          h('input', { className: 'nnk-input', value: form.dieAudios, placeholder: '例: D:\\audio\\die1.mp3 —— 复制进扩展包 audio/die/ 后按武将ID命名,引擎自动播放', onChange: function (ev) { set('dieAudios')(ev.target.value) } })
+        ) : null,
         editingExisting ? null : (form.type === 'character' ? skillRows() : [
           e('label', 'nnk-label', '卡牌效果'),
           h('textarea', { className: 'nnk-textarea', value: form.skills[0].desc, placeholder: '效果:类型/花色点数需求/效果/边界', onChange: (function () {
@@ -1004,7 +1032,7 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({ taskId: task.id, skill: skill, status: 'confirmed' }),
         }).then(function (r) { return r.json() }).then(function (b) {
           if (!b.ok) { setD({ err: b.error || '操作失败' }); return }
-          setD({ msg: b.autoCompleted ? '🎉 「' + task.id + '」全部技能确认且图片就位,自动完成并归档!' : '' });
+          setD({ msg: b.autoCompleted ? '🎉 「' + task.id + '」全部技能确认且图片/配音就位,自动完成并归档!' : '' });
           load();
         }, function (error) { setD({ err: error && error.message || String(error) }) });
       };
@@ -1019,7 +1047,31 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({ taskId: task.id, folder: task.folder, source: p.trim(), fileName: name.trim() }),
         }).then(function (r) { return r.json() }).then(function (b) {
           if (!b.ok) { setD({ err: b.error || '补图失败' }); return }
-          setD({ msg: '📷 「' + task.id + '」图片已复制进扩展包: ' + (b.copied || []).join(', ') + (b.autoCompleted ? ' —— 🎉 全部确认+图片就位,自动完成并归档!' : '') });
+          setD({ msg: '📷 「' + task.id + '」图片已复制进扩展包: ' + (b.copied || []).join(', ') + (b.autoCompleted ? ' —— 🎉 全部确认+图片配音就位,自动完成并归档!' : '') });
+          load();
+        }, function (error) { setD({ err: error && error.message || String(error) }) });
+      };
+      /** 补配音:源路径 → 目标(skill/…或die/…)→ 技能配音再问归属技能。
+       * 与补图同语义:复制进包 + 登记任务一步到位,补齐触发自动完成。 */
+      var addAudio = function (task) {
+        var p = window.prompt('配音文件本地路径(mp3):', '');
+        if (!p || !p.trim()) return;
+        var t = window.prompt('存入包内的目标(相对 audio/ 目录):\n技能配音: skill/内部ID1.mp3(多句从 1 连号)\n阵亡语音: die/武将ID.mp3', 'skill/');
+        if (!t || !t.trim()) return;
+        t = t.trim().replace(/\\/g, '/');
+        var skill = '';
+        if (/^skill\//i.test(t)) {
+          var names = (Array.isArray(task.skills) ? task.skills : []).map(function (s) { return s.name }).join('、');
+          skill = window.prompt('这句配音属于哪个技能?(填任务里的技能显示名:\n' + names + ')', '');
+          if (!skill || !skill.trim()) return;
+          skill = skill.trim();
+        }
+        fetch('/noname-kit-api/tasks/audio', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ taskId: task.id, folder: task.folder, source: p.trim(), target: t, skill: skill }),
+        }).then(function (r) { return r.json() }).then(function (b) {
+          if (!b.ok) { setD({ err: b.error || '补配音失败' }); return }
+          setD({ msg: '🔊 「' + task.id + '」配音已复制进扩展包: ' + (b.copied || []).join(', ') + (b.autoCompleted ? ' —— 🎉 全部确认+图片配音就位,自动完成并归档!' : '') });
           load();
         }, function (error) { setD({ err: error && error.message || String(error) }) });
       };
@@ -1070,6 +1122,7 @@ window.__ModuleLoader__.load({
         var warn = [];
         if (!task.image) warn.push('未登记图片');
         if (skills.length && confirmed < skills.length) warn.push('技能确认 ' + confirmed + '/' + skills.length);
+        if (audioNeed(task)) warn.push('有已登记未交付的配音');
         if (warn.length && !window.confirm('「' + task.id + '」' + warn.join('、') + '。\n确定仍要标记完成并归档吗?')) return;
         fetch('/noname-kit-api/tasks/complete', {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1085,7 +1138,7 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({ taskId: task.id }),
         }).then(function (r) { return r.json() }).then(function (body) {
           if (!body.ok) { setD({ err: body.error || '重开失败' }); return }
-          setD({ msg: '🔁 「' + task.id + '」已重开——补图或重新确认后可再次收口' });
+          setD({ msg: '🔁 「' + task.id + '」已重开——补图/补配音或重新确认后可再次收口' });
           load();
         }, function (error) { setD({ err: error && error.message || String(error) }) });
       };
@@ -1106,6 +1159,16 @@ window.__ModuleLoader__.load({
       var open = box.list.filter(function (t) { return t.status === 'open' });
       var done = box.list.filter(function (t) { return t.status !== 'open' });
 
+      /** 任务是否还有已登记未交付的配音(技能级或阵亡语音):决定「🔊 补配音」按钮与提示。 */
+      var audioNeed = function (task) {
+        var lack = (Array.isArray(task.skills) ? task.skills : []).some(function (s) {
+          return s.audios && s.audios.length && (!s.audioFiles || s.audioFiles.length < s.audios.length);
+        });
+        var dieLack = task.dieAudios && task.dieAudios.length &&
+          (!task.dieAudioFiles || task.dieAudioFiles.length < task.dieAudios.length);
+        return lack || dieLack;
+      };
+
       var renderRow = function (task, isDoneSection) {
         var expanded = box.expanded === task.id;
         var fbTarget = box.fbFor && box.fbFor.id === task.id ? box.fbFor : null;
@@ -1118,14 +1181,15 @@ window.__ModuleLoader__.load({
           ),
           e('div', 'nnk-taskmeta', '📂 ' + task.folder + ' · 返工 ' + task.rounds + ' 轮 · ' + fmt(task.updatedAt)),
           skills.length
-            ? e('div', 'nnk-taskmeta', '技能确认进度: ' + skills.filter(function (s) { return s.status === 'confirmed' }).length + '/' + skills.length + (!task.image && !task.target ? ' · 📷 缺图片(不登记图片不会自动完成)' : (!task.image && task.target ? ' · 编辑任务:不涉及图片' : '')))
+            ? e('div', 'nnk-taskmeta', '技能确认进度: ' + skills.filter(function (s) { return s.status === 'confirmed' }).length + '/' + skills.length + (!task.image && !task.target ? ' · 📷 缺图片(不登记图片不会自动完成)' : (!task.image && task.target ? ' · 编辑任务:不涉及图片' : '')) + (audioNeed(task) ? ' · 🔊 缺配音(已登记的配音复制齐才会自动完成)' : ''))
             : null,
           h('div', {},
             h('button', { className: 'nnk-smallbtn', onClick: function () { setD({ expanded: expanded ? null : task.id, fbFor: null, msg: '' }) } }, expanded ? '收起' : (skills.length ? '展开技能树' : '展开')),
             !isDoneSection ? h('button', { className: 'nnk-smallbtn', onClick: function () { setD({ expanded: task.id, fbFor: fbTarget && !fbTarget.skill ? null : { id: task.id, skill: '' }, issue: '', msg: '' }) } }, '🔁 反馈') : null,
             !isDoneSection && !task.image ? h('button', { className: 'nnk-smallbtn', onClick: function () { addImage(task) } }, '📷 补图') : null,
+            !isDoneSection && audioNeed(task) ? h('button', { className: 'nnk-smallbtn', onClick: function () { addAudio(task) } }, '🔊 补配音') : null,
             !isDoneSection ? h('button', { className: 'nnk-smallbtn', onClick: function () { markDone(task) } }, '✅ 标记完成') : null,
-            isDoneSection ? h('button', { className: 'nnk-smallbtn', title: '回到进行中:可补图或重新确认后再次收口' , onClick: function () { reopenTask(task) } }, '🔁 重开') : null,
+            isDoneSection ? h('button', { className: 'nnk-smallbtn', title: '回到进行中:可补图/补配音或重新确认后再次收口' , onClick: function () { reopenTask(task) } }, '🔁 重开') : null,
             h('button', { className: 'nnk-smallbtn', onClick: function () { removeTask(task) } }, '🗑 删除')
           ),
           expanded && skills.length ? skills.map(function (s, i) {

@@ -3,13 +3,18 @@
  *   task = { id, folder, type: 'character'|'card', title, charInfo, image,
  *            target: { kind: 'character'|'card', id } | null,
  *            pile: { join: boolean, entries: string(每行「花色 点数」) },
- *            skills: [{name, desc, status: open|written|confirmed, rounds, feedbacks[] }],
+ *            skills: [{name, desc, audios[], audioFiles[], status, rounds, feedbacks[] }],
+ *            dieAudios[], dieAudioFiles[],
  *            status: open|done, writeMode: auto|manual,
- *            rounds, feedbacks[], notes[], summary?, createdAt, updatedAt }
+ *            rounds, feedbacks[], notes[] (skills_written/complete 后补), summary?, createdAt, updatedAt }
+ * audios = 技能配音的本地源路径清单(用户表单登记);audioFiles = 已复制进包的
+ *   目标文件,存 audio/ 下相对路径(形如 skill/<内部ID>1.mp3);dieAudios/dieAudioFiles
+ *   同理(阵亡语音,任务级,die/<武将ID>.mp3)。登记了配音的任务,对应文件全部
+ *   复制到位才算满足自动完成;未登记配音的任务不受影响。
  * target 非空 = 「编辑已有条目」任务:只改该条目对应区块,其他内容不动;
- * 这类任务豁免图片条件(立绘通常已有)。
+ * 这类任务豁免图片条件(立绘通常已有);配音登记通常也不出现在这类任务上。
  * 每个技能独立状态机:待实现(open)→ 待测试(written)→ 确认无误(confirmed);
- * 反馈把技能打回 open 并记录日志。全部技能 confirmed 且图片就位 → 任务自动 done。
+ * 反馈把技能打回 open 并记录日志。全部技能 confirmed 且图片/配音就位 → 任务自动 done。
  * 删除任务 = 从登记处移除整树;不动扩展代码/备份/history 归档。
  */
 import { readFile, writeFile } from 'node:fs/promises'
@@ -17,6 +22,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 
 const ID_RE = /^[\w\u4e00-\u9fff-]{1,64}$/
+const MAX_AUDIOS_PER_TARGET = 10
 
 function tasksPath(dshHome) {
   return join(resolveHome(dshHome), 'noname-kit.tasks.json')
@@ -47,10 +53,18 @@ async function writeRegistry(dshHome, registry) {
 
 const SKILL_STATUS = new Set(['open', 'written', 'confirmed'])
 
+/** 清洗配音源路径清单:逗号/分号/换行分隔,去空,截断长度与条数。 */
+function cleanAudioPaths(value) {
+  const list = Array.isArray(value) ? value : String(value || '').split(/[,，;；\n]/)
+  return list.map((p) => String(p || '').trim().slice(0, 500)).filter(Boolean).slice(0, MAX_AUDIOS_PER_TARGET)
+}
+
 function newSkill(item) {
   return {
     name: String((item && item.name) || '').slice(0, 60),
     desc: String((item && item.desc) || '').slice(0, 2000),
+    audios: cleanAudioPaths(item && item.audios),
+    audioFiles: [],
     status: 'open',
     rounds: 0,
     feedbacks: [],
@@ -59,13 +73,20 @@ function newSkill(item) {
 
 function touch(task) { task.updatedAt = Date.now() }
 
-/** 是否满足自动完成:全部技能 confirmed 且图片就位。
+/** 是否满足自动完成:全部技能 confirmed 且图片/配音就位。
  * 编辑已有条目任务(target 非空)豁免图片条件:立绘通常早已存在,用户没登记
  * 图片 = 本次不涉及图——实测测试包-03 全确认后因没填图片永远卡在进行中。
- * (编辑+换图场景用户会填图片路径,登记后照旧走 copy_images/补图链路。) */
+ * (编辑+换图场景用户会填图片路径,登记后照旧走 copy_images/补图链路。)
+ * 配音门禁:按登记计量——技能登记了 N 条源路径,就要交付 ≥N 个目标文件
+ * (audioFiles/dieAudioFiles);没登记配音的任务完全不受影响。 */
 function isCompletable(task) {
   const imageOk = task.target ? true : Boolean(task.image)
-  return imageOk && task.skills.length > 0 && task.skills.every((s) => s.status === 'confirmed')
+  const audioOk = task.skills.every((s) =>
+    !(Array.isArray(s.audios) && s.audios.length) ||
+    (Array.isArray(s.audioFiles) && s.audioFiles.length >= s.audios.length))
+  const dieOk = !(Array.isArray(task.dieAudios) && task.dieAudios.length) ||
+    (Array.isArray(task.dieAudioFiles) && task.dieAudioFiles.length >= task.dieAudios.length)
+  return imageOk && audioOk && dieOk && task.skills.length > 0 && task.skills.every((s) => s.status === 'confirmed')
 }
 
 function descriptionOf(skills) {
@@ -78,7 +99,7 @@ function descriptionOf(skills) {
  * target 可选 { kind: 'character'|'card', id }:「编辑已有条目」任务,非法值归 null。
  * writeMode:'manual' 存手动,其余归 'auto'——写入工具以此为准(AI 传参不覆盖)。
  */
-export async function createTask(dshHome, { id, folder, type, title, charInfo, pile, skills, image, target, writeMode }) {
+export async function createTask(dshHome, { id, folder, type, title, charInfo, pile, skills, image, dieAudios, target, writeMode }) {
   if (typeof id !== 'string' || !ID_RE.test(id.trim())) {
     return { ok: false, error: `任务ID「${id}」不合法:只允许中文/字母/数字/下划线/连字符,长度 1-64。` }
   }
@@ -107,6 +128,8 @@ export async function createTask(dshHome, { id, folder, type, title, charInfo, p
     charInfo: String(charInfo || '').slice(0, 500),
     pile: pile && pile.join ? { join: true, entries: String(pile.entries || '').slice(0, 2000) } : { join: false, entries: '' },
     image: String(image || '').trim().slice(0, 500),
+    dieAudios: cleanAudioPaths(dieAudios),
+    dieAudioFiles: [],
     skills: skillList,
     writeMode: writeMode === 'manual' ? 'manual' : 'auto',
     status: 'open',
@@ -259,6 +282,40 @@ export async function setTaskImage(dshHome, { taskId, image }) {
   const task = registry.tasks.find((t) => t.id === taskId)
   if (!task) return { ok: false, error: `找不到任务「${taskId}」` }
   task.image = String(image || '').slice(0, 500)
+  const autoCompleted = isCompletable(task) && task.status !== 'done'
+  if (autoCompleted) task.status = 'done'
+  touch(task)
+  await writeRegistry(dshHome, registry)
+  return { ok: true, task, autoCompleted }
+}
+
+/** 追加任务级阵亡语音的已交付文件(audio/ 下相对路径,形如 die/<名>.mp3;去重)。
+ * 与 setTaskImage 同语义:交付满足条件时自动置 done,归档由调用方完成。 */
+export async function setDieAudioFiles(dshHome, { taskId, files }) {
+  const registry = await readRegistry(dshHome)
+  const task = registry.tasks.find((t) => t.id === taskId)
+  if (!task) return { ok: false, error: `找不到任务「${taskId}」` }
+  const list = Array.isArray(files) ? files : [files]
+  const clean = list.map((f) => String(f || '').trim()).filter(Boolean)
+  task.dieAudioFiles = [...new Set([...(task.dieAudioFiles || []), ...clean])].slice(0, 50)
+  const autoCompleted = isCompletable(task) && task.status !== 'done'
+  if (autoCompleted) task.status = 'done'
+  touch(task)
+  await writeRegistry(dshHome, registry)
+  return { ok: true, task, autoCompleted }
+}
+
+/** 追加某个技能配音的已交付文件(audio/ 下相对路径,形如 skill/<名>.mp3;去重)。
+ * skill 用任务里的技能显示名(与 setSkillStatus 同一 key);找不到返回 error 并附任务技能名清单。 */
+export async function setSkillAudioFiles(dshHome, { taskId, skill, files }) {
+  const registry = await readRegistry(dshHome)
+  const task = registry.tasks.find((t) => t.id === taskId)
+  if (!task) return { ok: false, error: `找不到任务「${taskId}」` }
+  const node = findSkill(task, skill)
+  if (!node) return { ok: false, error: `任务「${taskId}」里没有技能「${skill}」(任务技能名: ${task.skills.map((s) => s.name).join('、') || '无'})` }
+  const list = Array.isArray(files) ? files : [files]
+  const clean = list.map((f) => String(f || '').trim()).filter(Boolean)
+  node.audioFiles = [...new Set([...(node.audioFiles || []), ...clean])].slice(0, 50)
   const autoCompleted = isCompletable(task) && task.status !== 'done'
   if (autoCompleted) task.status = 'done'
   touch(task)

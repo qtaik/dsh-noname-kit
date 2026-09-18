@@ -43,7 +43,7 @@ dsh plugin --profile web add https://github.com/qtaik/dsh-noname-kit.git
 
 ## 使用
 
-新建会话时建议选「无名杀开发模式」preset:六个无名杀工具在该模式下常驻可用,
+新建会话时建议选「无名杀开发模式」preset:七个无名杀工具在该模式下常驻可用,
 开发规范(确认协议、区块化读写、检索纪律)也随之注入。普通会话默认没有这些
 工具——技术上可以通过 dev_tool_search 按需解锁,但规范不会跟着来,所以还是
 建议挂对模式。
@@ -52,8 +52,12 @@ dsh plugin --profile web add https://github.com/qtaik/dsh-noname-kit.git
 新版 ES Module)、填技能描述。提交后 AI 会先给需求理解确认,有歧义会先提问;收到明确的「确认」回复后才会动笔——写完自动校验、写入,并提醒进游戏测试。
 
 游戏里发现问题就在任务列表点「🔁 反馈」,把现象或报错发给 AI;每轮反馈自动
-累计轮次。新建任务在逐技能确认无误、图片也就位后自动归档;编辑已有条目的
-任务不强制补图,技能全部确认后即归档。
+累计轮次。新建任务在逐技能确认无误、图片也就位后自动归档(任务里登记了配音的,
+还要等配音复制进包);编辑已有条目的任务不强制补图,技能全部确认后即归档。
+
+配音支持:表单技能行可填本地 mp3(一句到多句都行),武将还能填阵亡语音;AI 写
+技能时带 audio 字段并把文件复制进扩展包 audio/skill/、audio/die/ 目录——配音文件
+只进扩展包,绝不写游戏本体目录。阵亡语音是零代码的,文件放对就生效。
 
 已有的扩展包不用从零开始:任务模式选「📂 编辑已有扩展包」,选中扩展包后照常
 走确认协议。老文件可以先点「🔨 建立区块索引」,给条目所在的 .js 文件插入锚点
@@ -65,7 +69,7 @@ dsh plugin --profile web add https://github.com/qtaik/dsh-noname-kit.git
 「改动描述」留给武将本身的变化(体力、护甲、名称等)。编辑任务不强制补图,
 技能全部确认后任务即自动完成。
 
-### 六个 AI 工具
+### 七个 AI 工具
 
 | 工具 | 作用 |
 |---|---|
@@ -73,8 +77,9 @@ dsh plugin --profile web add https://github.com/qtaik/dsh-noname-kit.git
 | noname_validate | 语法编译检查 + 静态规则校验(不执行代码) |
 | noname_read_extension | 读扩展当前代码(先读后改) |
 | noname_write_extension | 唯一写入通道:先校验,error 拒写,覆盖前自动备份 |
-| noname_skills_written | 标记技能「已写入待测试」,全部确认后自动收口(新建任务还需图片就位) |
+| noname_skills_written | 标记技能「已写入待测试」,全部确认后自动收口(新建任务还需图片/配音就位) |
 | noname_copy_images | 把本地图片复制进扩展包 image/ 目录 |
+| noname_copy_audio | 把本地配音 mp3 复制进扩展包 audio/skill、audio/die 目录(不碰本体) |
 
 普通 write/edit/bash 对游戏 extension 目录的写入会被守卫拒绝,不用担心
 AI 绕过校验直接改文件。
@@ -110,6 +115,9 @@ GitHub tag 取,查不通只显示一行「检查失败」,不影响使用;「启
 - 运行期错误(逻辑对不对)插件管不了,仍要进游戏验证后走「问题反馈」。
 - 引擎默认不去扩展的 image/ 子目录找立绘,武将/卡牌定义里要显式写 img 字段,
   工坊的任务流程和规范文本里都有说明。
+- 技能配音的 audio 字段必须写扩展包内路径(audio: "ext:包名/audio/skill:句数"),
+  不带 ext: 的写法会被校验器警告(那会去游戏本体 audio/ 目录找文件);阵亡语音
+  则是零代码,mp3 放进包内 audio/die/ 即生效。
 - 新式 ES Module 多文件扩展包(如懒人包预装的英雄杀、杀海拾遗)已支持区块化
   编辑:条目在子目录模块里(`const character = {…}` 形态)也能识别,读写按文件
   进行。仍不支持运行时赋值形态(`pack.skill.xxx = {}`,条目没有字面量可锚)。
@@ -117,9 +125,10 @@ GitHub tag 取,查不通只显示一行「检查失败」,不影响使用;「启
 ## 测试
 
 ```sh
-node scripts/test-tasks.mjs    # 任务状态机,64 项
+node scripts/test-tasks.mjs    # 任务状态机(含配音门禁),79 项
+node scripts/test-audio.mjs    # 配音复制与目标校验,13 项
 node scripts/test-blocks.mjs   # 区块读写,85 项
-node scripts/test-update.mjs   # 版本比较与更新检查,102 项
+node scripts/test-update.mjs   # 版本比较与更新检查,107 项
 node scripts/test-preset.mjs   # preset 自检与安装,59 项
 ```
 

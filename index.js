@@ -24,7 +24,8 @@ import { detectCandidates } from './src/detect.js'
 import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateExtension, prunePackageBackups, listEntries, listEntrySkills } from './src/write.js'
 import { readHistory, archiveTask, listExtensionHistories, recordBackup, deleteNote } from './src/history.js'
 import { copyImages } from './src/images.js'
-import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, completeById, deleteTask, reopenTask, getTask } from './src/tasks.js'
+import { copyAudios, audioTargetKind } from './src/audio.js'
+import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, setSkillAudioFiles, setDieAudioFiles, completeById, deleteTask, reopenTask, getTask } from './src/tasks.js'
 import { bundledPresetDir, installPreset, presetDirOf, presetStatus } from './src/preset.js'
 import { cachedUpdate, checkForUpdate, detectInstall, installHint } from './src/update.js'
 import pkg from './package.json' with { type: 'json' }
@@ -438,6 +439,98 @@ export function apply(ctx, config) {
   }))
 
   ctx.tools.register(defineTool({
+    name: 'noname_copy_audio',
+    description: 'Copy user-provided local voice mp3 files into the extension audio folder (audio/skill for skill voices, audio/die for death voices). NEVER copies into the game core audio directory. Pass taskId (plus skill for skill voices) to record delivery so the task can auto-complete.',
+    parameters: {
+      folder: { type: 'string', required: true, description: 'Extension folder name.' },
+      taskId: { type: 'string', description: 'Task ID from the task message. Passing it records delivery so the task can auto-complete.' },
+      audios: {
+        type: 'array', required: true,
+        description: 'Voice files to copy. One entry per mp3; a skill may have any number of them.',
+        items: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            source: { type: 'string', required: true, description: 'Absolute local source path (.mp3).' },
+            target: { type: 'string', required: true, description: 'audio/ relative path: skill/<skillId><n>.mp3 (n = 1,2,3… matching the audio count in skill code) or die/<characterId><n>.mp3. No other directories, no ..' },
+            skill: { type: 'string', description: 'For skill/ targets: the skill display name from the task message (records delivery to that skill). die/ targets do not need it.' },
+          },
+        },
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: false, properties: {
+        ok: { type: 'boolean', required: true },
+        copied: { type: 'array', items: { type: 'string' } },
+        errors: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+          source: { type: 'string' }, error: { type: 'string', required: true },
+        } } },
+        autoCompleted: { type: 'boolean' },
+      } },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok
+          ? `已复制 ${value.copied.length} 个配音到扩展包 audio/ 目录。${value.autoCompleted ? '任务已自动完成并归档,无需再调用 noname_skills_written。' : ''}`
+          : `配音复制失败: ${(value.errors || []).map((e) => e.error).join('; ')}`,
+      }],
+    },
+    async execute(args) {
+      if (!active) return { ok: false, errors: [{ error: '未配置 nonameDir,无法复制配音。' }] }
+      const result = await copyAudios(nonameDir, args)
+      if (result.ok && args.taskId) {
+        // 按 target 目录分流登记:skill/ → 对应技能(需 skill 名),die/ → 任务级。
+        // 任一 setter 触发自动完成即记下任务、循环后归档一次——后续 setter 对已
+        // done 的任务返回 autoCompleted=false,不能让它覆盖完成信号。
+        const bySkill = new Map()
+        const dieFiles = []
+        const invalid = []
+        for (const item of args.audios || []) {
+          const target = String(item.target || '').replace(/\\/g, '/')
+          const kind = audioTargetKind(target)
+          const skill = String(item.skill || '').trim()
+          if (kind === 'skill' && skill) {
+            const list = bySkill.get(skill) || []
+            list.push(target)
+            bySkill.set(skill, list)
+          } else if (kind === 'die') {
+            dieFiles.push(target)
+          } else {
+            invalid.push({ source: item.source, error: kind === 'skill'
+              ? `target「${target}」是技能配音但没带 skill 参数(任务里的技能显示名),该句已复制但交付未登记`
+              : `target「${target}」不是 skill/或die/ 开头,无法归属` })
+          }
+        }
+        let completedTask = null
+        let setterError = null
+        for (const [skill, files] of bySkill) {
+          const r = await setSkillAudioFiles(dshHomeDir, { taskId: args.taskId, skill, files })
+          if (r.ok) { if (r.autoCompleted) completedTask = r.task } else setterError = `${skill}: ${r.error}`
+        }
+        if (dieFiles.length) {
+          const r = await setDieAudioFiles(dshHomeDir, { taskId: args.taskId, files: dieFiles })
+          if (r.ok) { if (r.autoCompleted) completedTask = r.task } else setterError = r.error
+        }
+        if (invalid.length) {
+          result.errors = (result.errors || []).concat(invalid)
+          result.ok = false
+        }
+        if (setterError) {
+          result.errors = (result.errors || []).concat([{ source: '', error: setterError }])
+          result.ok = false
+        }
+        if (completedTask) {
+          result.autoCompleted = true
+          await archiveTask(nonameDir, {
+            folder: args.folder, taskId: args.taskId, kind: completedTask.type,
+            summary: '全部技能确认无误(配音齐后自动完成)', rounds: completedTask.rounds,
+            notes: completedTask.notes,
+          }).catch(() => ({ totalTasks: 0 }))
+        }
+      }
+      return result
+    },
+  }))
+
+  ctx.tools.register(defineTool({
     name: 'noname_skills_written',
     description: 'Mark task skills as written (awaiting user in-game test). Call after all skills of the task are implemented, validated and written. The task auto-completes when the user confirms every skill.',
     parameters: {
@@ -636,6 +729,36 @@ export function apply(ctx, config) {
           }
           return json(200, { ok: true, autoCompleted: result.autoCompleted, task: result.task, copied: copy.copied, archived: archived.totalTasks })
         }
+        if (req.method === 'POST' && url.pathname === '/noname-kit-api/tasks/audio') {
+          // 补配音 = 复制 mp3 进扩展包 audio/ + 登记进任务(一步到位)。
+          // target 必须带 skill/或die/ 前缀(client 负责拼);skill/ 时 body.skill
+          // 指定归属技能(任务里的技能显示名),die/ 登记到任务级。
+          if (!active) return json(503, { error: 'noname-kit 未配置 nonameDir(或目录无效)' })
+          const body = await readBody()
+          const src = String(body.source || '').trim()
+          const target = String(body.target || '').trim()
+          if (!src) return json(400, { ok: false, error: '配音本地路径为空' })
+          const kind = audioTargetKind(target)
+          if (!kind) return json(400, { ok: false, error: '目标必须是 skill/文件名.mp3 或 die/文件名.mp3' })
+          if (kind === 'skill' && !String(body.skill || '').trim()) {
+            return json(400, { ok: false, error: '技能配音(skill/)需要指定归属技能(skill = 任务里的技能显示名)' })
+          }
+          const copy = await copyAudios(nonameDir, { folder: body.folder, audios: [{ source: src, target }] })
+          if (!copy.ok) return json(400, { ok: false, error: copy.errors.map((e) => e.error).join('; ') })
+          const result = kind === 'skill'
+            ? await setSkillAudioFiles(dshHomeDir, { taskId: body.taskId, skill: body.skill, files: [target] })
+            : await setDieAudioFiles(dshHomeDir, { taskId: body.taskId, files: [target] })
+          if (!result.ok) return json(400, result)
+          let archived = { totalTasks: 0 }
+          if (result.autoCompleted) {
+            archived = await archiveTask(nonameDir, {
+              folder: result.task.folder, taskId: result.task.id, kind: result.task.type,
+              summary: '全部技能确认无误(补配音后自动完成)', rounds: result.task.rounds,
+              notes: result.task.notes,
+            }).catch(() => ({ totalTasks: 0 }))
+          }
+          return json(200, { ok: true, autoCompleted: result.autoCompleted, task: result.task, copied: copy.copied, archived: archived.totalTasks })
+        }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/tasks/delete') {
           if (!active) return json(503, { error: 'noname-kit 未配置 nonameDir(或目录无效)' })
           const body = await readBody()
@@ -660,11 +783,6 @@ export function apply(ctx, config) {
             notes: body.notes, rounds: Math.max(body.rounds || 1, done.task.rounds || 1),
           }).catch(() => ({ totalTasks: 0 }))
           return json(200, { ok: true, task: done.task, totalTasks: archived.totalTasks })
-        }
-        if (req.method === 'POST' && url.pathname === '/noname-kit-api/images/copy') {
-          const body = await readBody()
-          const result = await copyImages(nonameDir, body)
-          return json(result.ok ? 200 : 400, result)
         }
         // 版本与一致性(⚙ 设置页):刻意放在下面这道 503 闸门之前 —— 没配游戏目录
         // 的新用户正是最需要看到「preset 未安装」的时候。
