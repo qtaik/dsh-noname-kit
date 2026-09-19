@@ -16,7 +16,7 @@
  */
 import { createHash } from 'node:crypto'
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
@@ -123,10 +123,28 @@ export function presetStatus({ presetDir, bundledDir }) {
   }
 }
 
+/** preset 备份滚动清理:只保留最新 3 个 .bak-<时间戳>(与扩展包 backup/ 的
+ * 滚动清理同哲学——备份内容都源自插件仓库,git 历史里可溯源,堆多了只是垃圾)。
+ * 只匹配 <presetDir>.bak-* 前缀,不碰兄弟 preset 与任何其他文件;
+ * 清理失败不影响重装本身。 */
+function prunePresetBackups(presetDir) {
+  const PREFIX_KEEP = 3
+  try {
+    const dir = dirname(presetDir)
+    const prefix = `${basename(presetDir)}.bak-`
+    const baks = readdirSync(dir).filter((n) => n.startsWith(prefix)).sort()
+    // 名字尾部是毫秒时间戳(等宽),字典序即时间序;留最新的 PREFIX_KEEP 个
+    for (const name of baks.slice(0, Math.max(0, baks.length - PREFIX_KEEP))) {
+      try { rmSync(join(dir, name), { recursive: true, force: true }) } catch { /* 单个删不掉跳过 */ }
+    }
+  } catch { /* 目录读不到就算了 */ }
+}
+
 /**
  * 安装/重装 preset:先把旧的那份整体备份成兄弟目录(名字带 .bak-<时间戳>,
  * 因为 PRESET_ID 不允许点号,DSH 的 discovery 会明确跳过这类名字,不会在
- * preset 列表里多出一条垃圾),再复制新的一份并盖章。
+ * preset 列表里多出一条垃圾),再复制新的一份并盖章。备份滚动清理只保留
+ * 最新 3 个。
  * 目标位置若是个链接(含 Windows junction)则只删链接本身,绝不递归进目标。
  */
 export function installPreset({ presetDir, bundledDir }) {
@@ -153,6 +171,7 @@ export function installPreset({ presetDir, bundledDir }) {
       } catch (error) {
         return { ok: false, error: `清理旧 preset 失败:${error.message}`, backup }
       }
+      prunePresetBackups(presetDir)
     }
   }
   try {

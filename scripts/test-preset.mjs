@@ -129,6 +129,17 @@ try {
   eq(preset.presetStatus({ presetDir, bundledDir: bundled }).state, 'ok', '重装后恢复 ok')
   eq(preset.presetStatus({ presetDir, bundledDir: bundled }).installedHash, preset.presetStatus({ presetDir, bundledDir: bundled }).bundledHash, '重装后两侧哈希又相同')
 
+  // ── 3.5) 备份滚动清理:连续重装只保留最新 3 个 .bak- ──
+  for (let i = 0; i < 4; i++) {
+    // 间隔几毫秒:备份名含毫秒时间戳,同毫秒会撞名
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+    preset.installPreset({ presetDir, bundledDir: bundled })
+  }
+  const bakAfter = readdirSync(join(home, 'dsh-home', '.agent-presets'))
+    .filter((n) => n.startsWith('noname-dev.bak-'))
+  eq(bakAfter.length, 3, '备份滚动清理:连续重装后只保留最新 3 个 .bak-')
+  ok(!bakAfter.includes(reinstalled.backup.split(/[\\/]/).pop()), '最老的备份已被清掉(内容源自插件仓库,git 历史可溯源)')
+
   // 目标目录不完整时不许安装(宁可不装,也不要留半份)
   const badResult = preset.installPreset({ presetDir: join(home, 'x'), bundledDir: brokenSource })
   ok(!badResult.ok && /不完整/.test(badResult.error), '插件自带 preset 不完整 → 拒绝安装并报错')
