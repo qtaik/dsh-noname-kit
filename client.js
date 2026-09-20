@@ -706,7 +706,9 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({ nonameDir: dir.trim() }),
         }).then(function (r) { return r.json() }).then(function (body) {
           if (!body.ok) throw new Error(body.error || '保存失败');
-          set({ busy: false, msg: '✅ 游戏目录已更新: ' + body.nonameDir });
+          set({ busy: false, msg: body.adjustedFrom
+            ? '✅ 已自动修正:你填的路径结尾多了一层 \\extension,游戏目录已设为上一层 ' + body.nonameDir
+            : '✅ 游戏目录已更新: ' + body.nonameDir });
           load();
         }, function (error) { set({ busy: false, err: '保存失败: ' + (error && error.message || error) }) });
       };
@@ -817,16 +819,18 @@ window.__ModuleLoader__.load({
         form.msg ? e('div', 'nnk-ok', form.msg) : null,
         form.err ? e('div', 'nnk-err', form.err) : null,
 
-        e('div', {}, h('b', null, '游戏目录'), h('span', { className: 'nnk-hint' }, '　AI 自动写入扩展的游戏本体位置(extension/ 所在层)')),
+        e('div', {}, h('b', null, '游戏目录'), h('span', { className: 'nnk-hint' }, '　AI 自动写入扩展的游戏本体位置——填到能看见 extension 文件夹的那一层(新版结构如 resources/app/src),别把 extension 本身填进路径')),
         e('div', 'nnk-hint', form.nonameDir
           ? '当前: ' + form.nonameDir + '(' + (form.source === 'cordis.yml' ? '由配置文件指定' : '工坊设置') + ')'
           : '⚠️ 未配置——AI 无法自动写入,只能用「手动复制」模式'),
-        h('input', { className: 'nnk-input', value: form.manual, placeholder: '手动填写游戏本体目录,例: D:\\Games\\noname\\resources\\app', onChange: function (ev) { set({ manual: ev.target.value }) } }),
+        h('input', { className: 'nnk-input', value: form.manual, placeholder: '手动填写游戏本体目录,填到能看见 extension 文件夹的那一层(新版结构如 resources/app/src),别以 \extension 结尾', onChange: function (ev) { set({ manual: ev.target.value }) } }),
         h('div', { style: { marginTop: '6px' } },
           h('button', { className: 'nnk-smallbtn', disabled: form.scanning || form.busy, onClick: scan }, form.scanning ? '扫描中…' : (form.scanned ? '🔍 重新扫描本机' : '🔍 自动扫描本机')),
           form.manual.trim() ? h('button', { className: 'nnk-smallbtn', disabled: form.busy, onClick: function () { saveDir(form.manual) } }, '💾 保存所填目录') : null
         ),
         form.scanned && form.candidates.length === 0 ? e('div', 'nnk-hint', '没扫到——游戏在非常规位置就用上面手动填写。') : null,
+        form.err ? e('div', 'nnk-err', form.err) : null,
+        form.msg ? e('div', 'nnk-ok', form.msg) : null,
         form.candidates.map(function (dir) {
           return h('label', { key: dir, className: 'nnk-radio', style: { display: 'block', margin: '4px 0' } },
             h('input', { type: 'radio', name: 'nnk-set-candidate', checked: form.manual === dir, onChange: function () { set({ manual: dir }) } }),

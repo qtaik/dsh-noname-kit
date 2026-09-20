@@ -97,18 +97,29 @@ export function apply(ctx, config) {
     console.warn(`[noname-kit] ⚠️ cordis.yml 里的 nonameDir 不是有效的无名杀目录(缺少 extension/ 等): ${rowDir}`)
   }
 
-  /** 校验并热切换当前游戏目录;返回错误消息或 null。 */
+  /** 校验并热切换当前游戏目录;返回 { error?, adjustedFrom? }。
+   * 小白高频误填:结尾多带一层 \extension(真正要填的是 extension/ 所在的上一层)。
+   * 该情形自动剥掉并记入 adjustedFrom,由调用方在成功响应里提示。 */
   const setActive = (dir) => {
-    if (!dir) return '路径为空'
-    const resolved = resolve(dir)
+    if (!dir) return { error: '路径为空' }
+    let resolved = resolve(dir)
+    let adjustedFrom = null
+    if (!isValidGameDir(resolved) && /[\\/]extension[\\/]?$/i.test(resolved)) {
+      const parent = resolve(resolved, '..')
+      if (isValidGameDir(parent)) {
+        adjustedFrom = resolved
+        resolved = parent
+      }
+    }
     if (!isValidGameDir(resolved)) {
-      return `「${resolved}」不像无名杀游戏本体目录(需要 extension/ 子目录和 noname.js),请确认后重试`
+      return {
+        error: `「${resolved}」不像无名杀游戏本体目录——这一层下面应该能看到 extension 文件夹和 noname.js(或 noname/、game/)。如果你填的路径以 \\extension 结尾,请去掉这一层再试;游戏在非常规位置(如 D:\\games\\...)时手动填写即可。`,
+      }
     }
     nonameDir = resolved
     active = true
-    return null
+    return { adjustedFrom }
   }
-
   console.log(`[noname-kit] 加载成功,游戏目录: ${active ? nonameDir : '(未配置或无效,仅生成模式;可在工坊向导里初始化)'}`)
 
   // ── 0.5) 版本与一致性自检 ────────────────────────────────────
@@ -632,13 +643,13 @@ export function apply(ctx, config) {
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/init') {
           const body = await readBody()
-          const error = setActive(body.nonameDir)
-          if (error) return json(400, { ok: false, error })
+          const result = setActive(body.nonameDir)
+          if (result.error) return json(400, { ok: false, error: result.error })
           const next = readSettingsFile()
           next.nonameDir = nonameDir
           writeFileSync(settingsPath, JSON.stringify(next, null, 2), 'utf8')
           console.log(`[noname-kit] 工坊向导已启用游戏目录: ${nonameDir}`)
-          return json(200, { ok: true, nonameDir })
+          return json(200, { ok: true, nonameDir, adjustedFrom: result.adjustedFrom || null })
         }
         // 工坊设置(⚙ 子页):bash 输出阀门等。任何状态可读写;bash 阀门
         // 由 custom-bash 在新会话挂载时读取,保存后对新会话生效。
