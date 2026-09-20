@@ -35,9 +35,9 @@ dsh plugin --profile web add https://github.com/qtaik/dsh-noname-kit.git
 ## 配置
 
 重启 `dsh web` 后打开 Web UI。工坊页里没配游戏目录会先出初始化向导:填无名杀
-本体目录(含 extension/ 的那层,比如 `D:\Games\noname\resources\app`),或者点
-「自动扫描」。配置保存在 `~/.dsh/noname-kit.json`,之后随时可以在工坊「⚙ 设置」
-页改。
+本体目录(含 extension/ 的那层,比如标准结构 `D:\Games\noname\resources\app`、
+新版结构的 `...\resources\app\src` 层),或者点「自动扫描」。配置保存在
+`~/.dsh/noname-kit.json`,之后随时可以在工坊「⚙ 设置」页改。
 
 不配置也能用:写入方式选「手动复制」,AI 只生成代码不落盘。
 
@@ -127,6 +127,7 @@ GitHub tag 取,查不通只显示一行「检查失败」,不影响使用;「启
 ```sh
 node scripts/test-tasks.mjs    # 任务状态机(含配音门禁),79 项
 node scripts/test-audio.mjs    # 配音复制与目标校验,13 项
+node scripts/test-detect.mjs   # 游戏目录自动探测与遍历,9 项
 node scripts/test-blocks.mjs   # 区块读写,85 项
 node scripts/test-update.mjs   # 版本比较与更新检查,107 项
 node scripts/test-preset.mjs   # preset 自检与安装,59 项

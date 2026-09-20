@@ -673,13 +673,13 @@ window.__ModuleLoader__.load({
 
     // ── 设置面板(⚙ 子页):游戏目录 / AI 输出阀门 / 关于 ─────────
     function SettingsPanel() {
-      var state = React.useState({ loading: true, version: '', nonameDir: '', source: 'none', bashMax: 64000, bashMaxK: '64', updateCheck: true, manual: '', scanning: false, scanned: false, candidates: [], busy: false, healthBusy: false, msg: '', err: '', healthMsg: '', healthErr: '' });
+      var state = React.useState({ loading: true, version: '', nonameDir: '', source: 'none', bashMax: 64000, bashMaxK: '64', updateCheck: true, manual: '', scanning: false, scanned: false, candidates: [], extensions: [], busy: false, healthBusy: false, msg: '', err: '', healthMsg: '', healthErr: '' });
       var form = state[0], setForm = state[1];
       var set = function (patch) { setForm(function (prev) { return Object.assign({}, prev, patch) }) };
       var load = function () {
         fetch('/noname-kit-api/settings').then(function (r) { return r.json() }).then(function (s) {
           var bytes = s.bashMaxOutputBytes || 64000;
-          set({ loading: false, version: s.version || '', nonameDir: s.nonameDir || '', source: s.source || 'none', bashMax: bytes, bashMaxK: String(Math.round(bytes / 1000)), updateCheck: s.updateCheck !== false });
+          set({ loading: false, version: s.version || '', nonameDir: s.nonameDir || '', source: s.source || 'none', extensions: s.extensions || [], bashMax: bytes, bashMaxK: String(Math.round(bytes / 1000)), updateCheck: s.updateCheck !== false });
         }, function () { set({ loading: false, err: '设置服务不可用(插件更新后需重启 DSH)' }) });
       };
       React.useEffect(function () { load() }, []);
@@ -710,7 +710,7 @@ window.__ModuleLoader__.load({
             ? '✅ 已自动修正:你填的路径结尾多了一层 \\extension,游戏目录已设为上一层 ' + body.nonameDir
             : '✅ 游戏目录已更新: ' + body.nonameDir });
           load();
-        }, function (error) { set({ busy: false, err: '保存失败: ' + (error && error.message || error) }) });
+        }).catch(function (error) { set({ busy: false, err: '保存失败: ' + (error && error.message || error) }) });
       };
       var saveBashMax = function (v) {
         var n = parseInt(v, 10);
@@ -722,7 +722,7 @@ window.__ModuleLoader__.load({
         }).then(function (r) { return r.json() }).then(function (body) {
           if (!body.ok) throw new Error(body.error || '保存失败');
           set({ busy: false, bashMax: body.bashMaxOutputBytes, bashMaxK: String(Math.round(body.bashMaxOutputBytes / 1000)), msg: '✅ 输出上限已保存为 ' + Math.round(body.bashMaxOutputBytes / 1000) + 'K——对新开的会话生效(已开的会话保持不变)' });
-        }, function (error) { set({ busy: false, err: '保存失败: ' + (error && error.message || error) }) });
+        }).catch(function (error) { set({ busy: false, err: '保存失败: ' + (error && error.message || error) }) });
       };
       var checkNow = function () {
         set({ healthBusy: true, healthErr: '', healthMsg: '' });
@@ -739,7 +739,7 @@ window.__ModuleLoader__.load({
           if (!body.ok) throw new Error(body.error || '安装失败');
           healthBus.set({ preset: body.preset || null });
           set({ healthBusy: false, healthMsg: '✅ preset 已重装' + (body.backup ? '(旧版已备份)' : '') + '——对新建会话生效,已开的会话不变' });
-        }, function (error) { set({ healthBusy: false, healthErr: '重装失败: ' + (error && error.message || error) }) });
+        }).catch(function (error) { set({ healthBusy: false, healthErr: '重装失败: ' + (error && error.message || error) }) });
       };
       var toggleUpdateCheck = function () {
         var next = !form.updateCheck;
@@ -751,7 +751,7 @@ window.__ModuleLoader__.load({
           if (!body.ok) throw new Error(body.error || '保存失败');
           set({ busy: false, updateCheck: body.updateCheck });
           healthBus.set({ updateCheck: body.updateCheck });
-        }, function (error) { set({ busy: false, err: '保存失败: ' + (error && error.message || error) }) });
+        }).catch(function (error) { set({ busy: false, err: '保存失败: ' + (error && error.message || error) }) });
       };
 
       // 版本与一致性两行:插件本体(能查新版就告知,不自动更新)+ preset 一致性
@@ -823,14 +823,15 @@ window.__ModuleLoader__.load({
         e('div', 'nnk-hint', form.nonameDir
           ? '当前: ' + form.nonameDir + '(' + (form.source === 'cordis.yml' ? '由配置文件指定' : '工坊设置') + ')'
           : '⚠️ 未配置——AI 无法自动写入,只能用「手动复制」模式'),
-        h('input', { className: 'nnk-input', value: form.manual, placeholder: '手动填写游戏本体目录,填到能看见 extension 文件夹的那一层(新版结构如 resources/app/src),别以 \extension 结尾', onChange: function (ev) { set({ manual: ev.target.value }) } }),
+        h('input', { className: 'nnk-input', value: form.manual, placeholder: '填游戏根目录(那一层里能看到 extension 文件夹)', onChange: function (ev) { set({ manual: ev.target.value }) } }),
         h('div', { style: { marginTop: '6px' } },
           h('button', { className: 'nnk-smallbtn', disabled: form.scanning || form.busy, onClick: scan }, form.scanning ? '扫描中…' : (form.scanned ? '🔍 重新扫描本机' : '🔍 自动扫描本机')),
           form.manual.trim() ? h('button', { className: 'nnk-smallbtn', disabled: form.busy, onClick: function () { saveDir(form.manual) } }, '💾 保存所填目录') : null
         ),
         form.scanned && form.candidates.length === 0 ? e('div', 'nnk-hint', '没扫到——游戏在非常规位置就用上面手动填写。') : null,
-        form.err ? e('div', 'nnk-err', form.err) : null,
-        form.msg ? e('div', 'nnk-ok', form.msg) : null,
+        form.nonameDir ? e('div', 'nnk-hint', form.extensions.length
+          ? '✅ 已连接游戏目录,检测到 ' + form.extensions.length + ' 个扩展包: ' + form.extensions.slice(0, 20).join('、') + (form.extensions.length > 20 ? ' 等' : '')
+          : '目录已连接,但 extension/ 下还没有扩展包') : null,
         form.candidates.map(function (dir) {
           return h('label', { key: dir, className: 'nnk-radio', style: { display: 'block', margin: '4px 0' } },
             h('input', { type: 'radio', name: 'nnk-set-candidate', checked: form.manual === dir, onChange: function () { set({ manual: dir }) } }),
@@ -1116,7 +1117,7 @@ window.__ModuleLoader__.load({
           } catch (e) { sendErr = '反馈已记录,但发送失败: ' + (e && e.message || e) }
           setD({ busy: false, issue: '', fbFor: null, err: sendErr || '' });
           load();
-        }, function (error) { setD({ busy: false, err: error && error.message || String(error) }) });
+        }).catch(function (error) { setD({ busy: false, err: error && error.message || String(error) }) });
       };
       var markDone = function (task) {
         // 防呆:缺图或技能未全确认时,手动完成会绕过「缺图不自动完成」的保护——

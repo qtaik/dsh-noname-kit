@@ -24,6 +24,7 @@ import { detectCandidates } from './src/detect.js'
 import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateExtension, prunePackageBackups, listEntries, listEntrySkills } from './src/write.js'
 import { readHistory, archiveTask, listExtensionHistories, recordBackup, deleteNote } from './src/history.js'
 import { copyImages } from './src/images.js'
+import { listExtensionFolders } from './src/detect.js'
 import { copyAudios, audioTargetKind } from './src/audio.js'
 import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, setSkillAudioFiles, setDieAudioFiles, completeById, deleteTask, reopenTask, getTask } from './src/tasks.js'
 import { bundledPresetDir, installPreset, presetDirOf, presetStatus } from './src/preset.js'
@@ -101,6 +102,7 @@ export function apply(ctx, config) {
    * 小白高频误填:结尾多带一层 \extension(真正要填的是 extension/ 所在的上一层)。
    * 该情形自动剥掉并记入 adjustedFrom,由调用方在成功响应里提示。 */
   const setActive = (dir) => {
+    dir = String(dir || '').trim()
     if (!dir) return { error: '路径为空' }
     let resolved = resolve(dir)
     let adjustedFrom = null
@@ -629,7 +631,7 @@ export function apply(ctx, config) {
       try {
         // 初始化三件套:任何状态下都可用(否则没配置时连向导都没法用)
         if (req.method === 'GET' && url.pathname === '/noname-kit-api/status') {
-          return json(200, { active, nonameDir: active ? nonameDir : '', source: config.nonameDir ? 'cordis.yml' : (saved.nonameDir ? 'workshop' : 'none') })
+          return json(200, { active, nonameDir: active ? nonameDir : '', source: config.nonameDir && isValidGameDir(config.nonameDir) ? 'cordis.yml' : (saved.nonameDir ? 'workshop' : 'none') })
         }
         if (req.method === 'GET' && url.pathname === '/noname-kit-api/detect') {
           // 结果缓存 60 秒:用户反复点扫描按钮时不要反复读盘
@@ -659,7 +661,8 @@ export function apply(ctx, config) {
           return json(200, {
             version: pkg.version,
             nonameDir: active ? nonameDir : '',
-            source: config.nonameDir ? 'cordis.yml' : (current.nonameDir ? 'workshop' : 'none'),
+            source: config.nonameDir && isValidGameDir(config.nonameDir) ? 'cordis.yml' : (current.nonameDir ? 'workshop' : 'none'),
+            extensions: active ? listExtensionFolders(nonameDir) : [],
             bashMaxOutputBytes: clampBashMaxOutput(current.bashMaxOutputBytes) ?? BASH_MAX_OUTPUT_DEFAULT,
             updateCheck: current.updateCheck !== false,
           })
