@@ -9,28 +9,39 @@ window.__ModuleLoader__.load({
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
     var React = require('react');
 
-    // ── 样式(令牌取自 DSH 界面变量,自动适配亮/暗) ──────────────
+    // ── 样式(令牌取自 DSH 界面变量,自动适配亮/暗;间距/圆角/过渡走 --nnk-* 设计令牌) ──
     var CSS = [
-      '.nnk-wrap{padding:16px;max-width:860px;margin:0 auto;overflow:auto;height:100%}',
-      '.nnk-tabs{display:flex;gap:8px;margin-bottom:14px}',
-      '.nnk-tab{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);border-radius:8px;padding:6px 14px;cursor:pointer;font:inherit;font-size:13px}',
-      '.nnk-tab.nnk-active{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}',
-      '.nnk-card{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:14px;background:var(--dsw-alias-bg-layer-1);margin-bottom:14px}',
-      '.nnk-label{display:block;font-size:12px;color:var(--dsw-alias-label-secondary);margin:10px 0 4px}',
-      '.nnk-input,.nnk-textarea{width:100%;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);border-radius:8px;padding:8px 10px;font:inherit;font-size:13px}',
+      '.nnk-wrap{--nnk-gap:12px;--nnk-r:12px;--nnk-rs:8px;--nnk-t:.15s ease;padding:12px;max-width:860px;margin:0 auto;overflow:auto;height:100%}',
+      '.nnk-tabs{display:flex;gap:2px;margin-bottom:14px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:1px}',
+      '.nnk-tab{border:0;white-space:nowrap;background:transparent;color:var(--dsw-alias-label-secondary);border-radius:6px;padding:6px 12px;cursor:pointer;font:inherit;font-size:13px;transition:color var(--ds-transition-duration,.2s) var(--ds-ease-in-out,ease-in-out),background var(--ds-transition-duration,.2s) var(--ds-ease-in-out,ease-in-out)}',
+      '.nnk-tab:hover{color:var(--dsw-alias-label-primary)}',
+      '.nnk-tab.nnk-active{background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary));color:var(--dsw-alias-label-primary-foreground,var(--dsw-alias-bg-layer-1));font-weight:600}',
+      '.nnk-card{border:1px solid var(--dsw-alias-border-l2);border-radius:var(--nnk-r);padding:14px 16px;background:var(--dsw-alias-bg-layer-1);margin-bottom:var(--nnk-gap)}',
+      '.nnk-group{border:1px solid var(--dsw-alias-border-l2);border-radius:var(--nnk-r);padding:12px 14px;margin-bottom:var(--nnk-gap);background:var(--dsw-alias-bg-layer-1)}',
+      '.nnk-group-title{font-size:12px;font-weight:600;color:var(--dsw-alias-brand-primary);letter-spacing:.06em;margin-bottom:8px}',
+      '.nnk-label{display:block;font-size:12px;font-weight:500;color:var(--dsw-alias-label-secondary);margin:10px 0 4px}',
+      '.nnk-input,.nnk-textarea{width:100%;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);border-radius:var(--nnk-rs);padding:8px 10px;font:inherit;font-size:13px;transition:border-color var(--nnk-t),box-shadow var(--nnk-t)}',
+      '.nnk-input:focus,.nnk-textarea:focus{outline:none;border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 2px rgba(0,0,0,.06)}',
       '.nnk-textarea{min-height:88px;resize:vertical;font-family:inherit}',
       '.nnk-code{font-family:Consolas,monospace;font-size:12px;min-height:140px;white-space:pre;overflow:auto}',
-      '.nnk-radio{display:inline-flex;align-items:center;gap:4px;margin-right:16px;font-size:13px;color:var(--dsw-alias-label-primary);cursor:pointer}',
-      '.nnk-submit{border:1px solid var(--dsw-alias-brand-primary);border-radius:8px;padding:9px 22px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-brand-primary);cursor:pointer;font:inherit;font-size:14px;margin-top:14px}',
-      '.nnk-submit:hover:not(:disabled){background:var(--dsw-alias-bg-layer-1)}',
+      '.nnk-radio{display:inline-flex;align-items:center;gap:6px;margin:0;padding:6px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:13px;cursor:pointer;transition:border-color var(--nnk-t),color var(--nnk-t),background var(--nnk-t);user-select:none}',
+      '.nnk-radio:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary)}',
+      '.nnk-radio.nnk-radio-on{border-color:transparent;background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary));color:var(--dsw-alias-label-primary-foreground,var(--dsw-alias-bg-layer-1))}',
+      
+      '.nnk-radios{display:flex;flex-wrap:wrap;gap:8px;align-items:center}',
+      '.nnk-radio input[type=radio]{accent-color:var(--dsw-alias-brand-primary);margin:0}',
+      '.nnk-submit{border:none;border-radius:var(--nnk-rs);padding:10px 26px;background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary));color:var(--dsw-alias-label-primary-foreground,var(--dsw-alias-bg-layer-1));cursor:pointer;font:inherit;font-size:14px;font-weight:600;margin-top:14px;transition:filter var(--nnk-t),opacity var(--nnk-t)}',
+      '.nnk-submit:hover:not(:disabled){filter:brightness(1.12)}',
       '.nnk-submit:disabled{opacity:.5;cursor:default}',
       '.nnk-hint{font-size:12px;color:var(--dsw-alias-label-secondary);margin-top:10px;line-height:1.6}',
       '.nnk-err{color:var(--dsw-alias-state-error-primary);font-size:13px;margin-top:8px}',
       '.nnk-ok{color:var(--dsw-alias-state-success-primary);font-size:13px;margin-top:8px}',
-      '.nnk-taskrow{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:13px}',
+      '.nnk-taskrow{border:1px solid var(--dsw-alias-border-l2);border-radius:var(--nnk-rs);padding:10px 12px;margin-bottom:8px;font-size:13px;transition:border-color var(--nnk-t)}',
+      '.nnk-taskrow:hover{border-color:var(--dsw-alias-border-l1)}',
       '.nnk-taskmeta{color:var(--dsw-alias-label-secondary);font-size:12px;margin-top:4px}',
       '.nnk-note{background:var(--dsw-alias-bg-layer-2);border-radius:6px;padding:6px 10px;font-size:12px;margin:4px 0;color:var(--dsw-alias-label-primary)}',
-      '.nnk-copy{border:1px solid var(--dsw-alias-border-l2);border-radius:7px;padding:4px 12px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer;font:inherit;font-size:12px;margin-top:8px}',
+      '.nnk-copy{border:1px solid var(--dsw-alias-border-l2);border-radius:7px;padding:4px 12px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer;font:inherit;font-size:12px;margin-top:8px;transition:border-color var(--nnk-t)}',
+      '.nnk-copy:hover{border-color:var(--dsw-alias-brand-primary)}',
       '.nnk-badge{display:inline-block;border-radius:6px;padding:1px 8px;font-size:11px;margin-right:8px;border:1px solid var(--dsw-alias-border-l2)}',
       '.nnk-panel{position:fixed;width:380px;max-height:560px;display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.25);z-index:60}',
       '.nnk-panel-head{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);cursor:move;user-select:none}',
@@ -42,7 +53,8 @@ window.__ModuleLoader__.load({
       '.nnk-status-written{color:var(--dsw-alias-state-warn-primary)}',
       '.nnk-status-done{color:var(--dsw-alias-state-success-primary)}',
       '.nnk-mini{width:100%;box-sizing:border-box;min-height:56px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:6px 8px;resize:vertical;margin-top:6px}',
-      '.nnk-smallbtn{border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:3px 10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer;font:inherit;font-size:11px;margin:4px 6px 0 0}',
+      '.nnk-smallbtn{border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:3px 10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer;font:inherit;font-size:11px;margin:4px 6px 0 0;transition:border-color var(--nnk-t),color var(--nnk-t)}',
+      '.nnk-smallbtn:hover:not(:disabled){border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}',
       '.nnk-fbrow{border-left:3px solid var(--dsw-alias-border-l2);padding:2px 8px;margin:4px 0;font-size:12px;color:var(--dsw-alias-label-secondary)}',
       '.nnk-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-state-warn-primary);margin-left:5px;vertical-align:middle}',
       '.nnk-cmd{font-family:Consolas,monospace;font-size:12px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 8px;margin-top:6px;display:inline-block;user-select:all}'
@@ -82,12 +94,21 @@ window.__ModuleLoader__.load({
     function radioGroup(label, value, options, onChange) {
       return h('div', {},
         e('label', 'nnk-label', label),
-        h('div', {}, options.map(function (opt) {
-          return h('label', { key: opt.value, className: 'nnk-radio' },
-            h('input', { type: 'radio', name: label + opt.value, checked: value === opt.value, onChange: function () { onChange(opt.value) } }),
+        h('div', { className: 'nnk-radios' }, options.map(function (opt) {
+          var on = value === opt.value;
+          return h('label', { key: opt.value, className: 'nnk-radio' + (on ? ' nnk-radio-on' : '') },
+            h('input', { type: 'radio', name: label + opt.value, className: 'nnk-radio-input', checked: on, onChange: function () { onChange(opt.value) } }),
             opt.text
           );
         }))
+      );
+    }
+
+    // 表单分组卡片:标题 + 内容容器(纯视觉,不裹数据)
+    function formGroup(title, kids) {
+      return h('div', { className: 'nnk-group' },
+        e('div', 'nnk-group-title', title),
+        h('div', null, kids)
       );
     }
 
@@ -102,7 +123,9 @@ window.__ModuleLoader__.load({
         reference: '', busy: false, err: '',
         extList: [], extLoading: false, currentInfo: '',
         goal: 'create', entryId: '', entryList: [], entryLoading: false, editNotes: '', addSkills: false,
-        entrySkills: [], entrySkillsLoading: false, pickedSkills: []
+        entrySkills: [], entrySkillsLoading: false, pickedSkills: [],
+        // 🎲 新玩法(自定义模式)专属字段
+        brief: '', numConfig: '5', numCustom: '', winConfig: '', rules: ''
       });
       // pickedSkills = [{ id, name, note }]:勾选的技能 + 用户当场写的修改内容
       var form = state[0], setForm = state[1];
@@ -122,8 +145,10 @@ window.__ModuleLoader__.load({
       };
 
       var switchMode = function (mode) {
-        patch({ mode: mode, err: '', currentInfo: '', usedIds: [], notes: [],
-          goal: 'create', entryId: '', entryList: [], entrySkills: [], pickedSkills: [], editNotes: '', addSkills: false });
+        // 🎲 mode 类型两种目标都支持:新建 = 从零生成模式;编辑 = 修改已生成的模式包
+        var goal = (form.type === 'mode' && mode === 'edit') ? 'edit' : 'create';
+        patch({ mode: mode, goal: goal, err: '', currentInfo: '', usedIds: [], notes: [],
+          entryId: '', entryList: [], entrySkills: [], pickedSkills: [], editNotes: '', addSkills: false });
         if (mode === 'edit' && form.extList.length === 0 && !form.extLoading) {
           patch({ extLoading: true });
           fetch('/noname-kit-api/history').then(function (r) { return r.json() }).then(function (body) {
@@ -137,7 +162,8 @@ window.__ModuleLoader__.load({
       var entrySeq = 0, entrySkillSeq = 0;
       var loadEntries = function (folder, kind) {
         var seq = ++entrySeq;
-        if (!folder) { patch({ entryList: [], entryId: '', entryLoading: false, entrySkills: [], pickedSkills: [] }); return }
+        // mode 类型没有条目下拉(服务端 /entries 只认 character/card),不发必败请求、不清包信息提示
+        if (!folder || (kind !== 'character' && kind !== 'card')) { patch({ entryList: [], entryId: '', entryLoading: false, entrySkills: [], pickedSkills: [] }); return }
         patch({ entryLoading: true });
         fetch('/noname-kit-api/entries?folder=' + encodeURIComponent(folder) + '&kind=' + kind).then(function (r) { return r.json() }).then(function (b) {
           if (seq !== entrySeq) return;
@@ -187,7 +213,10 @@ window.__ModuleLoader__.load({
       };
 
       var switchType = function (t) {
-        setForm(function (prev) { return Object.assign({}, prev, { type: t, entryId: '', entrySkills: [], pickedSkills: [], editNotes: '', addSkills: false }) });
+        // 🎲 mode 在编辑模式下目标恒为「编辑已有」(修改已生成的模式包)
+        var patchBody = { type: t, entryId: '', entrySkills: [], pickedSkills: [], editNotes: '', addSkills: false };
+        if (t === 'mode' && form.mode === 'edit' && form.goal !== 'edit') patchBody.goal = 'edit';
+        setForm(function (prev) { return Object.assign({}, prev, patchBody) });
         if (form.mode === 'edit' && form.goal === 'edit') loadEntries(form.folder, t);
       };
 
@@ -255,18 +284,27 @@ window.__ModuleLoader__.load({
       var submit = function () {
         var isEdit = form.mode === 'edit';
         var editingExisting = isEdit && form.goal === 'edit';
+        var isMode = form.type === 'mode';
+        var isModeCreate = isMode && !editingExisting;
         var filledSkills = form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() });
         var errSet = function (msg) { setForm(function (prev) { return Object.assign({}, prev, { err: msg }) }) };
-        if (editingExisting) {
+        if (isModeCreate) {
           if (!form.folder.trim()) { errSet('目标扩展文件夹不能为空'); return }
-          if (!form.entryId) { errSet('请先选择要修改的' + (form.type === 'card' ? '卡牌' : '武将')); return }
+          if (!form.brief.trim()) { errSet('请填写一句话核心玩法'); return }
+          if (!form.rules.trim()) { errSet('请填写玩法细节描述(至少一条规则)'); return }
+        } else if (editingExisting) {
+          if (!form.folder.trim()) { errSet('目标扩展文件夹不能为空'); return }
+          var entryLabel = form.type === 'mode' ? '规则/条目' : (form.type === 'card' ? '卡牌' : '武将');
+          if (form.type !== 'mode' && !form.entryId) { errSet('请先选择要修改的' + entryLabel); return }
           var emptyNote = form.pickedSkills.filter(function (p) { return !p.note.trim() }).map(function (p) { return p.name || p.id });
           if (emptyNote.length) { errSet('勾选的技能要填写修改内容: ' + emptyNote.join('、')); return }
           var addSkillFilled = form.addSkills && form.type === 'character' && form.skills.some(function (s) { return s.name.trim() || s.desc.trim() });
-          if (!form.editNotes.trim() && !form.pickedSkills.length && !addSkillFilled) { errSet('请勾选要修改的技能、填写改动描述,或选「新增技能」——至少填一项'); return }
+          var modeRulesFilled = isMode && form.rules.trim();
+          if (!form.editNotes.trim() && !form.pickedSkills.length && !addSkillFilled && !modeRulesFilled) { errSet('请勾选要修改的技能、填写改动描述,或选「新增技能」——至少填一项'); return }
         } else {
           if (!filledSkills.length) { errSet('请至少填写一个技能(技能名和效果至少填一处)'); return }
           if (!form.folder.trim()) { errSet('目标扩展文件夹不能为空'); return }
+          if (type === 'card' && form.pileJoin && !form.pileRows.some(function (r) { return r.point !== '' })) { errSet('选了「加入牌堆」但没填任何牌的花色点数——至少填一行,或改选「不加入牌堆」'); return }
         }
         var dupUsed = isEdit && form.taskId.trim() && (form.usedIds || []).some(function (u) { return u.id === form.taskId.trim() });
         if (dupUsed) { errSet('任务ID「' + form.taskId.trim() + '」此包已用过,请换一个'); return }
@@ -277,13 +315,16 @@ window.__ModuleLoader__.load({
         var splitAudioPaths = function (v) {
           return String(v || '').split(/[,，;；\n]/).map(function (t) { return t.trim() }).filter(Boolean).slice(0, 10);
         };
-        var skills = editingExisting
+        var skills = isMode && !editingExisting
+          ? []
+          : editingExisting
           ? [].concat(
-              form.editNotes.trim() ? [{ name: '修改 ' + form.entryId, desc: form.editNotes.trim() }] : [],
+              form.editNotes.trim() ? [{ name: form.type === 'mode' ? '模式包调整' : '修改 ' + form.entryId, desc: form.editNotes.trim() }] : [],
               form.pickedSkills.map(function (p) { return { name: p.name || p.id, desc: p.note.trim() } }),
               form.addSkills && type === 'character'
                 ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim(), audios: splitAudioPaths(s.audios) } })
-                : []
+                : [],
+              isMode && form.rules.trim() ? [{ name: '模式规则调整', desc: form.rules.trim() }] : []
             )
           : (type === 'character'
           ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim(), audios: splitAudioPaths(s.audios) } })
@@ -306,7 +347,7 @@ window.__ModuleLoader__.load({
             : { join: false, entries: '' };
           return fetch('/noname-kit-api/tasks', {
             method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: taskId, folder: form.folder.trim(), type: type, title: form.title.trim(), charInfo: form.charInfo.trim(), pile: pile, skills: skills, image: form.image.trim(), dieAudios: dieAudioList, target: editingExisting ? { kind: type, id: form.entryId } : null, writeMode: form.writeMode }),
+            body: JSON.stringify({ id: taskId, folder: form.folder.trim(), type: type, title: form.title.trim(), charInfo: form.charInfo.trim(), pile: pile, skills: skills, image: form.image.trim(), dieAudios: dieAudioList, target: editingExisting ? { kind: type, id: form.entryId } : null, writeMode: form.writeMode, modeBrief: isMode ? form.brief.trim() : '', modeNum: isMode ? (form.numConfig === 'custom' ? (form.numCustom || 'custom') : form.numConfig) : '', modeWin: isMode ? form.winConfig.trim() : '', modeRules: isMode ? form.rules.trim() : '' }),
           }).then(function (r) { return r.json() }).then(function (reg) {
             if (!reg.ok) throw new Error(reg.error || '任务注册失败');
             // gameDir/gameDirPosix 必须随 ctx 传给下一个 then(各自独立作用域,
@@ -337,7 +378,30 @@ window.__ModuleLoader__.load({
           else if (type === 'card') pileText = '不加入牌堆(仅作技能素材牌)';
           else pileText = '(武将无牌堆)';
           var text;
-          if (editingExisting) {
+          if (isMode && !editingExisting) {
+            text = [
+              '【无名杀工坊·新任务】',
+              '任务ID: ' + taskId,
+              '任务性质: 创建全新扩展包(含一个自定义游戏模式;目标文件夹当前不存在,需要从零创建 extension.js 与 info.json)',
+              '类型: 🎲 新玩法(自定义游戏模式,用 game.addMode 注册为独立模式)',
+              (form.title.trim() ? '模式名称(显示名,注册为模式翻译): ' + form.title.trim() : ''),
+              '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成代码,不要写文件)' : '自动写入'),
+              '目标扩展文件夹: ' + form.folder.trim(),
+              (gameDir ? '游戏目录(所有读写的根;bash 里写作 ' + gameDirPosix + '): ' + gameDir : ''),
+              '一句话核心玩法: ' + form.brief.trim(),
+              '游戏人数: ' + (form.numConfig === 'custom' ? (form.numCustom || '?') + ' 人(用户自定义)' : form.numConfig + ' 人(玩家 1 名,其余 AI 补位)'),
+              '胜利条件: ' + (form.winConfig.trim() || '用户未单独填写,以玩法细节描述为准,有歧义先问'),
+              '── 玩法细节(用户原话,逐条理解,不得增删主规则) ──',
+              form.rules.trim(),
+              form.reference.trim() ? '── 用户提供的参考代码 ──\n' + form.reference.trim() : '',
+              '── 执行要求(确认协议,逐步执行)──',
+              '第 0 步【引擎版本探测 + 需求理解确认·硬门禁】:先探测用户游戏引擎版本(读游戏目录 version 文件或 noname 源码特征)并报告给用户;版本相关的 API 写法(模式注册/选将原语/距离与摸牌修正/技能显示过滤等)必须先查「版本差异对照表」或读引擎源码核实,禁止凭记忆或固定版本经验猜测。然后把玩法细节逐条拆成规则模块,输出【需求理解确认】(每条规则:触发时机/数值/边界;另含:玩法一句话复述/人数与先手规则/胜利条件/明确不做什么/实现骨架自查——模式注册时机/选将方式/技能挂载方式/距离与摸牌修正写法均按对照表选定)。输出后停下等待用户明确回复确认。',
+              '有任何歧义必须先用 ask_user_question 提问;禁止猜测。ask_user_question 的回答只消除歧义、不算确认——澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」后才能动笔。',
+              '未获用户确认前,禁止生成代码、禁止调用 noname_write_extension。',
+              '用户确认后按骨架清单实现(规范见 knowledge 的「自定义模式生成规范」与版本对照表;内部规则技不留 translate 名——十周年UI 的竖排会显示有翻译名的技能),校验通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + ' 与规则节点名(每个规则模块一个节点名,用户逐条确认后自动收口)。',
+              form.idPrefix.trim() ? '内部 ID 命名规则:模式名/新增技能的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,中文显示名写入 translate(内部规则技除外——不留 translate 名)。' : '',
+            ].filter(Boolean).join('\n');
+          } else if (editingExisting) {
             var newSkillRows = form.addSkills && type === 'character'
               ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim() } })
               : [];
@@ -347,14 +411,16 @@ window.__ModuleLoader__.load({
               '【无名杀工坊·编辑任务】',
               '任务ID: ' + taskId,
               '任务性质: 编辑已有扩展包(已存在)',
-              '类型: ' + (type === 'card' ? '卡牌' : '武将'),
-              '编辑目标条目: ' + type + ':' + form.entryId + '(所在文件 ' + entryFile + (entryFile !== 'extension.js' ? ',read/write 都要传 file 参数' : '') + ';只改这个条目' + (pickedSkillRows.length ? '及其勾选技能' : '') + (newSkillRows.length ? ';新增技能作为新区块加到该条目上' : '') + ',其他武将/卡牌/技能/翻译一律不动)',
+              (type === 'mode' ? '包性质: 这是一个自定义模式扩展包(game.addMode 注册)。版本相关写法先查「1.9.0 实测对照表」或读引擎源码核实;新增或调整的内部规则技不留 translate 名(十周年UI 竖排会显示有翻译名的技能);新增内部 ID 沿用该包现有的前缀惯例(读现有代码时留意)。' : ''),
+              '类型: ' + (type === 'mode' ? '🎲 新玩法(自定义游戏模式)' : type === 'card' ? '卡牌' : '武将'),
+              (type === 'mode' ? '编辑目标: 整个模式扩展包(骨架与规则技,按需求描述与版本对照表改动,其他任务无关的包不动)' : '编辑目标条目: ' + type + ':' + form.entryId + '(所在文件 ' + entryFile + (entryFile !== 'extension.js' ? ',read/write 都要传 file 参数' : '') + ';只改这个条目' + (pickedSkillRows.length ? '及其勾选技能' : '') + (newSkillRows.length ? ';新增技能作为新区块加到该条目上' : '') + ',其他武将/卡牌/技能/翻译一律不动)'),
               (form.title.trim() ? '新名称(显示名,写入 translate;留空即不改名): ' + form.title.trim() : ''),
               '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成代码,不要写文件)' : '自动写入'),
               '目标扩展文件夹: ' + form.folder.trim() + '(已有扩展,老式/新式写法跟随现有代码)',
               (gameDir ? '游戏目录(所有读写的根;bash 里写作 ' + gameDirPosix + '): ' + gameDir : ''),
               (form.notes && form.notes.length ? '该包有历史注意点 ' + form.notes.length + ' 条(过往任务实测结论):与本任务相关时才用 noname_read_extension 传 notes:true 拉取,无关条目忽略,与需求冲突时以需求为准。' : ''),
-              (form.editNotes.trim() ? '── ' + (type === 'card' ? '卡牌' : '武将') + '改动(条目本身:体力/护甲/名称等) ──\n' + form.editNotes.trim() : ''),
+              (form.editNotes.trim() ? '── ' + (type === 'mode' ? '模式骨架与规则改动' : (type === 'card' ? '卡牌' : '武将') + '改动(条目本身:体力/护甲/名称等)') + ' ──\n' + form.editNotes.trim() : ''),
+              (type === 'mode' && form.rules.trim() ? '── 新增或调整的规则(用户逐条写的改动要求,确认单按改动前后逐项列) ──\n' + form.rules.trim() : ''),
               (pickedSkillRows.length ? '── 修改技能(用户逐技能写明的改动要求) ──\n' + pickedSkillRows.map(function (p, i) { return (i + 1) + '. ' + p.name + '(内部ID ' + p.id + '):' + p.note.trim() }).join('\n') : ''),
               (newSkillRows.length ? '── 新增技能(加到目标' + (type === 'card' ? '卡牌' : '武将') + '上,按顺序实现) ──\n' + newSkillRows.map(function (s, i) { return (i + 1) + '. ' + s.name + (s.desc ? ':' + s.desc : '') }).join('\n') : ''),
               '── 任务技能节点(收口时 noname_skills_written 的 skills 参数必须逐字使用这些名称) ──\n' + skills.map(function (s) { return '- ' + s.name }).join('\n'),
@@ -362,10 +428,10 @@ window.__ModuleLoader__.load({
               form.image.trim() ? '── 图片 ──\n用户已提供图片路径: ' + form.image.trim() + '\n实现完成后用 noname_copy_images 复制进扩展包 image/ 目录,按目标条目ID(' + form.entryId + ')命名文件,调用时带上任务ID。' : '',
               (audioBlock || ''),
               '── 执行要求(确认协议,逐步执行)──',
-              '第 0 步【需求理解确认·硬门禁】:先 noname_read_extension 按块只读目标条目原文(' + (entryFile !== 'extension.js' ? 'file:\'' + entryFile + '\', ' : '') + 'block:\'' + type + ':' + form.entryId + '\')' + (pickedSkillRows.length ? '与各勾选技能原文(block:\'skill:<技能ID>\'' + (entryFile !== 'extension.js' ? ';技能可能在其他文件,用 listBlocks 定位后带对应 file' : '') + ')' : '') + '(定位不准时先传 listBlocks 看区块目录,多文件包的目录每项带 file 归属),把原文与需求对照,逐项输出【需求理解确认】(' + (form.editNotes.trim() ? '条目项:改什么 / 改动前→改动后 / 影响面' : '') + (form.editNotes.trim() && pickedSkillRows.length ? ';' : '') + (pickedSkillRows.length ? '修改技能项:改动前→改动后' : '') + ((pickedSkillRows.length || form.editNotes.trim()) && newSkillRows.length ? ';' : '') + (newSkillRows.length ? '新增技能按新技能模板逐条:触发/频率/目标/数值/边界' : '') + ')。输出后停下等待用户明确回复确认。',
+              type === 'mode' ? '第 0 步【需求理解确认·硬门禁】:先探测引擎版本并报告;noname_read_extension 读整个扩展包现状(必要时 listBlocks 看区块目录),把现状与用户需求逐条对照,输出【需求理解确认】(逐条规则:改动前→改动后/触发时机/数值/边界/影响面;另含:明确不做什么)。输出后停下等待用户明确回复确认。' : '第 0 步【需求理解确认·硬门禁】:先 noname_read_extension 按块只读目标条目原文(' + (entryFile !== 'extension.js' ? 'file:\'' + entryFile + '\', ' : '') + 'block:\'' + type + ':' + form.entryId + '\')' + (pickedSkillRows.length ? '与各勾选技能原文(block:\'skill:<技能ID>\'' + (entryFile !== 'extension.js' ? ';技能可能在其他文件,用 listBlocks 定位后带对应 file' : '') + ')' : '') + '(定位不准时先传 listBlocks 看区块目录,多文件包的目录每项带 file 归属),把原文与需求对照,逐项输出【需求理解确认】(' + (form.editNotes.trim() ? '条目项:改什么 / 改动前→改动后 / 影响面' : '') + (form.editNotes.trim() && pickedSkillRows.length ? ';' : '') + (pickedSkillRows.length ? '修改技能项:改动前→改动后' : '') + ((pickedSkillRows.length || form.editNotes.trim()) && newSkillRows.length ? ';' : '') + (newSkillRows.length ? '新增技能按新技能模板逐条:触发/频率/目标/数值/边界' : '') + ')。输出后停下等待用户明确回复确认。',
               '有任何歧义必须先用 ask_user_question 提问;禁止猜测。ask_user_question 的回答只消除歧义、不算确认——澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」后才能动笔。',
               '未获用户确认前,禁止生成代码、禁止调用 noname_write_extension。',
-              '用户确认后动手:已有内容的改动只落在目标条目' + (pickedSkillRows.length ? '与其勾选技能' : '') + '对应区块(noname_write_extension' + (entryFile !== 'extension.js' ? ' 带 file:\'' + entryFile + '\'' : '') + ',用 blocks 组装或 edits 精确补丁,严禁全文重写)' + (newSkillRows.length ? ';新增技能作为新区块插入(锚点包裹,内部 ID 用下方前缀规则)' : '') + ',除上述区块与新增区块外严禁改动任何其他区块。noname_validate 通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + '。',
+              (type === 'mode' ? '用户确认后动手:已有内容的改动只落在与本次需求相关的模式骨架/规则技区块' : '用户确认后动手:已有内容的改动只落在目标条目' + (pickedSkillRows.length ? '与其勾选技能' : '') + '对应区块') + '(noname_write_extension' + (entryFile !== 'extension.js' ? ' 带 file:\'' + entryFile + '\'' : '') + ',用 blocks 组装或 edits 精确补丁,严禁全文重写)' + (newSkillRows.length ? ';新增技能作为新区块插入(锚点包裹,内部 ID 用下方前缀规则)' : '') + ',除上述区块与新增区块外严禁改动任何其他区块。noname_validate 通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + '。',
               (newSkillRows.length && form.idPrefix.trim() ? '内部 ID 命名规则:新增技能的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,中文显示名写入 translate。' : ''),
             ].filter(Boolean).join('\n');
           } else if (isEdit) {
@@ -373,7 +439,7 @@ window.__ModuleLoader__.load({
               '【无名杀工坊·编辑任务】',
               '任务ID: ' + taskId,
               '任务性质: 编辑已有扩展包(已存在)',
-              '类型: ' + (type === 'card' ? '卡牌' : '武将(含 ' + skills.length + ' 个技能)'),
+              '类型: ' + (type === 'mode' ? '🎲 新玩法(自定义游戏模式)' : type === 'card' ? '卡牌' : '武将(含 ' + skills.length + ' 个技能)'),
               (form.title.trim() ? '名称(显示名,写入 translate): ' + form.title.trim() : ''),
               '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成代码,不要写文件)' : '自动写入'),
               '目标扩展文件夹: ' + form.folder.trim() + '(已有扩展,老式/新式写法跟随现有代码)',
@@ -433,6 +499,7 @@ window.__ModuleLoader__.load({
 
       var isEdit = form.mode === 'edit';
       var editingExisting = isEdit && form.goal === 'edit';
+      var isModeCreate = form.type === 'mode' && !editingExisting;
       // 技能列表编辑器(创建新武将 / 编辑已有+新增技能 共用)
       var skillRows = function () {
         return [
@@ -455,7 +522,7 @@ window.__ModuleLoader__.load({
       };
       try {
       return h('div', { className: 'nnk-card' },
-        e('div', '', h('b', null, isEdit ? '编辑已有扩展包' : '创建新扩展包'), h('span', { className: 'nnk-hint' }, '　任务粒度:一个完整武将(含全部技能)或一张卡牌')),
+        e('div', '', h('b', null, isEdit ? '编辑已有扩展包' : '创建新扩展包'), h('span', { className: 'nnk-hint' }, '　任务粒度:' + (form.type === 'mode' ? '一个完整的自定义游戏模式' : '一个完整武将(含全部技能)或一张卡牌'))),
         radioGroup('模式', form.mode, [{ value: 'new', text: '🆕 创建新扩展包' }, { value: 'edit', text: '📂 编辑已有扩展包' }], switchMode),
         textField('任务ID(留空自动按「文件夹名-序号」生成;反馈时用它精准定位)', form.taskId, set('taskId'), { placeholder: '例: my-pack-01' }),
         isEdit && form.taskId.trim() && (form.usedIds || []).some(function (u) { return u.id === form.taskId.trim() })
@@ -474,16 +541,29 @@ window.__ModuleLoader__.load({
                ? e('div', 'nnk-hint', '已用任务ID: ' + form.usedIds.map(function (u) { return u.id + '(' + u.state + ')' }).join('、') + ' —— 新任务请避开这些')
                : (form.folder ? e('div', 'nnk-hint', '此包暂无任务记录') : null)]
           : [textField('新扩展包名称(游戏 extension/ 下的文件夹名)', form.folder, set('folder'))],
-        radioGroup('类型', form.type, [{ value: 'character', text: '⚔️ 武将' }, { value: 'card', text: '🃏 卡牌' }], switchType),
+        radioGroup('类型', form.type, [{ value: 'character', text: '⚔️ 武将' }, { value: 'card', text: '🃏 卡牌' }, { value: 'mode', text: '🎲 新玩法(自定义模式)' }], switchType),
         isEdit ? radioGroup('目标', form.goal, [{ value: 'create', text: '✨ 创建新' }, { value: 'edit', text: '✏️ 编辑已有' }], switchGoal) : null,
+        isModeCreate ? [
+          e('div', 'nnk-hint', '🎲 以全新扩展包交付,生成后可随时在「📂 编辑已有扩展包」里继续调整。'),
+          textField('一句话核心玩法(这是什么玩法?)', form.brief, set('brief'), { placeholder: '例: 无身份混战大逃杀,每个玩家独立求生' }),
+          radioGroup('游戏人数', form.numConfig, [{ value: '2', text: '2 人' }, { value: '3', text: '3 人' }, { value: '4', text: '4 人' }, { value: '5', text: '5 人' }, { value: '6', text: '6 人' }, { value: '7', text: '7 人' }, { value: '8', text: '8 人' }, { value: 'custom', text: '自定义' }], set('numConfig')),
+          form.numConfig === 'custom' ? h('div', { style: { marginBottom: '8px' } },
+            e('label', 'nnk-label', '自定义人数(2~20;多于 8 人时 UI 座位排布以游戏引擎实际表现为准)'),
+            h('input', { className: 'nnk-input', type: 'number', min: 2, max: 20, value: (form.numCustom === '' || form.numCustom === undefined) ? '' : form.numCustom, placeholder: '例: 12', onChange: function (ev) { set('numCustom')(ev.target.value) } })
+          ) : null,
+                    textField('胜利条件(可选;不填则以玩法细节为准)', form.winConfig, set('winConfig'), { placeholder: '例: 场上只剩 1 人时结算,幸存者获胜' }),
+          e('label', 'nnk-label', '玩法细节描述(自由描述所有规则:特殊机制/阶段效果/阵营/限制…越具体,AI 的确认单越准)'),
+          h('textarea', { className: 'nnk-textarea', style: { minHeight: '120px' }, value: form.rules, placeholder: '例: 全场按 冬→春→夏→秋 每 3 轮轮换季节;准备阶段强制执行当季效果——冬:少摸一张牌或流失1点体力;春:多摸一张牌或回复1点体力…', onChange: function (ev) { set('rules')(ev.target.value) } }),
+          e('div', 'nnk-hint', '提交后 AI 会先探测你的游戏引擎版本、把描述逐条拆成规则并给出【需求理解确认】;回复「确认」后生成完整模式。生成后进游戏实测,逐条规则点「确认无误」自动收口。')
+        ] : null,
         editingExisting ? [
-          e('label', 'nnk-label', '编辑目标(选择要修改的' + (form.type === 'card' ? '卡牌' : '武将') + ')' + (form.entryLoading ? '(加载中…)' : '')),
-          h('select', { className: 'nnk-input', value: form.entryId, onChange: function (ev) { pickEntry(ev.target.value) } },
+          form.type !== 'mode' ? e('label', 'nnk-label', '编辑目标(选择要修改的' + (form.type === 'card' ? '卡牌' : '武将') + ')' + (form.entryLoading ? '(加载中…)' : '')) : null,
+          form.type !== 'mode' ? h('select', { className: 'nnk-input', value: form.entryId, onChange: function (ev) { pickEntry(ev.target.value) } },
             [h('option', { key: '', value: '' }, '— 选择要修改的' + (form.type === 'card' ? '卡牌' : '武将') + ' —')].concat(form.entryList.map(function (en) {
               var tag = en.file && en.file !== 'extension.js' ? ' · ' + en.file.replace(/\.js$/, '') : '';
               return h('option', { key: en.id, value: en.id }, en.id + (en.name ? '(' + en.name + ')' : '') + tag)
-            }))),
-          !form.entryLoading && form.entryList.length === 0
+            }))) : null,
+          !form.entryLoading && form.entryList.length === 0 && form.type !== 'mode'
             ? e('div', 'nnk-hint', '此包没有检测到可编辑的' + (form.type === 'card' ? '卡牌' : '武将') + '(若确实有,先点「🔨 建立区块索引」或确认该包有 extension.js)')
             : null,
           form.entryId && form.entrySkills.length ? [
@@ -502,15 +582,20 @@ window.__ModuleLoader__.load({
           form.entryId && !form.entrySkillsLoading && !form.entrySkills.length
             ? e('div', 'nnk-hint', '未从该条目解析出技能清单(技能改动可直接写进下面的改动描述,由 AI 在确认阶段澄清)')
             : null,
-          e('label', 'nnk-label', (form.type === 'card' ? '卡牌' : '武将') + '改动描述(条目本身的变化:' + (form.type === 'card' ? '类别/花色点数/名称等' : '体力/护甲/名称等') + ';可选)'),
-          h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.editNotes, placeholder: form.type === 'card' ? '例: 类别改为锦囊牌,花色点数改为黑桃 5;卡面描述同步修改' : '例: 初始体力信息改为 3/4/1(3 点体力、4 点上限、1 点护甲);显示名保持不变', onChange: function (ev) { set('editNotes')(ev.target.value) } }),
-          form.type === 'character' ? radioGroup('是否新增技能', form.addSkills ? 'yes' : 'no', [{ value: 'no', text: '不新增' }, { value: 'yes', text: '新增技能(填下面的技能列表)' }], function (v) { patch({ addSkills: v === 'yes' }) }) : null,
+          e('label', 'nnk-label', form.type === 'mode'
+            ? '模式骨架改动(要改什么:开局流程/人数/胜利条件/规则增删等;可选)'
+            : form.type === 'card'
+              ? '卡牌改动描述(条目本身的变化:类别/花色点数/名称等;可选)'
+              : '武将改动描述(条目本身的变化:体力/护甲/名称等;可选)'),
+          h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.editNotes, placeholder: form.type === 'mode' ? '例: 人数上限改成 12;胜利条件改为计分制,先到 100 分获胜' : form.type === 'card' ? '例: 类别改为锦囊牌,花色点数改为黑桃 5;卡面描述同步修改' : '例: 初始体力信息改为 3/4/1(3 点体力、4 点上限、1 点护甲);显示名保持不变', onChange: function (ev) { set('editNotes')(ev.target.value) } }),
+          form.type === 'mode' ? [e('label', 'nnk-label', '新增或调整的规则(可选;AI 会先读现有代码,确认单按改动前后逐项列)'), h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.rules, placeholder: '例: 新增一条规则——雪天全场武力-1;秋季距离修正改为无视坐骑只对玩家生效', onChange: function (ev) { set('rules')(ev.target.value) } })] : null,
+                    form.type === 'character' ? radioGroup('是否新增技能', form.addSkills ? 'yes' : 'no', [{ value: 'no', text: '不新增' }, { value: 'yes', text: '新增技能(填下面的技能列表)' }], function (v) { patch({ addSkills: v === 'yes' }) }) : null,
           form.addSkills && form.type === 'character' ? skillRows() : null
         ] : null,
-        textField((form.type === 'card' ? '卡牌名称' : '武将名称') + (editingExisting ? '(新显示名,可选;留空 = 不改名)' : '(显示名,会写入 translate)'), form.title, set('title'), { placeholder: form.type === 'card' ? '例: 疾风符' : '例: 凌霜' }),
+        textField(form.type === 'mode' ? '模式名称(显示名,注册为模式翻译)' : (form.type === 'card' ? '卡牌名称' : '武将名称') + (editingExisting ? '(新显示名,可选;留空 = 不改名)' : '(显示名,会写入 translate)'), form.title, set('title'), { placeholder: form.type === 'mode' ? '例: 季节乱斗' : (form.type === 'card' ? '例: 疾风符' : '例: 凌霜') }),
         (editingExisting && !(form.addSkills && form.type === 'character')) ? null : textField('ID 前缀(防止与其他扩展包的技能/武将/卡牌重名;可选但强烈建议)', form.idPrefix, set('idPrefix'), { placeholder: '例: cs_ (则内部 ID 形如 cs_tianfa)' }),
         !editingExisting && form.type === 'character' ? textField('武将基本信息(势力、体力、性别…;可选)', form.charInfo, set('charInfo'), { placeholder: '例:群势力,3 体力,男性,风格偏辅助' }) : null,
-        h('div', { key: 'img' },
+        form.type === 'mode' ? null : h('div', { key: 'img' },
           e('label', 'nnk-label', '图片路径(武将立绘/卡牌图;可选)'),
           h('input', { className: 'nnk-input', value: form.image, placeholder: '例: D:\\pic\\hero.png —— AI 复制进扩展包 image/ 后按 ID 命名', onChange: function (ev) { set('image')(ev.target.value) } })
         ),
@@ -518,7 +603,7 @@ window.__ModuleLoader__.load({
           e('label', 'nnk-label', '阵亡语音文件(可选;本地 mp3,多句逗号分隔)'),
           h('input', { className: 'nnk-input', value: form.dieAudios, placeholder: '例: D:\\audio\\die1.mp3 —— 复制进扩展包 audio/die/ 后按武将ID命名,引擎自动播放', onChange: function (ev) { set('dieAudios')(ev.target.value) } })
         ) : null,
-        editingExisting ? null : (form.type === 'character' ? skillRows() : [
+        (editingExisting || form.type === 'mode') ? null : (form.type === 'character' ? skillRows() : [
           e('label', 'nnk-label', '卡牌效果'),
           h('textarea', { className: 'nnk-textarea', value: form.skills[0].desc, placeholder: '效果:类型/花色点数需求/效果/边界', onChange: (function () {
             return function (ev) {
@@ -529,7 +614,7 @@ window.__ModuleLoader__.load({
             };
           })() })
         ]),
-        isEdit ? e('div', 'nnk-hint', '写法将自动跟随现有代码(选中扩展包后会显示检测结果)。') : radioGroup('写法版本', form.style, [{ value: 'classic', text: '老版 game.import' }, { value: 'module', text: '新版 ES Module' }], set('style')),
+        isEdit ? e('div', 'nnk-hint', '写法将自动跟随现有代码(选中扩展包后会显示检测结果)。') : (form.type === 'mode' ? e('div', 'nnk-hint', '🎲 新玩法使用新版 ES Module 写法(模式注册依赖新版引擎机制)。') : radioGroup('写法版本', form.style, [{ value: 'classic', text: '老版 game.import' }, { value: 'module', text: '新版 ES Module' }], set('style'))),
         !editingExisting && form.type === 'card' ? [
           e('label', 'nnk-label', '是否加入牌堆'),
           radioGroup('加入牌堆', form.pileJoin ? 'yes' : 'no', [{ value: 'no', text: '不加入牌堆' }, { value: 'yes', text: '加入牌堆(选择花色点数)' }], function (v) { patch({ pileJoin: v === 'yes' }) }),
@@ -792,6 +877,10 @@ window.__ModuleLoader__.load({
         var line;
         if (!health.loaded) line = e('div', 'nnk-hint', '读取中…');
         else if (!preset) line = e('div', 'nnk-hint', '状态不可用(服务端未响应)');
+        else if (preset.state === 'declarative') {
+          // DSH 0.1.7+:preset 声明在插件 bundle patch 里,随插件加载自动就位、随插件更新
+          line = e('div', 'nnk-hint', '✅ 声明式 preset,随插件自动就位——无需安装/重装,改动随插件更新在重启后生效。');
+        }
         else if (preset.state === 'ok') line = e('div', 'nnk-hint', '✅ 与插件自带的一致');
         else if (preset.state === 'missing') line = e('div', 'nnk-hint', '⚠️ 未安装——新建会话里选不到「无名杀开发模式」,点右侧重装。');
         else if (preset.state === 'stale') {
@@ -802,14 +891,17 @@ window.__ModuleLoader__.load({
           line = e('div', 'nnk-hint', '⚠️ 与插件自带的不一致(已装 ' + mine + ' ≠ 插件 ' + theirs + ')。点重装会用插件自带那份覆盖本地这份(先备份)。');
         }
         else line = e('div', 'nnk-hint', '⚠️ ' + (preset.error || '状态未知'));
+        var declarative = preset && preset.state === 'declarative';
         return e('div', {},
           h('div', {},
             h('b', null, '开发模式 preset'),
             h('span', { className: 'nnk-hint' }, '　AI 的人格、常驻工具名单与技能文档')
           ),
-          h('div', {}, h('button', { className: 'nnk-smallbtn', disabled: form.healthBusy, onClick: reinstallPreset }, '♻️ 重装 preset')),
+          declarative ? null : h('div', {}, h('button', { className: 'nnk-smallbtn', disabled: form.healthBusy, onClick: reinstallPreset }, '♻️ 重装 preset')),
           line,
-          e('div', 'nnk-hint', 'preset 是插件行为的第二份副本,代码更新后不重装会拿到自相矛盾的指令且不报错,所以单列一行。覆盖前会先备份成 noname-dev.bak-<时间戳>。')
+          declarative
+            ? e('div', 'nnk-hint', '当前 DSH 版本(0.1.7+)的 preset 随插件分发:插件更新即 preset 更新,重启 dsh 生效,不存在漂移。')
+            : e('div', 'nnk-hint', 'preset 是插件行为的第二份副本,代码更新后不重装会拿到自相矛盾的指令且不报错,所以单列一行。覆盖前会先备份成 noname-dev.bak-<时间戳>。')
         );
       };
 
@@ -1125,7 +1217,7 @@ window.__ModuleLoader__.load({
         var skills = Array.isArray(task.skills) ? task.skills : [];
         var confirmed = skills.filter(function (s) { return s.status === 'confirmed' }).length;
         var warn = [];
-        if (!task.image) warn.push('未登记图片');
+        if (!task.image && task.type !== 'mode') warn.push('未登记图片');
         if (skills.length && confirmed < skills.length) warn.push('技能确认 ' + confirmed + '/' + skills.length);
         if (audioNeed(task)) warn.push('有已登记未交付的配音');
         if (warn.length && !window.confirm('「' + task.id + '」' + warn.join('、') + '。\n确定仍要标记完成并归档吗?')) return;
@@ -1178,6 +1270,7 @@ window.__ModuleLoader__.load({
         var expanded = box.expanded === task.id;
         var fbTarget = box.fbFor && box.fbFor.id === task.id ? box.fbFor : null;
         var skills = Array.isArray(task.skills) ? task.skills : [];
+        var isModeTask = task.type === 'mode';
         return h('div', { key: task.id, className: 'nnk-taskrow' },
           h('div', {},
             h('span', { className: 'nnk-badge ' + (task.status === 'open' ? 'nnk-status-open' : 'nnk-status-done') },
@@ -1186,12 +1279,12 @@ window.__ModuleLoader__.load({
           ),
           e('div', 'nnk-taskmeta', '📂 ' + task.folder + ' · 返工 ' + task.rounds + ' 轮 · ' + fmt(task.updatedAt)),
           skills.length
-            ? e('div', 'nnk-taskmeta', '技能确认进度: ' + skills.filter(function (s) { return s.status === 'confirmed' }).length + '/' + skills.length + (!task.image && !task.target ? ' · 📷 缺图片(不登记图片不会自动完成)' : (!task.image && task.target ? ' · 编辑任务:不涉及图片' : '')) + (audioNeed(task) ? ' · 🔊 缺配音(已登记的配音复制齐才会自动完成)' : ''))
+            ? e('div', 'nnk-taskmeta', (isModeTask ? '规则确认进度: ' : '技能确认进度: ') + skills.filter(function (s) { return s.status === 'confirmed' }).length + '/' + skills.length + (isModeTask ? ' · 模式任务:不涉及图片' : (!task.image && !task.target ? ' · 📷 缺图片(不登记图片不会自动完成)' : (!task.image && task.target ? ' · 编辑任务:不涉及图片' : ''))) + (audioNeed(task) ? ' · 🔊 缺配音(已登记的配音复制齐才会自动完成)' : ''))
             : null,
           h('div', {},
             h('button', { className: 'nnk-smallbtn', onClick: function () { setD({ expanded: expanded ? null : task.id, fbFor: null, msg: '' }) } }, expanded ? '收起' : (skills.length ? '展开技能树' : '展开')),
             !isDoneSection ? h('button', { className: 'nnk-smallbtn', onClick: function () { setD({ expanded: task.id, fbFor: fbTarget && !fbTarget.skill ? null : { id: task.id, skill: '' }, issue: '', msg: '' }) } }, '🔁 反馈') : null,
-            !isDoneSection && !task.image ? h('button', { className: 'nnk-smallbtn', onClick: function () { addImage(task) } }, '📷 补图') : null,
+            !isDoneSection && !task.image && !isModeTask ? h('button', { className: 'nnk-smallbtn', onClick: function () { addImage(task) } }, '📷 补图') : null,
             !isDoneSection && audioNeed(task) ? h('button', { className: 'nnk-smallbtn', onClick: function () { addAudio(task) } }, '🔊 补配音') : null,
             !isDoneSection ? h('button', { className: 'nnk-smallbtn', onClick: function () { markDone(task) } }, '✅ 标记完成') : null,
             isDoneSection ? h('button', { className: 'nnk-smallbtn', title: '回到进行中:可补图/补配音或重新确认后再次收口' , onClick: function () { reopenTask(task) } }, '🔁 重开') : null,

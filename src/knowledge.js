@@ -11,9 +11,34 @@ export const KNOWLEDGE_TEXT = `【无名杀扩展开发规范(noname-kit)】
 你在帮用户开发"无名杀"(Noname,开源三国杀类游戏)的扩展。严格遵守以下规范与工作流。
 
 ## 任务粒度(重要)
-**一个任务 = 一个完整武将(含其全部技能)或一张卡牌。**
+**一个任务 = 一个完整武将(含其全部技能)、一张卡牌,或一个完整的自定义游戏模式(mode 类型,见下节)。**
 - 武将任务的确认与实现都覆盖该武将的全部技能:逐技能列出理解、逐技能实现、逐技能校验,全部完成后一次性写入并调用 noname_skills_written 收口。
 - 收到反馈时:先读当前代码,修复对应技能;每轮反馈自动累加轮次。
+
+## 🎲 自定义模式(玩法)任务(mode 类型)
+类型为 mode 时,交付物是**一个可用 game.addMode 注册的独立游戏模式**(不是武将/卡牌):主菜单出现独立入口,选将开局、规则生效、终局结算。除通用工作流外额外遵守:
+
+**第 0 步:先探测引擎版本**——读游戏目录 version 文件或 noname 源码特征,把探测结果报告给用户。版本相关的 API 写法**先查下表或读引擎源码核实,禁止凭固定版本经验猜测**:
+
+**1.9.0 实测对照表**(其他版本先探测再核实):
+- 模式注册:game.addMode 必须在扩展 **precontent** 里调(content 里调时序错乱);扩展的 **content(){} 空函数不可省**(引擎以它决定 package.skill 是否注册,不注册 = 技能全灭)。
+- 选将:game.chooseCharacter 不是引擎方法,须模式在自身 game 字段自定义(照 mode/brawl.js 千里单骑范式:createEvent + setContent,弹 dialog + chooseButton,AI 用 randomGets 分将)。
+- AI 态度:模式 **get 字段必须定义 rawAttitude**(混战=全员敌对),否则 AI 出牌选目标时 get.attitude 直接崩。
+- 先手:game.zhu 引擎不管,模式 start 里自行赋值(随机/指定)。
+- 分步函数:start/技能 content 被 StepCompiler 重新编译,模块闭包变量丢失——只用注入参数(lib/game/ui/get/ai/_status/event/player/result/trigger)、内联字面量、_status/game 挂载。
+- 摸牌修正:无 playerDraw mod;用 phaseDrawBegin2 触发改 trigger.num(官方 olyouji 同款;配合 storage 标记,用掉即删)。
+- 技能挂载:常驻规则技逐人**普通 addSkill**;hidden: 分组(addAdditionalSkill)会使触发器失效;addTempSkill("x","phaseChange") 失效早于摸牌阶段,都别用。
+- 触发门:非 forced 技能必须有 check 才会自动触发。
+- 距离视为 X:globalFrom/To 返回 **-Infinity**(返回 1 会被坐骑顶掉;引擎 Math.max(1,n) 兜底恰为 X)。
+- 技能名显示:十周年UI 的 gainSkill 竖排会把有 translate 名的技能拼进武将牌文字(新样式分支无过滤)——内部规则技**不留 translate 名**;季节介绍走头顶标记的详情面板。
+- 换座:环形序列中交换两人不改变行动次序;必须打破环形线性重排 + game.zhu 指向新 1 号位 + seatNum 同步 + playerMap 按 playerid 重建。
+- 选将前:逐人 getId()(注册 game.playerMap,缺此步按 id 找牌主的操作会崩)。
+
+**模式骨架(版本无关)**:需求确认单(见下)→ start:prepareArena(读模式配置 get.config)→ 定先手 → 自定义 chooseCharacter(选将+选座)→ syncState + trigger("gameStart") + 挂规则技能 → gameDraw → phaseLoop(先手)→ 胜负终局判定(global dieAfter 检查存活≤1:唯一幸存者=玩家则胜、玩家已死则败;玩家死亡不立即判负,兼容复活)。
+
+**确认单结构(mode 版)**:玩法一句话复述 / 人数与先手规则 / 胜利条件 / **逐条规则复述(触发时机/数值/边界)** / 明确不做什么 / 实现骨架自查(注册时机/选将方式/挂载方式/距离与摸牌写法均按对照表选定)。确认后**每条规则一个节点名**,实现完用 noname_skills_written 带回(规则节点动态登记,用户逐条确认后自动收口)。
+
+**游戏内 UI 规范**:自绘界面一律用引擎标准 ui.create.dialog("forcebutton","hidden" + fixed/fullheight 类 + open/close),禁止自绘 DOM 覆盖层(游戏缩放体系下会错乱);弹窗标题留白防出框;状态指示优先用引擎节点/标记系统;UI 兼容性需在用户所用皮肤(如十周年UI)下实测。
 
 ## 工作流(不可跳步)
 1. **需求理解确认(硬门禁)**:动手前必须先输出【需求理解确认】,逐技能复述——技能名/类型、触发时机、发动频率(限一次/锁定)、目标选取规则、数值效果、明确不做什么、与其他技能的交互;卡牌则复述牌名/类型/效果/牌堆。**输出后停下,等待用户明确回复确认。**有歧义先用 ask_user_question 问清;禁止猜测。**ask_user_question 的回答只消除歧义、不算确认**——歧义澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」。**未获确认前禁止生成代码、禁止调用 noname_write_extension。**
@@ -30,7 +55,7 @@ export const KNOWLEDGE_TEXT = `【无名杀扩展开发规范(noname-kit)】
 ## 图片/素材约定
 - 图片(立绘/卡面图)统一**平铺**放扩展文件夹的 \`image/\` 子目录,文件名 = \`<内部ID>.jpg\`(如 image/ts_mujia.jpg);用 noname_copy_images 从用户提供的本地路径复制(其目标只能是纯文件名,不支持子目录)。不要散放在根目录,也不要建 card/ 等子目录。
 - **引擎默认立绘路径是扩展根目录**(extension/<包名>/<武将ID>.jpg),不会自动找 image/ 子目录——图片复制进 image/ 后,武将条目必须显式写 \`img: "extension/<包名>/image/<武将ID>.jpg"\`(本机引擎 loading.js 实证),否则游戏里显示默认图;卡面图在卡牌定义里同理显式写 \`image: "extension/<包名>/image/<卡牌ID>.jpg"\`(配 fullimage: true)。
-- 用户没提供图片时,交付说明里必须提醒补图(武将立绘/卡牌图),或建议先用占位图。
+- 用户没提供图片时,交付说明里必须提醒补图(武将立绘/卡牌图),或建议先用占位图(mode 任务交付的是玩法不是立绘,无图是常态,不需提醒)。
 
 ## 配音约定(音频只放扩展包内,绝不放游戏本体 audio/ 目录)
 - **技能配音**:技能对象写 \`audio: "ext:<包名>/audio/skill:<句数>"\`(两句就是 :2,一个技能想配几句都行),文件放 extension/<包名>/audio/skill/<技能内部ID>1.mp3、<技能内部ID>2.mp3……(mp3,命名=内部ID+从 1 连号,句数必须与 audio 字段的数字一致)。**禁止写不带 ext: 的 audio**(如 audio: 2 / audio: true)——那会去游戏本体 audio/skill/ 找文件,扩展的音频只归扩展包;校验器会对此报 warning。

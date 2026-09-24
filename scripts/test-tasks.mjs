@@ -293,6 +293,23 @@ try {
   const c5 = await tasks.setSkillStatus(home, { taskId: '测试包-12', skill: '老技能', status: 'confirmed' })
   ok(c5.ok && c5.autoCompleted === true && c5.task.status === 'done', '空 audios 不卡门禁:全确认+有图直接自动完成')
 
+  // 🎲 mode 任务:动态规则节点收口
+  const mode = await tasks.createTask(home, {
+    id: '测试包-13', folder: '测试包', type: 'mode', title: '季节乱斗',
+    modeBrief: '无身份混战大逃杀', modeNum: '5', modeWin: '幸存者胜',
+    modeRules: '季节轮换;准备阶段强制当季效果', image: '', skills: [],
+  })
+  ok(mode.ok && mode.task.type === 'mode' && mode.task.dynamicSkills === true, 'mode 任务创建:type=mode 且 dynamicSkills 置真')
+  ok(mode.task.skills.length === 0 && mode.task.modeBrief === '无身份混战大逃杀' && mode.task.modeRules === '季节轮换;准备阶段强制当季效果', 'mode 任务初始无技能节点,需求四要素留档')
+  const mw = await tasks.markSkillsWritten(home, { taskId: '测试包-13', skills: ['规则:季节轮换', '规则:准备阶段效果'] })
+  ok(mw.ok && mw.missing.length === 0 && mw.task.skills.length === 2, 'mode 动态规则节点:AI 回传规则名自动登记为 written')
+  const mc1 = await tasks.setSkillStatus(home, { taskId: '测试包-13', skill: '规则:季节轮换', status: 'confirmed' })
+  ok(mc1.ok && !mc1.autoCompleted, 'mode 逐规则确认:部分确认不收口')
+  const mc2 = await tasks.setSkillStatus(home, { taskId: '测试包-13', skill: '规则:准备阶段效果', status: 'confirmed' })
+  ok(mc2.ok && mc2.autoCompleted === true && mc2.task.status === 'done', 'mode 全规则确认 → 自动完成(mode 无图片需求豁免)')
+  const reg15 = await tasks.createTask(home, { id: '测试包-15', folder: '测试包', type: 'character', title: '普通', skills: [{ name: '普通技', desc: '' }] })
+  const mMiss2 = await tasks.markSkillsWritten(home, { taskId: '测试包-15', skills: ['不存在的技能'] })
+  ok(!mMiss2.ok && mMiss2.missing.length === 1 && mMiss2.task.skills.length === 1, '非 mode 任务:回传未知技能仍报 missing(不动态登记,无回归)')
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })
