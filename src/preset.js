@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto'
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 export const PRESET_ID = 'noname-dev'
@@ -26,6 +27,24 @@ export const PRESET_ID = 'noname-dev'
 export const PRESET_MANIFEST = '.noname-kit-install.json'
 
 const COMPOSITION_FILE = 'agent.cordis.yml'
+
+/**
+ * 宿主是否提供声明式 preset 机制(存在 @deepseek-ai/dsh-agent-preset 包)。
+ *
+ * DSH 0.1.7 起 preset 改为 profile YAML 声明(bundle patch 里的
+ * @deepseek-ai/dsh-agent-preset 行随插件自动生效,见 cordis.patch.yml),
+ * 目录式安装/哈希比对/重装全部不再需要;0.1.6 及以下仍走目录式。
+ * 探测"机制是否存在"而非比较版本号:prerelease 与正式版都不用维护清单,
+ * 宿主解析 peer 依赖时自然能找到(或找不到)这个包。
+ */
+export function hostHasDeclarativePreset() {
+  try {
+    createRequire(import.meta.url).resolve('@deepseek-ai/dsh-agent-preset/package.json')
+    return true
+  } catch {
+    return false
+  }
+}
 
 /**
  * DSH 家目录:优先 $DSH_HOME,否则 ~/.dsh。

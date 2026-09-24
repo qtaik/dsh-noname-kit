@@ -27,7 +27,7 @@ import { copyImages } from './src/images.js'
 import { listExtensionFolders } from './src/detect.js'
 import { copyAudios, audioTargetKind } from './src/audio.js'
 import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, setSkillAudioFiles, setDieAudioFiles, completeById, deleteTask, reopenTask, getTask } from './src/tasks.js'
-import { bundledPresetDir, installPreset, presetDirOf, presetStatus } from './src/preset.js'
+import { bundledPresetDir, hostHasDeclarativePreset, installPreset, presetDirOf, presetStatus } from './src/preset.js'
 import { cachedUpdate, checkForUpdate, detectInstall, installHint } from './src/update.js'
 import pkg from './package.json' with { type: 'json' }
 
@@ -134,8 +134,16 @@ export function apply(ctx, config) {
   //  readdir().isDirectory() 判定,而 node 对 junction/symlink 一律报 isLink。)
   const presetDir = presetDirOf(dshHomeDir)
   const bundledDir = bundledPresetDir()
-  const readPresetStatus = () => presetStatus({ presetDir, bundledDir })
-  {
+  // DSH 0.1.7 起 preset 声明在 bundle patch 里(@deepseek-ai/dsh-agent-preset 行,
+  // 见 cordis.patch.yml),随插件加载自动就位——目录式安装/哈希比对/重装全部退役;
+  // 0.1.6 及以下没有该机制,继续走 ~/.dsh/.agent-presets 目录式。
+  const declarativePreset = hostHasDeclarativePreset()
+  const readPresetStatus = () => declarativePreset
+    ? { state: 'declarative' }
+    : presetStatus({ presetDir, bundledDir })
+  if (declarativePreset) {
+    console.log('[noname-kit] 声明式 preset(无名杀开发模式)随插件自动就位,无需安装/重装')
+  } else {
     const status = readPresetStatus()
     if (status.state === 'missing') {
       console.warn('[noname-kit] ⚠️ 「无名杀开发模式」preset 未安装:工坊 ⚙ 设置页点「重装 preset」,或跑 node scripts/install-preset.mjs')
@@ -545,10 +553,10 @@ export function apply(ctx, config) {
 
   ctx.tools.register(defineTool({
     name: 'noname_skills_written',
-    description: 'Mark task skills as written (awaiting user in-game test). Call after all skills of the task are implemented, validated and written. The task auto-completes when the user confirms every skill.',
+    description: 'Mark task skills as written (awaiting user in-game test). Call after all skills of the task are implemented, validated and written. The task auto-completes when the user confirms every skill. For mode tasks (custom game mode), the names are rule-node names from the task message and are registered dynamically on first call — pass every rule node verbatim.',
     parameters: {
       taskId: { type: 'string', required: true, description: 'Task ID from the task message, verbatim.' },
-      skills: { type: 'array', required: true, items: { type: 'string' }, description: 'Skill display names implemented in this round.' },
+      skills: { type: 'array', required: true, items: { type: 'string' }, description: 'Skill display names implemented in this round (mode task: rule-node names, registered dynamically).' },
       notes: { type: 'array', items: { type: 'string' }, description: 'OPTIONAL engine-level, reusable lessons only (API behavior, global pitfalls) worth keeping for future tasks of this package. NEVER task-specific implementation details.' },
     },
     output: {
@@ -807,6 +815,13 @@ export function apply(ctx, config) {
           return json(200, await updatePayload(true))
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/preset/install') {
+          if (declarativePreset) {
+            return json(200, {
+              ok: false,
+              error: '当前 DSH(0.1.7+)的 preset 是声明式的,随插件自动就位并随插件更新——无需也不可手动重装。改动要生效请重启 dsh。',
+              preset: readPresetStatus(),
+            })
+          }
           const result = installPreset({ presetDir, bundledDir })
           if (result.ok) {
             console.log(`[noname-kit] preset 已重装${result.backup ? ',旧版备份到 ' + result.backup : ''}(新会话生效)`)

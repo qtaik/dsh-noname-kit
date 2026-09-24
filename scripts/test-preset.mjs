@@ -201,6 +201,63 @@ try {
   ]
   for (const cmd of allowCase) ok(rootSearchIssue(cmd) === null, '全盘检索闸:放行 ' + cmd.slice(0, 40))
 
+  // ── N) 声明式 preset(DSH 0.1.7+)与目录式的单一事实源把关 ──
+  // 0.1.7 的组合声明在插件 cordis.patch.yml(bundle patch,随插件加载自动就位),
+  // 0.1.6 及以下继续用 presets/noname-dev/agent.cordis.yml(目录式)。两份必须
+  // 内容同步:persona 漂移会把自相矛盾的指令发给 AI,这里用字符串级断言锁死。
+  {
+    const repoRoot = new URL('../', import.meta.url)
+    const readRepo = (p) => readFileSync(new URL(p, repoRoot), 'utf8')
+    const patchYml = readRepo('cordis.patch.yml')
+    const compositionYml = readRepo('presets/noname-dev/agent.cordis.yml')
+    const pkgJson = JSON.parse(readRepo('package.json'))
+
+    ok(patchYml.includes('id: preset-noname-dev'), '声明式:cordis.patch.yml 声明了 preset-noname-dev')
+    ok(patchYml.includes("'@deepseek-ai/dsh-agent-preset'"), '声明式:使用 @deepseek-ai/dsh-agent-preset 服务')
+    // 0.1.6 守卫:没有 agent-preset 包的宿主上整行禁用,目录式 preset 不受干扰
+    ok(patchYml.includes("resolve('@deepseek-ai/dsh-agent-preset/package.json')"), '声明式:disabled 探测表达式守卫 0.1.6')
+
+    // 自有脚本必须用包名子路径(可移植,禁止相对/绝对路径写死)
+    const localScripts = ['instruction-hint.mjs', 'dev-tool-search.mjs', 'zero-tool-bootstrap.mjs', 'anchor-turn.mjs', 'custom-bash.mjs', 'skill-search.mjs']
+    for (const name of localScripts) {
+      ok(patchYml.includes(`dsh-noname-kit/presets/noname-dev/${name}`), `声明式:${name} 用包名子路径引用`)
+      ok(existsSync(new URL(`presets/noname-dev/${name}`, repoRoot)), `声明式:${name} 文件真实存在`)
+      ok(!new RegExp(`name: \\./${name}`).test(patchYml), `声明式:${name} 没有写死相对路径`)
+    }
+
+    // 技能目录用 !!js 从 baseUrl 相对解析(官方 cordis preset 同款写法)
+    ok(/customSkillDirs:[\s\S]*?dsh-noname-kit\/package\.json[\s\S]*?'presets', 'noname-dev', 'skills'/.test(patchYml), '声明式:技能目录经 !!js 从插件包相对解析')
+    ok(existsSync(new URL('presets/noname-dev/skills/noname-extension-dev/SKILL.md', repoRoot)), '声明式:插件包内技能目录存在')
+
+    // exports 必须导出子路径,否则包名引用在 node 解析层被拒
+    ok(pkgJson.exports && pkgJson.exports['./presets/noname-dev/*'] === './presets/noname-dev/*', '声明式:package.json exports 导出 presets 子路径')
+
+    // persona 正文两处同步:提取两份的 prefix 折叠块,归一空白后必须完全一致
+    const extractPrefix = (text) => {
+      const lines = text.split('\n')
+      const start = lines.findIndex((l) => /^\s*prefix: >-/.test(l))
+      if (start < 0) return null
+      const indent = lines[start].search(/\S/)
+      const body = [lines[start].replace(/^\s*prefix: >-\s*/, '')]
+      for (let i = start + 1; i < lines.length; i++) {
+        const line = lines[i]
+        if (line.trim() === '' ) { body.push(''); continue }
+        const cur = line.search(/\S/)
+        if (cur <= indent) break
+        body.push(line.trim())
+      }
+      return body.join(' ').replace(/\s+/g, ' ').trim()
+    }
+    const fromComposition = extractPrefix(compositionYml)
+    const fromPatch = extractPrefix(patchYml)
+    ok(fromComposition && fromPatch, '声明式:两份 persona prefix 均可提取')
+    eq(fromPatch, fromComposition, '声明式:persona 正文与目录式 preset 完全同步')
+
+    // 机制探测:开发目录下(无宿主 peer)应为 false,但任何环境都不得抛异常
+    const declarative = await preset.hostHasDeclarativePreset()
+    ok(typeof declarative === 'boolean', '声明式:hostHasDeclarativePreset 返回布尔不抛异常')
+  }
+
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })

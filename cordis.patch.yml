@@ -12,3 +12,146 @@
       name: dsh-noname-kit
       config:
         nonameDir: ''
+
+    # ── 「无名杀开发模式」preset(DSH 0.1.7+ 声明式)─────────────────────────
+    # 0.1.7 起 agent preset 改为 YAML 声明(不再扫描 ~/.dsh/.agent-presets 目录),
+    # 本行随插件加载自动就位、随插件更新,无需安装/重装。
+    # 0.1.6 及以下没有 @deepseek-ai/dsh-agent-preset 包:disabled 探测表达式解析
+    # 不到该包即整行禁用,目录式 preset(install-preset 装的那份)继续生效,两套互不干扰。
+    # 插件自有脚本一律用「包名子路径」引用(经 exports ./presets/noname-dev/* 导出),
+    # 技能目录用 !!js 从 baseUrl 相对解析——任何安装形态(npm/link/路径)都可移植。
+    # 注意:persona 正文与 presets/noname-dev/agent.cordis.yml(0.1.6 目录式那份)
+    # 必须保持一致,两处由 test-preset 的同步用例把关,改任一处都要同步另一处。
+    - id: preset-noname-dev
+      name: '@deepseek-ai/dsh-agent-preset'
+      disabled: !!js (() => { try { process.getBuiltinModule('node:module').createRequire(String(baseUrl)).resolve('@deepseek-ai/dsh-agent-preset/package.json'); return false } catch { return true } })()
+      config:
+        id: noname-dev
+        name: 无名杀开发模式
+        description: 无名杀扩展开发:七件套工具 + 确认协议 + 区块化读写 + 自定义模式生成
+        order: 2
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                你是无名杀(Noname)扩展开发工程师与工坊总指挥,只为本机游戏编写武将技能、卡牌与自定义游戏模式扩展。
+                任务粒度=一个完整武将(含全部技能)、一张卡牌,或一个完整的自定义游戏模式(🎲 mode 类型,规范见技能文档「自定义模式」节)。流程:任何任务先输出
+                【需求理解确认】(逐技能/逐条规则:触发/频率/目标/数值/边界)并停下等用户确认,
+                有歧义用 ask_user_question 问清;注意 ask_user_question 的回答只消除歧义、
+                不算确认——歧义澄清后把最终确认单呈现给用户,仍须等到用户明确回复「确认」。
+                未确认禁止写代码(确认前的只读调研不受限:
+                可先 noname_search_reference 搜官方参考、noname_read_extension 读代码,再写确认单)。
+                确认后逐技能实现,写完 noname_validate 校验通过后 noname_write_extension 写入,
+                图片复制进 image/ 子目录,配音复制进 audio/skill|audio/die 子目录(绝不放本体目录),
+                全部完成调
+                noname_skills_written 并提示测试。改已有包优先区块模式(listBlocks/block 按块读,
+                blocks/edits/deletes 提交,老代码由工具保留);全文模式仅首写或未建索引的包,
+                且必须带 editScope。完整规范与示例用 skill_load 加载 noname-extension-dev 技能;
+                先想清方案再交付,交付前自查一遍。
+              complete: true
+              includeRuntimeContext: false
+
+          - id: instruction-hint
+            name: dsh-noname-kit/presets/noname-dev/instruction-hint.mjs
+            config:
+              promoteOn: assistant-message
+
+          - id: dev-tool-search
+            name: dsh-noname-kit/presets/noname-dev/dev-tool-search.mjs
+
+          - id: zero-tool-bootstrap
+            name: dsh-noname-kit/presets/noname-dev/zero-tool-bootstrap.mjs
+            config:
+              suppressedContextSources: [agent-instructions, skill-catalog]
+              residentTools: [noname_search_reference, noname_validate, noname_read_extension, noname_write_extension, noname_skills_written, noname_copy_images, noname_copy_audio]
+              compactionTools: [read, glob, grep, noname_search_reference, noname_validate, noname_read_extension, noname_write_extension, noname_skills_written, noname_copy_images, noname_copy_audio]
+
+          - id: anchor-turn
+            name: dsh-noname-kit/presets/noname-dev/anchor-turn.mjs
+            config:
+              text: 这一轮是无名杀开发模式的锚定轮,工具尚未开放;从下一轮起工具开放。
+
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+            disabled: !!js process.platform === 'win32'
+
+          - id: tool-pwsh
+            name: '@deepseek-ai/dsh-tool-pwsh'
+            disabled: !!js process.platform !== 'win32'
+
+          - id: custom-bash
+            name: dsh-noname-kit/presets/noname-dev/custom-bash.mjs
+            disabled: !!js process.platform !== 'win32'
+            config:
+              # Git Bash 路径自动探测(Program Files / (x86) / LOCALAPPDATA);非标准安装请显式指定:
+              #   bashPath: 'D:/Git/bin/bash.exe'
+              # bash 单次输出上限(阀门)在工坊「⚙ 设置」页调节(默认 64K,可调 64~256K);
+              # 高级用户也可在此手改: maxOutputBytes: 64000(行配置优先于设置页)。
+
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+
+          - id: bootstrap-filesystem
+            name: cordis:group
+            group: true
+            isolate:
+              fs: true
+            config:
+              - id: fs-local
+                name: '@deepseek-ai/dsh-fs-local'
+                config:
+                  cwd: !!js process.env.DSH_CWD ?? process.cwd()
+
+              - id: str-replace-editor
+                name: '@deepseek-ai/dsh-tool-str-replace-editor'
+                config:
+                  maxOutputChars: 16000
+
+          - id: skill-filesystem
+            name: '@deepseek-ai/dsh-skill-filesystem'
+            config:
+              customSkillDirs:
+                - !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('dsh-noname-kit/package.json')), 'presets', 'noname-dev', 'skills')
+
+          - id: skill-search
+            name: dsh-noname-kit/presets/noname-dev/skill-search.mjs
+
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
+
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: false
+              searchTimeoutMs: 60000
