@@ -95,7 +95,9 @@ try {
   eq(mixed.profile, 'prod', '并报告该 profile 名')
   eq(mixed.profiles.length, 2, '两个 profile 都出现在明细里')
   eq(update.installHint({ form: 'link', profile: 'web' }), null, 'link 安装没有升级命令')
-  eq(update.installHint({ form: 'git', profile: 'prod' }), 'dsh plugin --profile prod update dsh-noname-kit', 'git 安装给出升级命令')
+  eq(update.installHint({ form: 'git', profile: 'prod', latest: '1.8.1' }), 'dsh plugin --profile prod add dsh-noname-kit@1.8.1', 'git 安装给出 add 精确版本命令(冷却期可豁免)')
+  eq(update.installHint({ form: 'registry', profile: 'web', latest: '1.8.1' }), 'dsh plugin --profile web add dsh-noname-kit@1.8.1', 'registry 安装同款')
+  ok(update.installHint({ form: 'git', profile: 'prod' }).includes('@latest'), 'latest 缺省时退回 @latest 占位')
   writeFileSync(join(dshHome, 'profiles', 'web', 'package.json'), JSON.stringify({
     dependencies: { 'dsh-noname-kit': 'link:../noname-kit' },
   }))

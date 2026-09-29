@@ -176,7 +176,7 @@ export function apply(ctx, config) {
       installForm: install.form,
       installProfile: install.profile,
       installSpec: install.spec,
-      installHint: installHint({ form: install.form, profile: install.profile, packageName: pkg.name }),
+      installHint: installHint({ form: install.form, profile: install.profile, packageName: pkg.name, latest: check?.latest }),
       check: check || null,
     }
   }

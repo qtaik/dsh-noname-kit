@@ -93,9 +93,15 @@ export function detectInstall({ dshHome, packageName = PACKAGE_NAME }) {
   return { form: primary.form, spec: primary.spec, profile: primary.profile, profiles: found }
 }
 
-/** 升级命令:link 安装没有可执行的更新动作,返回 null。 */
-export function installHint({ form, profile, packageName = PACKAGE_NAME }) {
-  if (form === 'git' || form === 'registry') return `dsh plugin --profile ${profile} update ${packageName}`
+/** 升级命令:link 安装没有可执行的更新动作,返回 null。
+ *  用 add <包>@<精确版本> 而非 update:update 会受发布冷却期(minimumReleaseAge)约束,
+ *  对刚发的新版静默留在旧版("Already up to date",0.1.6~0.2.0 的 dsh plugin 都是
+ *  pnpm 直通,行为一致);add 指名版本会触发 pnpm 自动补冷却期豁免并安装(实测)。
+ *  latest 缺省(检测失败兜底)时退回 @latest,冷却期内同样可能不动,仅作占位。 */
+export function installHint({ form, profile, packageName = PACKAGE_NAME, latest }) {
+  if (form === 'git' || form === 'registry') {
+    return `dsh plugin --profile ${profile} add ${packageName}@${latest || 'latest'}`
+  }
   return null
 }
 
