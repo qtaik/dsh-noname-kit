@@ -32,6 +32,21 @@ node scripts/install-preset.mjs
 dsh plugin --profile web add https://github.com/qtaik/dsh-noname-kit.git
 ```
 
+### 桌面版(DeepSeek Harness 桌面应用)
+
+桌面版有自己独立的环境,安装方式不同:打开桌面版,左侧「插件」面板 →
+「添加插件」→ 输入 `dsh-noname-kit` → 安装 → 重启桌面版。需要 1.8.1 或更高
+版本(桌面版会拒载旧版)。也可以用桌面版自带的命令行:
+
+```sh
+E:\dsh\resources\runtime\cli\bin\dsh.cmd plugin add dsh-noname-kit@<版本号>
+```
+
+注意:这条命令**不要加 `--profile web`**——桌面版的 dsh 命令默认指向它自己的
+环境,带了反而会装进 Web 环境,桌面版看不见。装完新建会话选「无名杀开发
+模式」即可(preset 随插件自动就位,无需重装),再到工坊「⚙ 设置」配一次游戏
+目录。升级:在插件面板卸载后重装新版本(桌面版面板暂不支持自动更新)。
+
 ## 配置
 
 重启 `dsh web` 后打开 Web UI。工坊页里没配游戏目录会先出初始化向导:填无名杀
