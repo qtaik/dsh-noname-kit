@@ -20,6 +20,8 @@ dsh plugin --profile web add dsh-noname-kit
 
 装完**重启 dsh**。重启后点输入框左边的「🛠 工坊」→ 进「⚙ 设置」页 → 点一下「♻️ 重装 preset」,AI 的「无名杀开发模式」人格与规范就装好了。**不用开终端。**
 
+> 提示:**DSH 0.1.7 起(含桌面版)不需要点这个**——preset 随插件自动就位,重启后直接可用;这个按钮只在 0.1.6 及以下的环境出现。
+
 想用命令行也行(脚本在插件目录里,路径是 `C:\Users\<你的用户名>\.dsh\profiles\web\node_modules\dsh-noname-kit`):
 
 ```sh
