@@ -102,6 +102,33 @@
 		});
 	}
 
+	/* 应答后的连接监视:ICE 打不通时绝不能无声悬挂(实测教训——第一版在
+	 * 协商成功后静默挂死,用户以为没反应反复点连接,只会收到 wrong state 报错)。
+	 * 失败/超时都自动换一张新邀请码,客人重新走一遍即可。 */
+	function watchHostConnection(pc) {
+		var dead = false;
+		var giveUp = function(reason) {
+			if (dead || hostState.invitePc !== pc) {
+				return;   /* 已连上(连接建立时 invitePc 会被摘牌)或已换过码 */
+			}
+			dead = true;
+			bridgeApi().emit("error", { message: reason + "。已自动生成新邀请码——让客人从「加入互联网房间」重新走一遍;反复失败请检查两台电脑防火墙是否放行无名杀(UDP),或换个网络再试" });
+			hostState.invitePc = null;
+			try { pc.close(); } catch (e) { /* 忽略 */ }
+			startInvite();
+		};
+		pc.onconnectionstatechange = function() {
+			if (pc.connectionState === "failed") {
+				giveUp("直连建立失败(双方网络没打通)");
+			}
+		};
+		setTimeout(function() {
+			if (pc.connectionState !== "connected" && pc.connectionState !== "closed") {
+				giveUp("20 秒仍未打通直连(网络受限)");
+			}
+		}, 20000);
+	}
+
 	var api = {
 		init: function() {
 			var env = nnk.env;
@@ -186,6 +213,12 @@
 				bridgeApi().emit("error", { message: "没有待应答的邀请,请先创建互联网房间" });
 				return;
 			}
+			/* 一张邀请码只能被应答一次:协商完成后 signalingState 回到 stable,
+			 * 再粘同一条回执码会报 wrong state——正确动作是换一张新邀请码重试 */
+			if (pc.signalingState !== "have-local-offer") {
+				bridgeApi().emit("error", { message: "这张邀请码已经协商过了(客人没进来说明直连没打通)。点「♻️ 换一张邀请码重试」,让客人用新码重新走一遍" });
+				return;
+			}
 			var data;
 			try {
 				data = rtc.decodeCode(codeText);
@@ -198,6 +231,7 @@
 			}
 			pc.setRemoteDescription(data.sdp).then(function() {
 				bridgeApi().setPhase("connecting", { roomCode: hostState.roomCode });
+				watchHostConnection(pc);
 			}).catch(function(err) {
 				bridgeApi().emit("error", { message: "回执码无效: " + (err.message || err) });
 			});

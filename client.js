@@ -975,7 +975,7 @@ window.__ModuleLoader__.load({
       host_booting: '正在进入建房流程(游戏可能会自动重载一次)…',
       hosting: '房间已建好,正在生成邀请码…',
       invite_ready: '邀请码已生成,等待客人回执码…',
-      connecting: '正在建立点对点直连…',
+      connecting: '正在建立点对点直连…(最长约 20 秒,打不通会自动换新码)',
       room_open: '客人已连接!等待房间在游戏里,点「开始游戏」即可开局',
       joining: '正在解析主机的邀请码…',
       answer_ready: '回执码已生成,发给房主等他粘贴…',
@@ -1100,7 +1100,9 @@ window.__ModuleLoader__.load({
                 })),
               h('div', { className: 'nnk-row' },
                 h('button', { className: 'nnk-submit', style: { marginTop: '0' }, disabled: !bridgeOnline || guestFlow, onClick: function () { setAnswerText(''); sendCmd('create_room', { mode: mode }) } }, '🚀 创建互联网房间'),
-                phase === 'room_open' ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '➕ 再邀请一位') : null),
+                phase === 'room_open' ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '➕ 再邀请一位')
+                  : (phase === 'invite_ready' || phase === 'connecting') ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一张邀请码重试')
+                  : null),
               !bridgeOnline ? e('div', 'nnk-hint', '内核离线(先启动游戏)') : null,
               inviteEv
                 ? h('div', { style: { marginTop: '10px' } },

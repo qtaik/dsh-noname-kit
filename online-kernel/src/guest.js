@@ -128,6 +128,19 @@
 					}
 				});
 			};
+			/* 连接监视:打不通不能无声悬挂(与主机端同款),失败了明确说,让房主换码 */
+			pc.onconnectionstatechange = function() {
+				if (pc.connectionState === "failed") {
+					bridgeApi().emit("error", { message: "直连建立失败(双方网络没打通)——请房主换一张新邀请码,你重新粘贴加入;反复失败检查防火墙是否放行无名杀(UDP)" });
+					bridgeApi().setPhase("idle");
+					resetSession();
+				}
+			};
+			setTimeout(function() {
+				if (pc.connectionState !== "connected" && pc.connectionState !== "closed") {
+					bridgeApi().emit("error", { message: "20 秒仍未打通直连(网络受限)——请房主换一张新邀请码再试" });
+				}
+			}, 20000);
 			pc.setRemoteDescription(data.sdp).then(function() {
 				return pc.createAnswer();
 			}).then(function(answer) {
