@@ -1529,6 +1529,18 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /** 浮窗位置按当前视口钳制:位置存在 localStorage,换机器/换分辨率/缩放窗口后
+     *  可能落在屏幕外(实测新机上工坊浮窗右侧/上方被截,"上方内容显示不全")——
+     *  渲染时强制收回可视区;双击标题栏可一键复位。 */
+    function clampPanelPos(pos, width) {
+      var vw = window.innerWidth || 1200;
+      var vh = window.innerHeight || 800;
+      return {
+        x: Math.min(Math.max(8, Number(pos.x) || 8), Math.max(8, vw - width - 8)),
+        y: Math.min(Math.max(8, Number(pos.y) || 8), Math.max(8, vh - 90))
+      };
+    }
+
     /** 悬浮窗框架:拖动/位置记忆/开关,内容复用 TaskListContent。 */
     function TaskPanelWindow(props) {
       var sessions = props && props.sessions;
@@ -1562,9 +1574,14 @@ window.__ModuleLoader__.load({
       };
 
       if (!isOpen) return null;
-      return h('div', { className: 'nnk-panel', style: { left: pos.x + 'px', top: pos.y + 'px' } },
-        h('div', { className: 'nnk-panel-head', onMouseDown: startDrag },
-          e('span', 'nnk-panel-title', '📋 无名杀任务列表'),
+      var safePos = clampPanelPos(pos, 380);
+      return h('div', { className: 'nnk-panel', style: { left: safePos.x + 'px', top: safePos.y + 'px', maxHeight: 'min(560px, calc(100vh - 24px))' } },
+        h('div', { className: 'nnk-panel-head', onMouseDown: startDrag, onDoubleClick: function () {
+          var d = { x: 90, y: 70 };
+          setPos(d);
+          try { localStorage.setItem('dsh-noname-kit.panelPos', JSON.stringify(d)) } catch (e) {}
+        }, title: '拖动移动 · 双击复位' },
+        e('span', 'nnk-panel-title', '📋 无名杀任务列表'),
           h('button', { className: 'nnk-panel-close', onClick: function () { panelBus.set(false) } }, '✕')
         ),
         h('div', { className: 'nnk-panel-body' }, h(TaskListContent, { sessions: sessions, uiSession: uiSession }))
@@ -1681,9 +1698,14 @@ window.__ModuleLoader__.load({
       };
       if (!isOpen) return null;
       var sid = readCurrentSessionId(sessions, uiSession);
-      return h('div', { className: 'nnk-panel', style: { left: pos.x + 'px', top: pos.y + 'px', width: '420px', maxHeight: '640px' } },
-        h('div', { className: 'nnk-panel-head', onMouseDown: startDrag },
-          e('span', 'nnk-panel-title', '🛠 无名杀工坊'),
+      var safePos = clampPanelPos(pos, 420);
+      return h('div', { className: 'nnk-panel', style: { left: safePos.x + 'px', top: safePos.y + 'px', width: '420px', maxHeight: 'min(640px, calc(100vh - 24px))' } },
+        h('div', { className: 'nnk-panel-head', onMouseDown: startDrag, onDoubleClick: function () {
+          var d = { x: 620, y: 70 };
+          setPos(d);
+          try { localStorage.setItem('dsh-noname-kit.workshopPanelPos', JSON.stringify(d)) } catch (e) {}
+        }, title: '拖动移动 · 双击复位' },
+        e('span', 'nnk-panel-title', '🛠 无名杀工坊'),
           h('button', { className: 'nnk-panel-close', onClick: function () { workshopBus.set(false) } }, '✕')
         ),
         h('div', { className: 'nnk-panel-body' },
