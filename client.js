@@ -33,9 +33,9 @@ window.__ModuleLoader__.load({
       '.nnk-submit{border:none;border-radius:var(--nnk-rs);padding:10px 26px;background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary));color:var(--dsw-alias-label-primary-foreground,var(--dsw-alias-bg-layer-1));cursor:pointer;font:inherit;font-size:14px;font-weight:600;margin-top:14px;transition:filter var(--nnk-t),opacity var(--nnk-t)}',
       '.nnk-submit:hover:not(:disabled){filter:brightness(1.12)}',
       '.nnk-submit:disabled{opacity:.5;cursor:default}',
-      '.nnk-hint{font-size:12px;color:var(--dsw-alias-label-secondary);margin-top:10px;line-height:1.6}',
-      '.nnk-err{color:var(--dsw-alias-state-error-primary);font-size:13px;margin-top:8px}',
-      '.nnk-ok{color:var(--dsw-alias-state-success-primary);font-size:13px;margin-top:8px}',
+      '.nnk-hint{font-size:12px;color:var(--dsw-alias-label-secondary);margin-top:10px;line-height:1.6;overflow-wrap:anywhere}',
+      '.nnk-err{color:var(--dsw-alias-state-error-primary);font-size:13px;margin-top:8px;overflow-wrap:anywhere}',
+      '.nnk-ok{color:var(--dsw-alias-state-success-primary);font-size:13px;margin-top:8px;overflow-wrap:anywhere}',
       '.nnk-taskrow{border:1px solid var(--dsw-alias-border-l2);border-radius:var(--nnk-rs);padding:10px 12px;margin-bottom:8px;font-size:13px;transition:border-color var(--nnk-t)}',
       '.nnk-taskrow:hover{border-color:var(--dsw-alias-border-l1)}',
       '.nnk-taskmeta{color:var(--dsw-alias-label-secondary);font-size:12px;margin-top:4px}',
@@ -61,7 +61,8 @@ window.__ModuleLoader__.load({
       '.nnk-cmd{font-family:Consolas,monospace;font-size:12px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 8px;margin-top:6px;display:inline-block;user-select:all}',
       '.nnk-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}',
       '.nnk-log{border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-2);padding:6px 10px;font-size:12px;max-height:130px;overflow:auto;color:var(--dsw-alias-label-secondary);line-height:1.6}',
-      '.nnk-phaseline{font-size:13px;margin-top:8px}'
+      '.nnk-phaseline{font-size:13px;margin-top:8px}',
+      '.nnk-break{overflow-wrap:anywhere;word-break:break-all}'
     ].join('\n');
     if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css="dsh-noname-kit/ui"]') === null) {
       var tag = document.createElement('style');
@@ -929,9 +930,9 @@ window.__ModuleLoader__.load({
           ? '✅ 已连接游戏目录,检测到 ' + form.extensions.length + ' 个扩展包: ' + form.extensions.slice(0, 20).join('、') + (form.extensions.length > 20 ? ' 等' : '')
           : '目录已连接,但 extension/ 下还没有扩展包') : null,
         form.candidates.map(function (dir) {
-          return h('label', { key: dir, className: 'nnk-radio', style: { display: 'block', margin: '4px 0' } },
+          return h('label', { key: dir, className: 'nnk-radio', style: { display: 'block', margin: '4px 0', whiteSpace: 'normal' } },
             h('input', { type: 'radio', name: 'nnk-set-candidate', checked: form.manual === dir, onChange: function () { set({ manual: dir }) } }),
-            dir
+            h('span', { className: 'nnk-break' }, dir)
           );
         }),
 
@@ -1016,7 +1017,7 @@ window.__ModuleLoader__.load({
         var tick = function () {
           fetch('/noname-kit-api/online/status').then(function (r) { return r.json() }).then(function (d) {
             if (alive) setStatus(d);
-          }, function () { });
+          }, function () { if (alive) setStatus({ fetchFailed: true }) });
         };
         tick();
         var timer = setInterval(tick, 1500);
@@ -1048,6 +1049,7 @@ window.__ModuleLoader__.load({
         }
       };
       if (!status) return e('div', 'nnk-hint', '正在获取联机状态…');
+      if (status.fetchFailed) return e('div', 'nnk-err', '❌ 联机状态获取失败(插件服务不可达)——确认 dsh 正在运行,恢复后本页几秒内自动重试。');
       var kernel = status.kernel;
       var bridge = status.bridge || {};
       var evs = bridge.events || [];
@@ -1065,7 +1067,9 @@ window.__ModuleLoader__.load({
         h('div', { className: 'nnk-card' },
           e('div', null, h('b', null, '🌐 联机助手')),
           !status.active
-            ? e('div', 'nnk-hint', '还没配置游戏目录——先到「⚙ 设置」页完成配置,再回来安装联机内核。')
+            ? e('div', 'nnk-hint', status.savedDir
+                ? '⚠️ 游戏目录已保存过(' + status.savedDir + '),但本 dsh 实例是在保存之前启动的——重启 dsh 生效;或就在本实例「⚙ 设置」里重新点一次保存(立即生效)。'
+                : '还没配置游戏目录——先到「⚙ 设置」页完成配置,再回来安装联机内核。')
             : kernelBad
               ? e('div', 'nnk-err', '❌ ' + ((kernel && kernel.error) || '内核状态未知'))
               : h('div', {},

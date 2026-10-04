@@ -848,10 +848,20 @@ export function apply(ctx, config) {
         // 联机助手(🌐 联机页签)——这两条在 503 闸门之前:未配置游戏目录时
         // 用户也要能看到"先去配置"的指引;bridge 是游戏内核的轮询端点。
         if (req.method === 'GET' && url.pathname === '/noname-kit-api/online/status') {
+          // kernelStatus 出错绝不能让状态接口 500——前端会把非 200/异常响应当成
+          // "未配置"显示,误导排查;降级成 unknown + 错误文本。savedDir 供前端
+          // 区分「从没保存过」与「保存过但本实例是保存前启动的(需重启或重存)」。
+          let kernel = null
+          let kernelError = null
+          if (active) {
+            try { kernel = kernelStatus({ nonameDir }) } catch (error) { kernel = { state: 'unknown' }; kernelError = error.message }
+          }
           return json(200, {
             active,
-            kernel: active ? kernelStatus({ nonameDir }) : null,
+            kernel,
+            kernelError,
             kernelVersion: bundledKernelVersion(),
+            savedDir: readSettingsFile().nonameDir || '',
             bridge: bridge.snapshot(),
           })
         }
