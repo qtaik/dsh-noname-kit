@@ -41,7 +41,8 @@ window.__ModuleLoader__.load({
       '.nnk-taskmeta{color:var(--dsw-alias-label-secondary);font-size:12px;margin-top:4px}',
       '.nnk-note{background:var(--dsw-alias-bg-layer-2);border-radius:6px;padding:6px 10px;font-size:12px;margin:4px 0;color:var(--dsw-alias-label-primary)}',
       '.nnk-copy{border:1px solid var(--dsw-alias-border-l2);border-radius:7px;padding:4px 12px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer;font:inherit;font-size:12px;margin-top:8px;transition:border-color var(--nnk-t)}',
-      '.nnk-copy:hover{border-color:var(--dsw-alias-brand-primary)}',
+      '.nnk-copy:hover:not(:disabled){border-color:var(--dsw-alias-brand-primary)}',
+      '.nnk-copy:disabled{opacity:.45;cursor:default}',
       '.nnk-badge{display:inline-block;border-radius:6px;padding:1px 8px;font-size:11px;margin-right:8px;border:1px solid var(--dsw-alias-border-l2)}',
       '.nnk-panel{position:fixed;width:380px;max-height:560px;display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.25);z-index:60}',
       '.nnk-panel-head{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);cursor:move;user-select:none}',
@@ -57,7 +58,10 @@ window.__ModuleLoader__.load({
       '.nnk-smallbtn:hover:not(:disabled){border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}',
       '.nnk-fbrow{border-left:3px solid var(--dsw-alias-border-l2);padding:2px 8px;margin:4px 0;font-size:12px;color:var(--dsw-alias-label-secondary)}',
       '.nnk-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-state-warn-primary);margin-left:5px;vertical-align:middle}',
-      '.nnk-cmd{font-family:Consolas,monospace;font-size:12px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 8px;margin-top:6px;display:inline-block;user-select:all}'
+      '.nnk-cmd{font-family:Consolas,monospace;font-size:12px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 8px;margin-top:6px;display:inline-block;user-select:all}',
+      '.nnk-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}',
+      '.nnk-log{border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-2);padding:6px 10px;font-size:12px;max-height:130px;overflow:auto;color:var(--dsw-alias-label-secondary);line-height:1.6}',
+      '.nnk-phaseline{font-size:13px;margin-top:8px}'
     ].join('\n');
     if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css="dsh-noname-kit/ui"]') === null) {
       var tag = document.createElement('style');
@@ -954,7 +958,186 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // ── 工坊页(四个子页签:任务 / 任务列表 / 历史 / 设置) ───────
+    // ── 🌐 联机页签:内核状态 + 建房/加入(命令经心跳桥下发游戏内核) ──
+    var ONLINE_MODES = [
+      { id: 'identity', name: '身份' },
+      { id: 'guozhan', name: '国战' },
+      { id: 'versus', name: '对决' },
+      { id: 'doudizhu', name: '斗地主' },
+      { id: 'single', name: '单挑' }
+    ];
+    /* 流程互斥:同一游戏实例要么在主机流程要么在客人流程,进行中时另一侧禁用 */
+    var HOST_PHASES = ['host_booting', 'hosting', 'invite_ready', 'connecting', 'room_open'];
+    var GUEST_PHASES = ['joining', 'answer_ready', 'entering', 'connected'];
+    var ONLINE_PHASE_TEXT = {
+      idle: '待机',
+      host_booting: '正在进入建房流程(游戏可能会自动重载一次)…',
+      hosting: '房间已建好,正在生成邀请码…',
+      invite_ready: '邀请码已生成,等待客人回执码…',
+      connecting: '正在建立点对点直连…',
+      room_open: '客人已连接!等待房间在游戏里,点「开始游戏」即可开局',
+      joining: '正在解析主机的邀请码…',
+      answer_ready: '回执码已生成,发给房主等他粘贴…',
+      entering: '直连已建立,正在进入房间…',
+      connected: '✅ 已进入房间!'
+    };
+    function onlinePickEvent(evs, type) {
+      for (var i = evs.length - 1; i >= 0; i--) {
+        if (evs[i].type === type) return evs[i];
+      }
+      return null;
+    }
+    function onlineEventText(ev) {
+      switch (ev.type) {
+        case 'invite_ready': return '📨 邀请码已生成';
+        case 'answer_ready': return '📨 回执码已生成';
+        case 'guest_connected': return '🤝 客人已连接';
+        case 'session_established': return '✅ 已进入房间';
+        case 'entering_room': return '🚪 正在进入房间';
+        case 'room_closed': return '🔌 连接断开';
+        case 'cancelled': return '🚫 已取消';
+        case 'error': return '❌ ' + ((ev.data && ev.data.message) || '出错');
+        default: return ev.type;
+      }
+    }
+    function OnlinePanel() {
+      var statusState = React.useState(null);
+      var status = statusState[0], setStatus = statusState[1];
+      var modeState = React.useState('identity');
+      var mode = modeState[0], setMode = modeState[1];
+      var answerIn = React.useState('');
+      var answerText = answerIn[0], setAnswerText = answerIn[1];
+      var offerIn = React.useState('');
+      var offerText = offerIn[0], setOfferText = offerIn[1];
+      var noteState = React.useState('');
+      var note = noteState[0], setNote = noteState[1];
+      React.useEffect(function () {
+        var alive = true;
+        var tick = function () {
+          fetch('/noname-kit-api/online/status').then(function (r) { return r.json() }).then(function (d) {
+            if (alive) setStatus(d);
+          }, function () { });
+        };
+        tick();
+        var timer = setInterval(tick, 1500);
+        return function () { alive = false; clearInterval(timer); };
+      }, []);
+      var sendCmd = function (action, args) {
+        return fetch('/noname-kit-api/online/command', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: action, args: args || {} })
+        }).then(function (r) { return r.json() }).then(function (d) {
+          if (!d.ok) setNote('❌ ' + (d.error || '命令发送失败'));
+        }, function () { setNote('❌ 插件服务不可达'); });
+      };
+      var installKernel = function () {
+        setNote('正在安装内核…');
+        fetch('/noname-kit-api/online/kernel/install', { method: 'POST' })
+          .then(function (r) { return r.json() })
+          .then(function (d) {
+            if (d.ok) setNote('✅ 内核已安装' + (d.backup ? '(旧版已备份)' : '') + ':重启游戏 → 主菜单「扩展」里手动开启「联机助手」→ 按游戏提示重载,本页就会显示在线');
+            else setNote('❌ 安装失败: ' + (d.error || '未知错误'));
+          }, function () { setNote('❌ 插件服务不可达'); });
+      };
+      var copyText = function (text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function () { setNote('✅ 已复制,去粘贴发送吧'); }, function () { setNote('❌ 复制失败,请手动全选复制'); });
+        } else {
+          setNote('❌ 浏览器不支持自动复制,请手动全选复制');
+        }
+      };
+      if (!status) return e('div', 'nnk-hint', '正在获取联机状态…');
+      var kernel = status.kernel;
+      var bridge = status.bridge || {};
+      var evs = bridge.events || [];
+      var phase = (bridge.state && bridge.state.phase) || 'idle';
+      var phaseText = ONLINE_PHASE_TEXT[phase] || phase;
+      var bridgeOnline = Boolean(bridge.online);
+      var kernelBad = !kernel || kernel.state === 'unknown';
+      var hostFlow = HOST_PHASES.indexOf(phase) >= 0;
+      var guestFlow = GUEST_PHASES.indexOf(phase) >= 0;
+      /* 码只在对应流程阶段展示:事件会长期留存,无条件展示会让人对着
+       * 已作废的邀请码/回执码继续操作 */
+      var inviteEv = (hostFlow && phase !== 'host_booting') ? onlinePickEvent(evs, 'invite_ready') : null;
+      var answerEv = (phase === 'joining' || phase === 'answer_ready' || phase === 'entering') ? onlinePickEvent(evs, 'answer_ready') : null;
+      return h('div', {},
+        h('div', { className: 'nnk-card' },
+          e('div', null, h('b', null, '🌐 联机助手')),
+          !status.active
+            ? e('div', 'nnk-hint', '还没配置游戏目录——先到「⚙ 设置」页完成配置,再回来安装联机内核。')
+            : kernelBad
+              ? e('div', 'nnk-err', '❌ ' + ((kernel && kernel.error) || '内核状态未知'))
+              : h('div', {},
+                kernel.state === 'missing' ? e('div', 'nnk-hint', '联机内核未安装(装到游戏 extension/联机助手/,随插件版本升级)。')
+                  : kernel.state === 'stale' ? e('div', 'nnk-hint', '内核与插件自带版本不一致(插件更新过),建议升级。')
+                    : e('div', 'nnk-ok', '✅ 内核已安装' + (bridge.kernelVersion ? '(v' + bridge.kernelVersion + ')' : '')),
+                h('div', { className: 'nnk-row' },
+                  kernel.state !== 'ok'
+                    ? h('button', { className: 'nnk-submit', style: { marginTop: '0' }, onClick: installKernel }, kernel.state === 'stale' ? '⬆️ 升级内核' : '📦 安装内核')
+                    : h('button', { className: 'nnk-smallbtn', onClick: installKernel }, '🔁 重装内核')),
+                h('div', { className: 'nnk-phaseline' },
+                  bridgeOnline
+                    ? e('span', 'nnk-ok', '🟢 内核在线(游戏运行中)')
+                    : e('span', 'nnk-hint', '⚪ 内核离线 —— 启动游戏后在线;游戏开着却始终离线时,检查游戏「扩展」菜单里「联机助手」是否已手动开启')),
+                phase !== 'idle'
+                  ? e('div', 'nnk-hint', '当前状态:' + phaseText + (bridge.state && bridge.state.roomCode ? '(房号 ' + bridge.state.roomCode + ')' : ''))
+                  : null)),
+        status.active && kernel && kernel.state === 'ok'
+          ? h('div', {},
+            h('div', { className: 'nnk-card' },
+              e('div', null, h('b', null, '🏠 我要当主机')),
+              e('div', 'nnk-hint', '选玩法 → 创建房间 → 把邀请码发给朋友;朋友回发回执码后粘贴连接。开局(开始游戏/选将)在游戏里点。建房会自动关闭「禁止不同版本玩家进房」,不同游戏版本的朋友也能进。'),
+              h('div', { className: 'nnk-radios', style: { marginTop: '8px' } },
+                ONLINE_MODES.map(function (m) {
+                  return h('label', { key: m.id, className: 'nnk-radio' + (mode === m.id ? ' nnk-radio-on' : '') },
+                    h('input', { type: 'radio', name: 'nnk-online-mode', checked: mode === m.id, onChange: function () { setMode(m.id) } }),
+                    m.name);
+                })),
+              h('div', { className: 'nnk-row' },
+                h('button', { className: 'nnk-submit', style: { marginTop: '0' }, disabled: !bridgeOnline || guestFlow, onClick: function () { setAnswerText(''); sendCmd('create_room', { mode: mode }) } }, '🚀 创建互联网房间'),
+                phase === 'room_open' ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '➕ 再邀请一位') : null),
+              !bridgeOnline ? e('div', 'nnk-hint', '内核离线(先启动游戏)') : null,
+              inviteEv
+                ? h('div', { style: { marginTop: '10px' } },
+                  e('div', 'nnk-label', '邀请码(整段复制发给朋友)'),
+                  h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: (inviteEv.data && inviteEv.data.code) || '' }),
+                  h('button', { className: 'nnk-copy', onClick: function () { copyText((inviteEv.data && inviteEv.data.code) || '') } }, '📋 复制邀请码'),
+                  e('div', 'nnk-label', '朋友回发的「回执码」粘贴到这里'),
+                  h('textarea', { className: 'nnk-textarea nnk-code', value: answerText, onChange: function (ev) { setAnswerText(ev.target.value) }, placeholder: '粘贴客人的回执码…' }),
+                  h('button', { className: 'nnk-copy', onClick: function () { sendCmd('accept_answer', { code: answerText }) } }, '🔗 连接'))
+                : null),
+            h('div', { className: 'nnk-card' },
+              e('div', null, h('b', null, '🔗 我要加入')),
+              e('div', 'nnk-hint', '粘贴房主的邀请码 → 生成回执码 → 发回给房主;房主粘贴后自动进房。'),
+              h('textarea', { className: 'nnk-textarea nnk-code', value: offerText, onChange: function (ev) { setOfferText(ev.target.value) }, placeholder: '粘贴房主的邀请码…' }),
+              h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow, onClick: function () { sendCmd('join_invite', { code: offerText }) } }, '连接'),
+              answerEv
+                ? h('div', { style: { marginTop: '10px' } },
+                  e('div', 'nnk-label', '回执码(发回给房主)'),
+                  h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: (answerEv.data && answerEv.data.code) || '' }),
+                  h('button', { className: 'nnk-copy', onClick: function () { copyText((answerEv.data && answerEv.data.code) || '') } }, '📋 复制回执码'))
+                : null),
+            evs.length
+              ? h('div', { className: 'nnk-card' },
+                e('div', null, h('b', null, '📡 动态')),
+                h('div', { className: 'nnk-log' }, evs.slice(-8).reverse().map(function (ev, i) {
+                  return e('div', { key: i }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
+                })))
+              : null)
+          : null,
+        h('div', { className: 'nnk-card' },
+          e('div', null, h('b', null, '📖 怎么用(三步)')),
+          e('div', 'nnk-hint',
+            '1. 双方或多方都装本插件(dsh plugin --profile web add dsh-noname-kit,桌面版用 --profile desktop)并配好各自的游戏目录;然后各自在本页点「📦 安装内核」→ 进游戏在主菜单「扩展」手动开启「联机助手」(新扩展默认不启用)→ 按游戏提示重载生效。内核没有操作界面,联机操作都在本页,所以每个人都要装插件。\n' +
+            '2. 主机:本页创建互联网房间 → 复制邀请码发给朋友 → 粘贴朋友回发的回执码 → 连接。\n' +
+            '3. 游戏里出现等待房间(房主座位已就位),朋友进房后主机在游戏里点「开始游戏」。'),
+          e('div', 'nnk-hint', '当前为邀请码模式:点对点直连、无需公网 IP。个别网络(如手机热点)打不通时,换个网络再试。房间号直连与无人大厅在后续版本。')),
+        note ? e('div', { className: note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err' }, note) : null
+      );
+    }
+
+    // ── 工坊页(五个子页签:任务 / 任务列表 / 历史 / 联机 / 设置) ───
     function WorkshopView(props) {
       var sessionId = props.sessionId;
       // Hooks 规则:所有 hook 必须在任何条件返回之前声明
@@ -1002,12 +1185,14 @@ window.__ModuleLoader__.load({
           h('button', { className: 'nnk-tab' + (active === 'new' ? ' nnk-active' : ''), onClick: function () { setActive('new') } }, '🛠 任务'),
           h('button', { className: 'nnk-tab' + (active === 'tasklist' ? ' nnk-active' : ''), onClick: function () { setActive('tasklist') } }, '📋 任务列表'),
           h('button', { className: 'nnk-tab' + (active === 'history' ? ' nnk-active' : ''), onClick: function () { setActive('history') } }, '📜 历史'),
+          h('button', { className: 'nnk-tab' + (active === 'online' ? ' nnk-active' : ''), onClick: function () { setActive('online') } }, '🌐 联机(测试)'),
           h('button', { className: 'nnk-tab' + (active === 'settings' ? ' nnk-active' : ''), onClick: function () { setActive('settings') } }, '⚙ 设置')
         ),
         phase === false && active === 'new' ? e('div', 'nnk-err', '⚠️ 还没配置游戏目录——到「⚙ 设置」页填一下就能自动写入;暂时不配也行,把写入方式设为「手动复制」。') : null,
         active === 'new' ? h(NewTaskForm, { sessionId: sessionId, send: send }) : null,
         active === 'tasklist' ? h(TaskListContent, { sessions: props.sessions, uiSession: props.uiSession, compact: false }) : null,
         active === 'history' ? h(HistoryPanel) : null,
+        active === 'online' ? h(OnlinePanel) : null,
         active === 'settings' ? h(SettingsPanel) : null
       );
     }

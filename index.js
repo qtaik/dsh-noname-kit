@@ -15,6 +15,7 @@
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { join, resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { statSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { KNOWLEDGE_TEXT } from './src/knowledge.js'
@@ -28,6 +29,7 @@ import { listExtensionFolders } from './src/detect.js'
 import { copyAudios, audioTargetKind } from './src/audio.js'
 import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, setSkillAudioFiles, setDieAudioFiles, completeById, deleteTask, reopenTask, getTask } from './src/tasks.js'
 import { bundledPresetDir, hostHasDeclarativePreset, installPreset, presetDirOf, presetStatus } from './src/preset.js'
+import { bundledKernelVersion, createBridgeSession, installKernel, kernelStatus } from './src/online.js'
 import { cachedUpdate, checkForUpdate, detectInstall, installHint } from './src/update.js'
 import pkg from './package.json' with { type: 'json' }
 
@@ -180,6 +182,21 @@ export function apply(ctx, config) {
       check: check || null,
     }
   }
+
+  // ── 0.6) 联机助手:心跳桥会话 ─────────────────────────────────
+  // 游戏内核(online-kernel/,随插件打包)轮询本插件的 /online/bridge 上报
+  // 状态并取回工坊命令。token 存进设置文件:DSH 重启后不变,内核不用重装
+  // (baseUrl 里的端口如变化,重装一次内核即可刷新)。
+  const bridgeToken = (() => {
+    const cur = readSettingsFile().onlineBridgeToken
+    if (cur) return cur
+    const token = randomUUID()
+    const next = readSettingsFile()
+    next.onlineBridgeToken = token
+    try { writeFileSync(settingsPath, JSON.stringify(next, null, 2), 'utf8') } catch { /* 只影响重启用,不阻塞 */ }
+    return token
+  })()
+  const bridge = createBridgeSession({ token: bridgeToken })
 
   // ── 1) 常驻规范知识(文本随配置状态动态生成) ─────────────────
   // POSIX 形式路径:模型在 bash 里习惯 /d/... 写法,直接给两种形式免得它自己转换/寻找
@@ -828,8 +845,42 @@ export function apply(ctx, config) {
           }
           return json(result.ok ? 200 : 400, { ...result, preset: readPresetStatus() })
         }
+        // 联机助手(🌐 联机页签)——这两条在 503 闸门之前:未配置游戏目录时
+        // 用户也要能看到"先去配置"的指引;bridge 是游戏内核的轮询端点。
+        if (req.method === 'GET' && url.pathname === '/noname-kit-api/online/status') {
+          return json(200, {
+            active,
+            kernel: active ? kernelStatus({ nonameDir }) : null,
+            kernelVersion: bundledKernelVersion(),
+            bridge: bridge.snapshot(),
+          })
+        }
+        if (req.method === 'POST' && url.pathname === '/noname-kit-api/online/bridge') {
+          const body = await readBody()
+          if (!body || body.token !== bridgeToken) return json(403, { error: 'bridge token mismatch' })
+          return json(200, bridge.poll(body))
+        }
         // 以下都需要已配置
         if (!active) return json(503, { error: 'noname-kit 未配置 nonameDir(或目录无效):请在工坊「初始化向导」里完成配置' })
+        // 联机助手:内核安装与命令下发(要写游戏目录,必须在 503 闸门之后)
+        if (req.method === 'POST' && url.pathname === '/noname-kit-api/online/kernel/install') {
+          // baseUrl 供游戏内核回连本插件:同机回环,取本请求的 host 端口最准
+          const hostHeader = String(req.headers.host || '')
+          const port = hostHeader.includes(':') ? hostHeader.slice(hostHeader.lastIndexOf(':') + 1) : '80'
+          const baseUrl = `http://127.0.0.1:${port}/noname-kit-api`
+          const result = installKernel({ nonameDir, baseUrl, token: bridgeToken })
+          if (result.ok) {
+            console.log(`[noname-kit] 联机内核已安装到 ${result.target}(重启游戏生效)${result.backup ? `,旧版备份到 ${result.backup}` : ''}`)
+          }
+          return json(result.ok ? 200 : 400, { ...result, version: bundledKernelVersion() })
+        }
+        if (req.method === 'POST' && url.pathname === '/noname-kit-api/online/command') {
+          const body = await readBody()
+          const actions = new Set(['create_room', 'invite_refresh', 'accept_answer', 'join_invite', 'cancel'])
+          if (!actions.has(body.action)) return json(400, { ok: false, error: `未知命令: ${body.action}` })
+          const cmd = bridge.pushCommand(body.action, body.args)
+          return json(200, { ok: true, id: cmd.id })
+        }
         if (req.method === 'GET' && url.pathname === '/noname-kit-api/extension') {
           const folder = url.searchParams.get('folder') || ''
           try { return json(200, await readExtension(nonameDir, folder)) } catch (error) {
