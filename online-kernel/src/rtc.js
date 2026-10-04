@@ -154,16 +154,20 @@
 	/*
 	 * 主机侧桥:lib.init.connection(ws) 要求 ws 具备
 	 * send/close/on(type,func),与引擎自带 NodeWS 同款接口。
+	 * onDown 额外提供"连接断开"钩子:引擎会通过 on("close") 覆盖 onclose,
+	 * 所以扩展自己的清理逻辑必须走钩子列表,不能占用 onclose 槽位。
 	 */
 	function HostBridge(channel) {
 		var self = this;
 		this.channel = channel;
+		this._downHooks = [];
 		channel.onmessage = function(e) {
 			if (self.onmessage) {
 				self.onmessage(e.data);
 			}
 		};
 		channel.onclose = function() {
+			self._downHooks.forEach(function(f) { f(); });
 			if (self.onclose) {
 				self.onclose();
 			}
@@ -180,6 +184,9 @@
 	};
 	HostBridge.prototype.on = function(type, func) {
 		this["on" + type] = func;
+	};
+	HostBridge.prototype.onDown = function(fn) {
+		this._downHooks.push(fn);
 	};
 
 	nnk.modules.rtc = {
