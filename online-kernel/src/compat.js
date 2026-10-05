@@ -43,8 +43,10 @@
 		return String(stack || "").split("\n").slice(1, (n || 4) + 1).join(" ← ").trim();
 	}
 
-	/* 隔离名单:在联机下爆栈过的扩展不再开闸(回退引擎原生行为=不加载其
-	 * content),名单持久化在内核配置里,其余扩展照常开闸。本内核永不入名单。 */
+	/* 隔离名单:名单内的扩展不再开闸(回退引擎原生行为=不加载其 content)。
+	 * 0.3.5 起**不再自动写名单**——链式包装下按堆栈帧定罪必然误伤(真机
+	 * 实证:十周年UI 被连坐),当前策略=只熔断降级+上报;名单保留给手动
+	 * 清理(工坊重置按钮)与未来更准的定罪策略。本内核永不入名单。 */
 	function blocklist() {
 		var list = nnk.modules.config.get("unlockBlock");
 		return Array.isArray(list) ? list.filter(function(n) { return n !== KERNEL_NAME; }) : [];
@@ -247,10 +249,6 @@
 					var ext = extNameFromStack(err.stack);
 					if (ext) {
 						console.error("[联机助手] 扩展运行错误(联机下已拦截,不弹窗):", ext, err);
-						if (err instanceof RangeError) {
-							/* 爆栈级别的扩展错误会炸死启动/对局,直接隔离 */
-							quarantine(ext);
-						}
 						bridgeApi().emit("ext_error", {
 							ext: ext,
 							message: err.message || String(msg),
@@ -295,15 +293,15 @@
 			} catch (e) {
 				if (e instanceof RangeError) {
 					var ext = extNameFromStack(e && e.stack);
-					console.error("[联机助手] arena 包装器爆栈,已熔断退回原版:", ext, e);
-					quarantine(ext);
-					try {
-						if (current !== pristine) {
-							ui.create = pristine;   /* 整换:换回原版对象 */
-						}
-						delete ui.create.arena;      /* 原地偷换:拆掉 getter */
-						ui.create.arena = pristineArena;
-					} catch (e2) { /* 忽略 */ }
+					console.error("[联机助手] arena 包装器爆栈,已降级为原版 arena:", ext, e);
+					bridgeApi().emit("ext_error", {
+						ext: ext,
+						hook: "arena",
+						message: (e && e.message) || String(e),
+						stack: firstStackLines(e && e.stack, 4)
+					});
+					/* 不拉黑:只让这一次调用降级。链式包装里谁崩都算到单个扩展
+					 * 头上必然误伤(真机实证:十周年UI 被连坐),降级即可保启动 */
 					return pristineArena.apply(this, arguments);
 				}
 				throw e;
