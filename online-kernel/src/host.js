@@ -173,12 +173,18 @@
 				bridgeApi().emit("error", { message: "游戏正在对局中,请先结束当前对局再创建互联网房间" });
 				return;
 			}
-			/* 已在等待房间:等价于"再来一张邀请码" */
-			if (env._status.waitingForPlayer && hostState.roomCode) {
-				this.refreshInvite();
+			hostState.active = true;
+			/* 已有等待房间(本内核建的,或上次会话遗留、引擎开机自动恢复的原生房间):
+			 * 不再叠加 switchMode(实测叠加会崩 UI),直接收编——生成房号挂上互联网邀请 */
+			if (env._status.waitingForPlayer) {
+				if (!hostState.roomCode) {
+					hostState.roomCode = genRoomCode();
+					env.game.ip = "nnk://" + hostState.roomCode;
+				}
+				bridgeApi().setPhase("hosting", { roomCode: hostState.roomCode });
+				startInvite();
 				return;
 			}
-			hostState.active = true;
 			bridgeApi().setPhase("host_booting", { mode: mode });
 			if (env.lib.config.mode === "connect") {
 				startDirect(mode);
