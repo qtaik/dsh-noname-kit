@@ -1147,6 +1147,11 @@ window.__ModuleLoader__.load({
           e('label', { style: { display: 'block', marginTop: '8px' } },
             h('input', { type: 'checkbox', checked: !!(bridge.cfg && bridge.cfg.unlockUIExtensions), onChange: function (ev2) { setNote('开关已发送,下次建房重载后生效'); sendCmd('set_config', { key: 'unlockUIExtensions', value: ev2.target.checked }); } }),
             ' 联机时也加载美化类扩展(皮肤/动效,可能不稳,默认只加载武将/卡牌扩展)'),
+          (bridge.cfg && bridge.cfg.root === false) || (bridge.cfg && bridge.cfg.guardUICreate)
+            ? e('label', { style: { display: 'block', marginTop: '4px' } },
+              h('input', { type: 'checkbox', checked: !!(bridge.cfg && bridge.cfg.guardUICreate), onChange: function (ev3) { setNote('保险丝开关已发送,重启游戏生效'); sendCmd('set_config', { key: 'guardUICreate', value: ev3.target.checked }); } }),
+              ' ui.create 防爆保险丝(第三方壳联机用,官方版保持关闭)')
+            : null,
           resetBtn,
           txEv ? e('div', { className: 'nnk-break', style: { marginTop: '6px' } }, onlineEventText(txEv)) : null);
       }

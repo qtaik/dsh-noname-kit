@@ -348,6 +348,11 @@
 	 */
 	function guardCreate() {
 		var ui = nnk.env.ui;
+		/* 默认关闭:代理层与引擎的类私有字段天然冲突(真机连炸三轮)。
+		 * 仅当工坊明确开启 guardUICreate(第三方壳环境)时才接管 ui.create */
+		if (!nnk.modules.config.get("guardUICreate")) {
+			return;
+		}
 		if (!ui || ui.__nnkCreateGuarded) {
 			return;
 		}
@@ -390,18 +395,33 @@
 					if (!enabled()) {
 						return current;
 					}
+					/* 快路径:没人碰过 ui.create(未整换、arena 未被偷换)时直接给
+					 * 原对象——引擎大量方法使用类私有字段,代理的 this 会炸(官方
+					 * 1.11.5 选将界面真机实证),所以不设防时绝不包代理 */
+					if (current === pristine && current.arena === pristineArena) {
+						view = null;
+						return pristine;
+					}
 					if (!view || viewTargets.get(view) !== current) {
+						var boundCache = new Map();
 						view = new Proxy(current, {
-							get: function(t, k, recv) {
+							get: function(t, k) {
 								if (k === "arena") {
 									return fused;
 								}
-								/* 接收器必须是真身 t:引擎 1.11.5 的部分方法用了类私有字段
-								 * (#skillCacheReady 等),this 为代理时直接抛
-								 * "Cannot read private member"(真机实证:选将界面) */
-								return Reflect.get(t, k, t);
+								var v = Reflect.get(t, k, t);
+								if (typeof v === "function") {
+									/* 方法绑定到真身:调用点的 this 不能是代理(私有字段) */
+									var b = boundCache.get(k);
+									if (!b) {
+										b = v.bind(t);
+										boundCache.set(k, b);
+									}
+									return b;
+								}
+								return v;
 							},
-							set: function(t, k, v, recv) {
+							set: function(t, k, v) {
 								return Reflect.set(t, k, v, t);
 							}
 						});

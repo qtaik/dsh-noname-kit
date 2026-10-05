@@ -15,7 +15,11 @@
 		autoUnlockExtensions: true,
 		/* 美化类扩展(不带武将/卡牌包的)是否也参与联机加载:默认关——
 		 * 美化族是联机不稳定的大头,默认只开内容扩展保稳定 */
-		unlockUIExtensions: false
+		unlockUIExtensions: false,
+		/* ui.create 防爆保险丝(代理实现):官方版不要开——官方 1.11.5 引擎
+		 * 大量使用类私有字段,代理 this 会炸(选将界面真机实证);该保险丝
+		 * 仅供第三方壳(美化扩展会毒化 ui.create 的环境)手动开启 */
+		guardUICreate: false
 	};
 
 	nnk.modules.config = {
