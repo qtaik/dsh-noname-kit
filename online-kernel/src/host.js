@@ -303,6 +303,10 @@
 				game.reload();
 			}, true);
 		}
+		/* 主机侧的联机总开关:引擎只在开机且开机模式恰为 connect 时设置它
+		 * (init/index.js:484)。我们任意时刻直启必须自己打开,否则 switchMode
+		 * 会跑进离线分支——实测跳到单人身份局的开局界面 */
+		env._status.connectMode = true;
 		game.switchMode(mode);
 		game.requireSandboxOn();
 	}
