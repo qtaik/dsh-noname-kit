@@ -110,7 +110,8 @@
 				state: state,
 				cfg: {
 					unlockUIExtensions: !!nnk.modules.config.get("unlockUIExtensions"),
-					autoUnlockExtensions: !!nnk.modules.config.get("autoUnlockExtensions")
+					autoUnlockExtensions: !!nnk.modules.config.get("autoUnlockExtensions"),
+					root: !!(nnk.modules.compat && nnk.modules.compat.gameRoot())
 				},
 				events: events.splice(0, events.length)
 			})

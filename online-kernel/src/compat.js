@@ -57,8 +57,19 @@
 		var fs = req("fs");
 		var path = req("path");
 		var candidates = [];
+		/* 渲染进程的 cwd 不可靠(快捷方式启动时=任意目录),以 exe 路径为锚:
+		 * 无名杀.exe → 壳根 → resources/app(扩展必然在其 extension/ 下) */
+		try {
+			candidates.push(path.join(path.dirname(process.execPath), "resources", "app"));
+		} catch (e) { /* 忽略 */ }
+		try {
+			candidates.push(path.dirname(process.execPath));
+		} catch (e) { /* 忽略 */ }
 		try {
 			candidates.push(process.cwd());
+		} catch (e) { /* 忽略 */ }
+		try {
+			candidates.push(path.resolve(process.cwd(), "resources", "app"));
 		} catch (e) { /* 忽略 */ }
 		try {
 			candidates.push(path.resolve(process.cwd(), ".."));
@@ -457,6 +468,7 @@
 		},
 		unlockExtensions: unlockExtensions,
 		unlockPacks: unlockPacks,
-		clearQuarantine: clearQuarantine
+		clearQuarantine: clearQuarantine,
+		gameRoot: gameRoot
 	};
 })();

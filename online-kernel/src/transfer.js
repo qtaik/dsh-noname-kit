@@ -30,35 +30,9 @@
 		return typeof require === "function" ? require : null;
 	}
 
-	/* 定位游戏根目录:必须能找到 extension/联机助手 才认(内核一定在那) */
-	var cachedRoot;
+	/* 定位游戏根目录:统一走 compat 的实现(分类与补包必须一致),本文件不再自持 */
 	function gameRoot() {
-		if (cachedRoot !== undefined) {
-			return cachedRoot;
-		}
-		cachedRoot = null;
-		var req = nodeRequire();
-		if (!req) {
-			return cachedRoot;
-		}
-		var fs = req("fs");
-		var path = req("path");
-		var candidates = [];
-		try {
-			candidates.push(process.cwd());
-		} catch (e) { /* 忽略 */ }
-		try {
-			candidates.push(path.resolve(process.cwd(), ".."));
-		} catch (e) { /* 忽略 */ }
-		for (var i = 0; i < candidates.length; i++) {
-			try {
-				if (fs.existsSync(path.join(candidates[i], "extension", KERNEL_NAME, "extension.js"))) {
-					cachedRoot = candidates[i];
-					break;
-				}
-			} catch (e) { /* 忽略 */ }
-		}
-		return cachedRoot;
+		return nnk.modules.compat ? nnk.modules.compat.gameRoot() : null;
 	}
 
 	function safeName(name) {

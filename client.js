@@ -1122,6 +1122,9 @@ window.__ModuleLoader__.load({
         }
         return h('div', { className: 'nnk-card' },
           e('div', null, h('b', null, '📦 包体检')),
+          e('div', 'nnk-hint', (bridge.cfg && bridge.cfg.root === false)
+            ? '⚠️ 本机无法定位游戏目录,扩展分类已跳过(全部扩展会参与联机加载)。'
+            : '联机默认只加载带武将/卡牌包的内容扩展,美化类不参与。'),
           missing.length
             ? h('div', {},
               e('div', 'nnk-hint', hostFlow
