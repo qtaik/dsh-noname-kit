@@ -157,19 +157,28 @@
 		}
 		var env = nnk.env;
 		var blocked = blocklist();
+		/* 裁决一条扩展的联机开关:隔离名单内=关;内容扩展=开(哪怕作者没声明);
+		 * 美化类=关(哪怕作者声明了 connect:true——真机实证:美化族普遍自带
+		 * connect 声明,只拨亮不拨灭的话它们照样加载,开闸形同虚设) */
+		function decide(name) {
+			if (blocked.indexOf(name) >= 0) {
+				return false;
+			}
+			return isContentExt(name);
+		}
 		var arr = env.lib.extensions;
 		if (Array.isArray(arr)) {
 			arr.forEach(function(ext) {
-				if (Array.isArray(ext) && !ext[5] && blocked.indexOf(ext[0]) < 0 && isContentExt(ext[0])) {
-					ext[5] = true;
+				if (Array.isArray(ext)) {
+					ext[5] = decide(ext[0]);
 				}
 			});
 			if (!arr.__nnkUnlocked) {
 				var origPush = arr.push;
 				arr.push = function() {
 					for (var i = 0; i < arguments.length; i++) {
-						if (Array.isArray(arguments[i]) && !arguments[i][5] && blocked.indexOf(arguments[i][0]) < 0 && isContentExt(arguments[i][0])) {
-							arguments[i][5] = true;
+						if (Array.isArray(arguments[i])) {
+							arguments[i][5] = decide(arguments[i][0]);
 						}
 					}
 					return origPush.apply(this, arguments);
