@@ -396,10 +396,13 @@
 								if (k === "arena") {
 									return fused;
 								}
-								return Reflect.get(t, k, recv);
+								/* 接收器必须是真身 t:引擎 1.11.5 的部分方法用了类私有字段
+								 * (#skillCacheReady 等),this 为代理时直接抛
+								 * "Cannot read private member"(真机实证:选将界面) */
+								return Reflect.get(t, k, t);
 							},
 							set: function(t, k, v, recv) {
-								return Reflect.set(t, k, v, recv);
+								return Reflect.set(t, k, v, t);
 							}
 						});
 						viewTargets.set(view, current);
