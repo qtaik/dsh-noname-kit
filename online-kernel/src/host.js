@@ -182,6 +182,17 @@
 				return;
 			}
 			hostState.active = true;
+			/* 自愈:系统按钮栏(ui.system1/2)正常由引擎开机时的 ui.create.arena()
+			 * 创建,个别引擎构建/界面环境下可能缺失——建房流程(退出房间按钮、
+			 * 房间信息/聊天)全依赖它,缺失时重建一次 HUD 再继续 */
+			if (!env.ui.system1 || !env.ui.system2) {
+				try {
+					env.ui.create.arena();
+					console.log("[联机助手] 检测到系统按钮栏缺失,已重建 HUD");
+				} catch (err) {
+					console.error("[联机助手] HUD 重建失败,继续建房(退出房间按钮可能缺失)", err);
+				}
+			}
 			/* 已有等待房间(本内核建的,或上次会话遗留、引擎开机自动恢复的原生房间):
 			 * 不再叠加 switchMode(实测叠加会崩 UI),直接收编——生成房号挂上互联网邀请 */
 			if (env._status.waitingForPlayer) {
@@ -190,7 +201,7 @@
 					env.game.ip = "nnk://" + hostState.roomCode;
 				}
 				/* 收编的原生遗留房没有「退出房间」按钮(原生路径才会建),补齐 */
-				if (!env.ui.exitroom) {
+				if (!env.ui.exitroom && env.ui.system1 && env.ui.system2) {
 					env.ui.exitroom = env.ui.create.system("退出房间", function() {
 						env.game.saveConfig("directstartmode");
 						env.game.reload();
@@ -284,7 +295,9 @@
 		localStorage.setItem(env.lib.configprefix + "directstart", "true");
 		game.saveConfig("directstartmode", mode);
 		game.saveConfig("mode", "connect");
-		if (!uiE.exitroom) {
+		/* 退出房间按钮依赖系统按钮栏(ui.system2);个别环境缺失时上面的 HUD 自愈
+		 * 已重建,仍缺失就跳过按钮——绝不能让按钮创建的异常断掉建房流程 */
+		if (!uiE.exitroom && uiE.system1 && uiE.system2) {
 			uiE.exitroom = uiE.create.system("退出房间", function() {
 				game.saveConfig("directstartmode");
 				game.reload();
