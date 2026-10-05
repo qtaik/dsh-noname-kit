@@ -1128,7 +1128,7 @@ window.__ModuleLoader__.load({
               ? h('div', { className: 'nnk-card' },
                 e('div', null, h('b', null, '📡 动态')),
                 h('div', { className: 'nnk-log' }, evs.slice(-8).reverse().map(function (ev, i) {
-                  return e('div', { key: i }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
+                  return e('div', { key: i, className: 'nnk-break' }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
                 })))
               : null)
           : null,
