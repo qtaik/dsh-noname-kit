@@ -410,7 +410,13 @@
 			bridgeApi().emit("ext_dump", {
 				loaded: loaded,
 				skipped: skipped,
-				configured: (nnk.env.lib.config.extensions || []).slice()
+				configured: (nnk.env.lib.config.extensions || []).slice(),
+				packs: {
+					all: Object.keys(nnk.env.lib.characterPack || {}),
+					connect: (nnk.env.lib.connectCharacterPack || []).slice(),
+					cardsAll: Object.keys(nnk.env.lib.cardPack || {}),
+					cardsConnect: (nnk.env.lib.connectCardPack || []).slice()
+				}
 			});
 		} catch (e) { /* 忽略 */ }
 	}

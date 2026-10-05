@@ -1015,7 +1015,15 @@ window.__ModuleLoader__.load({
           var loaded = dd.loaded || [];
           var skipped = dd.skipped || [];
           var configured = dd.configured || [];
-          return '🧩 联机加载扩展(' + loaded.length + '):' + (loaded.join('、') || '无') + (skipped.length ? ' | 跳过:' + skipped.join('、') : '') + (configured.length ? ' | 游戏登记:' + configured.join('、') : '');
+          var pk = dd.packs || {};
+          var line = '🧩 联机加载扩展(' + loaded.length + '):' + (loaded.join('、') || '无') + (skipped.length ? ' | 跳过:' + skipped.join('、') : '') + (configured.length ? ' | 游戏登记:' + configured.join('、') : '');
+          if (pk.connect) {
+            line += ' || 连接武将包池(' + pk.connect.length + '):' + (pk.connect.join('、') || '空');
+          }
+          if (pk.all && pk.all.length !== pk.connect.length) {
+            line += ' | 全部包(' + pk.all.length + '):' + pk.all.join('、');
+          }
+          return line;
         }
         case 'info': return 'ℹ️ ' + ((ev.data && ev.data.message) || '');
         case 'transfer_begin': return '📦 开始补传「' + ((ev.data && ev.data.name) || '') + '」';
