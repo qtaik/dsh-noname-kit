@@ -14,7 +14,7 @@
 	}
 	window.__nnkLoaded = true;
 	if (!window.__nnk__) {
-		window.__nnk__ = { version: "0.2.0", modules: {}, env: null, state: {} };
+		window.__nnk__ = { version: "0.2.1", modules: {}, env: null, state: {} };
 	}
 
 	game.import("extension", function(lib, game, ui, get, ai, _status) {

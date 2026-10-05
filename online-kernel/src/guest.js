@@ -236,11 +236,11 @@
 							if (!session.hostSeen) {
 								reject(new Error("没有找到该房号的在线主机(房号可能输错,或房主已离线)"));
 							} else {
-								resolve();
+								resolve(mqttSession);   /* 传给下一步发提议用(参数作用域不跨 then) */
 							}
 						}, 3500);
 					});
-				}).then(function() {
+				}).then(function(mqttSession) {
 					return mqttSession.publish(signaling.roomTopic(code, "offer"), {
 						guestId: guestId,
 						sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
