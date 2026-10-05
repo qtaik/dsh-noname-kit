@@ -1020,6 +1020,9 @@ window.__ModuleLoader__.load({
           if (pk.connect) {
             line += ' || 连接武将包池(' + pk.connect.length + '):' + (pk.connect.join('、') || '空');
           }
+          if (pk.excluded && pk.excluded.length) {
+            line += ' | ⚠️ 被排除的武将包:' + pk.excluded.join('、');
+          }
           if (pk.all && pk.all.length !== pk.connect.length) {
             line += ' | 全部包(' + pk.all.length + '):' + pk.all.join('、');
           }

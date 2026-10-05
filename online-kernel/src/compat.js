@@ -414,6 +414,8 @@
 				packs: {
 					all: Object.keys(nnk.env.lib.characterPack || {}),
 					connect: (nnk.env.lib.connectCharacterPack || []).slice(),
+					excluded: (nnk.env.lib.config.connect_characters || []).slice(),
+					cardsExcluded: (nnk.env.lib.config.connect_cards || []).slice(),
 					cardsAll: Object.keys(nnk.env.lib.cardPack || {}),
 					cardsConnect: (nnk.env.lib.connectCardPack || []).slice()
 				}
