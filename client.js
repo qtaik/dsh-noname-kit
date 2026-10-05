@@ -1096,10 +1096,18 @@ window.__ModuleLoader__.load({
 
       function renderManifestCard(evs, hostFlow) {
         var diffEv = onlinePickEvent(evs, 'manifest_diff');
+        /* 重置按钮常驻:隔离名单持久化在游戏配置里,清它不能依赖会话内的事件记录 */
+        var resetBtn = (function () {
+          var qEv = onlinePickEvent(evs, 'ext_quarantined');
+          return h('div', { style: { marginTop: '6px' } },
+            qEv ? e('div', 'nnk-hint', '本页记录到自动隔离:' + ((qEv.data && qEv.data.ext) || '?') + '(0.3.5 起已不再自动隔离)。') : null,
+            h('button', { className: 'nnk-copy', onClick: function () { sendCmd('clear_quarantine', {}) } }, '↩️ 重置隔离名单(清空历史拉黑,重启游戏生效)'));
+        })();
         if (!diffEv || !diffEv.data) {
           return h('div', { className: 'nnk-card' },
             e('div', null, h('b', null, '📦 包体检')),
-            e('div', 'nnk-hint', '客人进房后自动对比双方扩展清单,缺什么这里会列出来,一键补传。'));
+            e('div', 'nnk-hint', '客人进房后自动对比双方扩展清单,缺什么这里会列出来,一键补传。'),
+            resetBtn);
         }
         var d = diffEv.data;
         var missing = (d.exts && d.exts.missing) || [];
@@ -1127,12 +1135,7 @@ window.__ModuleLoader__.load({
             : e('div', 'nnk-ok', '✅ 双方扩展一致,不需要补传。'),
           missPacks.length ? e('div', 'nnk-hint', '客人少的武将包(都在上面的扩展里,补传扩展即可):' + missPacks.join('、')) : null,
           extra.length ? e('div', 'nnk-hint', '对方多出的扩展(不影响联机):' + extra.join('、')) : null,
-          (function () {
-            var qEv = onlinePickEvent(evs, 'ext_quarantined');
-            return h('div', { style: { marginTop: '6px' } },
-              qEv ? e('div', 'nnk-hint', '本页记录到自动隔离:' + ((qEv.data && qEv.data.ext) || '?') + '(0.3.5 起已不再自动隔离)。') : null,
-              h('button', { className: 'nnk-copy', onClick: function () { sendCmd('clear_quarantine', {}) } }, '↩️ 重置隔离名单(清空历史拉黑,重启游戏生效)'));
-          })(),
+          resetBtn,
           txEv ? e('div', { className: 'nnk-break', style: { marginTop: '6px' } }, onlineEventText(txEv)) : null);
       }
 
