@@ -268,6 +268,17 @@
 				if (connectList.indexOf(name) < 0) {
 					connectList.push(name);
 				}
+				/* 官方 translate 无兜底:扩展没配「包名_character_config」翻译时,
+				 * 房间设置里的标签渲染成空白,看起来像"没加载"(真机实证)——
+				 * 内核代填,用扩展名当标签 */
+				try {
+					if (lib.translate[name + "_character_config"] === undefined) {
+						lib.translate[name + "_character_config"] = name;
+					}
+					if (lib.translate[name + "_card_config"] === undefined) {
+						lib.translate[name + "_card_config"] = name;
+					}
+				} catch (e) { /* 忽略 */ }
 			}
 		});
 	}
