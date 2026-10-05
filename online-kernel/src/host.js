@@ -1,5 +1,5 @@
 /*
- * 主机端(无头):软服务器 + 邀请码信令,事件经 bridge 上报工坊。
+ * 主机端(无头):软服务器 + 房号/邀请码双信令,事件经 bridge 上报工坊。
  * 原生 createServer 在渲染进程里 require("ws") 起 8080 监听;这里把它整个
  * 换成 WebRTC 接客——每个客人的 DataChannel 包成 HostBridge 交给
  * lib.init.connection,引擎从此以为来的是普通客人。房主自己的座位由

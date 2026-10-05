@@ -1069,7 +1069,15 @@ window.__ModuleLoader__.load({
        * 已作废的邀请码/回执码继续操作 */
       var inviteEv = (hostFlow && phase !== 'host_booting') ? onlinePickEvent(evs, 'invite_ready') : null;
       var answerEv = (phase === 'joining' || phase === 'answer_ready' || phase === 'entering') ? onlinePickEvent(evs, 'answer_ready') : null;
-      return h('div', {},
+      /* 渲染层任何异常都会被 slot 系统吞成空白(记忆坑),这里兜底把错误亮出来 */
+      try {
+        return renderOnlinePanel();
+      } catch (renderErr) {
+        return e('div', 'nnk-err', '❌ 联机页渲染出错: ' + ((renderErr && renderErr.message) || renderErr) + ' —— 请截图本行文字与当时的操作发给开发者');
+      }
+
+      function renderOnlinePanel() {
+        return h('div', {},
         h('div', { className: 'nnk-card' },
           e('div', null, h('b', null, '🌐 联机助手')),
           !status.active
@@ -1160,7 +1168,8 @@ window.__ModuleLoader__.load({
             '禁将/武将包/卡牌包/人数:游戏内等待房间右上角点「房间设置」打开模式菜单,改完点「启」自动广播到全房。'),
           e('div', 'nnk-hint', '房号模式经国内可达的公共信令服务器交换连接信息(载荷按房号加密,点对点直连、无需公网 IP);个别网络(如手机热点)打不通时换个网络再试,或改用邀请码兜底。无人大厅在后续版本。')),
         note ? e('div', { className: note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err' }, note) : null
-      );
+        );
+      }
     }
 
     // ── 工坊页(五个子页签:任务 / 任务列表 / 历史 / 联机 / 设置) ───

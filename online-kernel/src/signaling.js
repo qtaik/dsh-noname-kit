@@ -95,6 +95,10 @@
 					var payload = await seal(key, obj);
 					client.publish(topic, payload, { qos: 0, retain: Boolean(retained) });
 				},
+				/* 原样发布(不清空 retained 心跳时用空载荷) */
+				publishRaw: function(topic, payload, retained) {
+					client.publish(topic, payload, { qos: 0, retain: Boolean(retained) });
+				},
 				end: function() {
 					try { client.end(true); } catch (e) { /* 忽略 */ }
 				}
