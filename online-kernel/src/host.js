@@ -144,13 +144,21 @@
 				}
 				return origCreateServer.apply(env.game, arguments);
 			};
-			/* 跨重载接力:工坊建房若触发过 game.reload(),重启后凭 pending 标记恢复建房态 */
+			/* 跨重载接力 + 回房残留清理:
+			 * - 有 nnk_host_pending = 工坊刚点了创建、游戏正重载途中,恢复互联网建房;
+			 * - 没有时,必须清掉上次建房残留的 directstartmode/directstart——否则引擎
+			 *   每次开机都自动恢复进上次的等待房间(还是原生局域网房,房间名=本机
+			 *   内网 IP),用户什么都没点就"被进房"(实测踩坑) */
 			try {
 				var pending = localStorage.getItem(env.lib.configprefix + "nnk_host_pending");
 				if (pending) {
 					localStorage.removeItem(env.lib.configprefix + "nnk_host_pending");
 					hostState.active = true;
 					console.log("[联机助手] 检测到待建房间标记,重载后继续互联网建房");
+				} else if (env.lib.config.directstartmode || localStorage.getItem(env.lib.configprefix + "directstart")) {
+					env.game.saveConfig("directstartmode");
+					localStorage.removeItem(env.lib.configprefix + "directstart");
+					console.log("[联机助手] 已清除上次建房残留的自动回房标记,本次开机不自动进房");
 				}
 			} catch (e) { /* localStorage 不可用则无接力 */ }
 		},
