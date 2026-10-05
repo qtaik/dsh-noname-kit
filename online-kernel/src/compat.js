@@ -255,12 +255,12 @@
 	}
 
 	/*
-	 * 防砖保险丝 v2:个别扩展把整个 ui.create 换成自引用代理(真机实证:
-	 * 十周年B4UI——联机模式下 ui.create.arena 无限递归爆栈,炸死整次启动;
-	 * 第一版保险丝挂在原对象属性上,被整换绕过)。v2 接管 ui.create 属性:
-	 * 读取时返回影子视图——全部属性透传到当前对象,唯独 arena 换成保险丝;
-	 * 调用爆栈(RangeError)就摘除扩展的整换、退回引擎原版 arena,并把肇事
-	 * 扩展写进隔离名单(下次启动其 content 不再加载)。
+	 * 防砖保险丝 v3:坏扩展会偷换 arena(整换 ui.create 或在原对象上
+	 * defineProperty,真机实证:十周年B4UI 缓存幽灵,联机模式下无限递归
+	 * 爆栈炸死启动)。v3 无条件接管 ui.create:读取返回影子视图(全部属性
+	 * 透传,唯独 arena 恒为保险丝);保险丝调用爆栈即熔断——整换的换回
+	 * 原版、原地偷换的删掉 getter,统统退回引擎原版 arena,并把肇事扩展
+	 * 按堆栈写进隔离名单(下次启动其 content 不再加载)。
 	 */
 	function guardCreate() {
 		var ui = nnk.env.ui;
@@ -273,18 +273,27 @@
 		var view = null;
 		var viewTargets = new WeakMap();
 		var fused = function() {
-			var target = current.arena;
-			if (typeof target !== "function") {
+			var target = null;
+			try {
+				target = current.arena;
+			} catch (e) { /* 读都读不动就直接原版 */ }
+			if (typeof target !== "function" || target === fused) {
 				target = pristineArena;
 			}
 			try {
 				return target.apply(this, arguments);
 			} catch (e) {
-				if (e instanceof RangeError && current !== pristine) {
+				if (e instanceof RangeError) {
 					var ext = extNameFromStack(e && e.stack);
-					console.error("[联机助手] arena 包装器爆栈,已摘除扩展包装退回原版:", ext, e);
+					console.error("[联机助手] arena 包装器爆栈,已熔断退回原版:", ext, e);
 					quarantine(ext);
-					ui.create = pristine;
+					try {
+						if (current !== pristine) {
+							ui.create = pristine;   /* 整换:换回原版对象 */
+						}
+						delete ui.create.arena;      /* 原地偷换:拆掉 getter */
+						ui.create.arena = pristineArena;
+					} catch (e2) { /* 忽略 */ }
 					return pristineArena.apply(this, arguments);
 				}
 				throw e;
@@ -294,7 +303,7 @@
 			Object.defineProperty(ui, "create", {
 				configurable: true,
 				get: function() {
-					if (!enabled() || current === pristine) {
+					if (!enabled()) {
 						return current;
 					}
 					if (!view || viewTargets.get(view) !== current) {
