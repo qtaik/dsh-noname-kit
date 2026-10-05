@@ -1014,7 +1014,8 @@ window.__ModuleLoader__.load({
           var dd = ev.data || {};
           var loaded = dd.loaded || [];
           var skipped = dd.skipped || [];
-          return '🧩 联机加载扩展(' + loaded.length + '):' + (loaded.join('、') || '无') + (skipped.length ? ' | 跳过:' + skipped.join('、') : '');
+          var configured = dd.configured || [];
+          return '🧩 联机加载扩展(' + loaded.length + '):' + (loaded.join('、') || '无') + (skipped.length ? ' | 跳过:' + skipped.join('、') : '') + (configured.length ? ' | 游戏登记:' + configured.join('、') : '');
         }
         case 'info': return 'ℹ️ ' + ((ev.data && ev.data.message) || '');
         case 'transfer_begin': return '📦 开始补传「' + ((ev.data && ev.data.name) || '') + '」';

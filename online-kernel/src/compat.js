@@ -157,10 +157,14 @@
 		}
 		var env = nnk.env;
 		var blocked = blocklist();
-		/* 裁决一条扩展的联机开关:隔离名单内=关;内容扩展=开(哪怕作者没声明);
+		/* 裁决一条扩展的联机开关:本内核恒开(联机模式靠它自举,不能被分类
+		 * 规则误伤);隔离名单内=关;内容扩展=开(哪怕作者没声明);
 		 * 美化类=关(哪怕作者声明了 connect:true——真机实证:美化族普遍自带
 		 * connect 声明,只拨亮不拨灭的话它们照样加载,开闸形同虚设) */
 		function decide(name) {
+			if (name === KERNEL_NAME) {
+				return true;
+			}
 			if (blocked.indexOf(name) >= 0) {
 				return false;
 			}
@@ -361,7 +365,11 @@
 					skipped.push(ext[0]);
 				}
 			});
-			bridgeApi().emit("ext_dump", { loaded: loaded, skipped: skipped });
+			bridgeApi().emit("ext_dump", {
+				loaded: loaded,
+				skipped: skipped,
+				configured: (nnk.env.lib.config.extensions || []).slice()
+			});
 		} catch (e) { /* 忽略 */ }
 	}
 
