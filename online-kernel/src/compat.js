@@ -10,6 +10,7 @@
  */
 (function() {
 	var nnk = window.__nnk__;
+	var KERNEL_NAME = "联机助手";
 
 	function bridgeApi() {
 		return nnk.modules.bridge;
@@ -23,10 +24,19 @@
 		return nnk.env && nnk.env._status && nnk.env._status.connectMode;
 	}
 
-	/* 从错误堆栈里认出所属扩展(extension/<名字>/…),认不出返回 null */
+	/* 从错误堆栈里认出所属扩展(extension/<名字>/…)。跳过本内核自己的帧
+	 * (熔断链路里必然有我们的帧,不能把联机助手自己隔离了);认不出返回 null */
 	function extNameFromStack(stack) {
-		var m = /\/extension\/([^\/\n]+)/.exec(String(stack || ""));
-		return m ? decodeURIComponent(m[1]) : null;
+		var stackStr = String(stack || "");
+		var re = /\/extension\/([^\/\n]+)/g;
+		var m;
+		while ((m = re.exec(stackStr)) !== null) {
+			var name = decodeURIComponent(m[1]);
+			if (name !== KERNEL_NAME) {
+				return name;
+			}
+		}
+		return null;
 	}
 
 	function firstStackLines(stack, n) {
@@ -34,10 +44,10 @@
 	}
 
 	/* 隔离名单:在联机下爆栈过的扩展不再开闸(回退引擎原生行为=不加载其
-	 * content),名单持久化在内核配置里,其余扩展照常开闸。 */
+	 * content),名单持久化在内核配置里,其余扩展照常开闸。本内核永不入名单。 */
 	function blocklist() {
 		var list = nnk.modules.config.get("unlockBlock");
-		return Array.isArray(list) ? list : [];
+		return Array.isArray(list) ? list.filter(function(n) { return n !== KERNEL_NAME; }) : [];
 	}
 
 	function quarantine(ext) {
