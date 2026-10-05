@@ -12,7 +12,10 @@
 		/* M4 自动补包的单次传输体积上限(MB) */
 		transferLimitMB: 300,
 		/* M3 联机开闸的总开关 */
-		autoUnlockExtensions: true
+		autoUnlockExtensions: true,
+		/* 美化类扩展(不带武将/卡牌包的)是否也参与联机加载:默认关——
+		 * 美化族是联机不稳定的大头,默认只开内容扩展保稳定 */
+		unlockUIExtensions: false
 	};
 
 	nnk.modules.config = {

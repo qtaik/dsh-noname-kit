@@ -43,6 +43,62 @@
 		return String(stack || "").split("\n").slice(1, (n || 4) + 1).join(" ← ").trim();
 	}
 
+	/* ---- 扩展分类(美化 vs 内容):按目录特征判定,判定不了就放行 ---- */
+	var cachedRoot;
+	function gameRoot() {
+		if (cachedRoot !== undefined) {
+			return cachedRoot;
+		}
+		cachedRoot = null;
+		var req = (typeof window !== "undefined" && typeof window.require === "function") ? window.require : (typeof require === "function" ? require : null);
+		if (!req) {
+			return cachedRoot;
+		}
+		var fs = req("fs");
+		var path = req("path");
+		var candidates = [];
+		try {
+			candidates.push(process.cwd());
+		} catch (e) { /* 忽略 */ }
+		try {
+			candidates.push(path.resolve(process.cwd(), ".."));
+		} catch (e) { /* 忽略 */ }
+		for (var i = 0; i < candidates.length; i++) {
+			try {
+				if (fs.existsSync(path.join(candidates[i], "extension", KERNEL_NAME, "extension.js"))) {
+					cachedRoot = candidates[i];
+					break;
+				}
+			} catch (e) { /* 忽略 */ }
+		}
+		return cachedRoot;
+	}
+
+	/* 内容扩展 = 目录里有 character.js 或 card.js(贡献武将/卡牌包);
+	 * 其余视为美化类。美化类默认不参与联机加载(unlockUIExtensions 开关可放行),
+	 * 判定不了(无 fs/定位不到根目录)按放行处理,宁可多开不错杀。 */
+	function isContentExt(name) {
+		if (nnk.modules.config.get("unlockUIExtensions")) {
+			return true;
+		}
+		if (!name || KERNEL_NAME === name || /[\\\/:*?"<>|]/.test(name)) {
+			return false;
+		}
+		var req = (typeof window !== "undefined" && typeof window.require === "function") ? window.require : (typeof require === "function" ? require : null);
+		var root = gameRoot();
+		if (!req || !root) {
+			return true;
+		}
+		try {
+			var fs = req("fs");
+			var path = req("path");
+			var dir = path.join(root, "extension", name);
+			return fs.existsSync(path.join(dir, "character.js")) || fs.existsSync(path.join(dir, "card.js"));
+		} catch (e) {
+			return true;
+		}
+	}
+
 	/* 隔离名单:名单内的扩展不再开闸(回退引擎原生行为=不加载其 content)。
 	 * 0.3.5 起**不再自动写名单**——链式包装下按堆栈帧定罪必然误伤(真机
 	 * 实证:十周年UI 被连坐),当前策略=只熔断降级+上报;名单保留给手动
@@ -93,7 +149,7 @@
 		var arr = env.lib.extensions;
 		if (Array.isArray(arr)) {
 			arr.forEach(function(ext) {
-				if (Array.isArray(ext) && !ext[5] && blocked.indexOf(ext[0]) < 0) {
+				if (Array.isArray(ext) && !ext[5] && blocked.indexOf(ext[0]) < 0 && isContentExt(ext[0])) {
 					ext[5] = true;
 				}
 			});
@@ -101,7 +157,7 @@
 				var origPush = arr.push;
 				arr.push = function() {
 					for (var i = 0; i < arguments.length; i++) {
-						if (Array.isArray(arguments[i]) && !arguments[i][5] && blocked.indexOf(arguments[i][0]) < 0) {
+						if (Array.isArray(arguments[i]) && !arguments[i][5] && blocked.indexOf(arguments[i][0]) < 0 && isContentExt(arguments[i][0])) {
 							arguments[i][5] = true;
 						}
 					}

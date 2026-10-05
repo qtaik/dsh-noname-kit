@@ -1135,6 +1135,9 @@ window.__ModuleLoader__.load({
             : e('div', 'nnk-ok', '✅ 双方扩展一致,不需要补传。'),
           missPacks.length ? e('div', 'nnk-hint', '客人少的武将包(都在上面的扩展里,补传扩展即可):' + missPacks.join('、')) : null,
           extra.length ? e('div', 'nnk-hint', '对方多出的扩展(不影响联机):' + extra.join('、')) : null,
+          e('label', { style: { display: 'block', marginTop: '8px' } },
+            h('input', { type: 'checkbox', checked: !!(bridge.cfg && bridge.cfg.unlockUIExtensions), onChange: function (ev2) { setNote('开关已发送,下次建房重载后生效'); sendCmd('set_config', { key: 'unlockUIExtensions', value: ev2.target.checked }); } }),
+            ' 联机时也加载美化类扩展(皮肤/动效,可能不稳,默认只加载武将/卡牌扩展)'),
           resetBtn,
           txEv ? e('div', { className: 'nnk-break', style: { marginTop: '6px' } }, onlineEventText(txEv)) : null);
       }

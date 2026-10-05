@@ -205,6 +205,7 @@ export function createBridgeSession({ token }) {
       session.lastSeen = Date.now()
       session.kernelVersion = payload?.kernel?.version ?? session.kernelVersion
       session.state = payload?.state ?? session.state
+      session.cfg = payload?.cfg ?? session.cfg
       for (const ev of payload?.events || []) {
         session.events.push(ev)
       }
@@ -231,6 +232,7 @@ export function createBridgeSession({ token }) {
         lastSeen: session.lastSeen || null,
         kernelVersion: session.kernelVersion,
         state: session.state,
+        cfg: session.cfg,
         events: session.events.slice(-50),
         pending: session.commands.length,
       }

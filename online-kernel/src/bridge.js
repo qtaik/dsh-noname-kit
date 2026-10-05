@@ -62,6 +62,16 @@
 						nnk.modules.compat.clearQuarantine();
 					}
 					break;
+				case "set_config": {
+					/* 只放行允许工坊改的内核配置键,值做强转 */
+					var allowed = { unlockUIExtensions: "boolean", autoUnlockExtensions: "boolean" };
+					if (allowed.hasOwnProperty(args.key)) {
+						nnk.modules.config.set(args.key, args.value === true);
+					} else {
+						emit("error", { message: "不允许修改的配置: " + args.key });
+					}
+					break;
+				}
 				case "cancel":
 				host.cancelAll();
 				guest.cancelJoin();
@@ -98,6 +108,10 @@
 				token: cfg.token,
 				kernel: { version: nnk.version },
 				state: state,
+				cfg: {
+					unlockUIExtensions: !!nnk.modules.config.get("unlockUIExtensions"),
+					autoUnlockExtensions: !!nnk.modules.config.get("autoUnlockExtensions")
+				},
 				events: events.splice(0, events.length)
 			})
 		}).then(function(r) {
