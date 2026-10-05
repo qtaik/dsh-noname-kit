@@ -1009,6 +1009,7 @@ window.__ModuleLoader__.load({
           return '📦 包体检:客人缺 ' + miss + ' 个扩展、' + missPack + ' 个武将包';
         }
         case 'ext_error': return '🧩 扩展报错(已拦截' + ((ev.data && ev.data.ext) ? ':' + ev.data.ext : '') + ')';
+        case 'ext_quarantined': return '🚫 扩展「' + ((ev.data && ev.data.ext) || '?') + '」联机下爆栈,已自动隔离';
         case 'transfer_begin': return '📦 开始补传「' + ((ev.data && ev.data.name) || '') + '」';
         case 'transfer_progress': return '⏳ 补传中「' + ((ev.data && ev.data.name) || '') + '」' + ((ev.data && ev.data.pct) || 0) + '%';
         case 'transfer_done': return '📦 补传完成「' + ((ev.data && ev.data.name) || '') + '」(客人重启游戏生效)';
@@ -1126,6 +1127,13 @@ window.__ModuleLoader__.load({
             : e('div', 'nnk-ok', '✅ 双方扩展一致,不需要补传。'),
           missPacks.length ? e('div', 'nnk-hint', '客人少的武将包(都在上面的扩展里,补传扩展即可):' + missPacks.join('、')) : null,
           extra.length ? e('div', 'nnk-hint', '对方多出的扩展(不影响联机):' + extra.join('、')) : null,
+          (function () {
+            var qEv = onlinePickEvent(evs, 'ext_quarantined');
+            if (!qEv) return null;
+            return h('div', { style: { marginTop: '6px' } },
+              e('div', 'nnk-hint', '已隔离:' + ((qEv.data && qEv.data.ext) || '?') + '(联机下不再加载它的内容,其余扩展不受影响)。'),
+              hostFlow ? h('button', { className: 'nnk-copy', onClick: function () { sendCmd('clear_quarantine', {}) } }, '↩️ 重置隔离名单(重启游戏生效)') : null);
+          })(),
           txEv ? e('div', { className: 'nnk-break', style: { marginTop: '6px' } }, onlineEventText(txEv)) : null);
       }
 

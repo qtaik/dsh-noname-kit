@@ -57,6 +57,11 @@
 						nnk.modules.transfer.start(args.name);
 					}
 					break;
+				case "clear_quarantine":
+					if (nnk.modules.compat) {
+						nnk.modules.compat.clearQuarantine();
+					}
+					break;
 				case "cancel":
 				host.cancelAll();
 				guest.cancelJoin();

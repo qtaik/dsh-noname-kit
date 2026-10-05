@@ -33,6 +33,35 @@
 		return String(stack || "").split("\n").slice(1, (n || 4) + 1).join(" ← ").trim();
 	}
 
+	/* 隔离名单:在联机下爆栈过的扩展不再开闸(回退引擎原生行为=不加载其
+	 * content),名单持久化在内核配置里,其余扩展照常开闸。 */
+	function blocklist() {
+		var list = nnk.modules.config.get("unlockBlock");
+		return Array.isArray(list) ? list : [];
+	}
+
+	function quarantine(ext) {
+		if (!ext || blocklist().indexOf(ext) >= 0) {
+			return;
+		}
+		var list = blocklist();
+		list.push(ext);
+		try {
+			nnk.modules.config.set("unlockBlock", list);
+		} catch (e) { /* 存不进名单则下次还会踩,保险丝仍兜底 */ }
+		bridgeApi().emit("ext_quarantined", {
+			ext: ext,
+			message: "联机下爆栈,已自动隔离(不加载该扩展的联机内容,重启游戏生效)"
+		});
+	}
+
+	function clearQuarantine() {
+		try {
+			nnk.modules.config.set("unlockBlock", []);
+		} catch (e) { /* 忽略 */ }
+		bridgeApi().emit("ext_error", { message: "隔离名单已清空,重启游戏后全部扩展恢复联机加载" });
+	}
+
 	/*
 	 * 闸1:引擎在联机模式默认整段跳过扩展 content(init/loading.js:
 	 * !extension[5] && mode==="connect")。把 lib.extensions 里每条记录的
@@ -48,10 +77,11 @@
 			return;
 		}
 		var env = nnk.env;
+		var blocked = blocklist();
 		var arr = env.lib.extensions;
 		if (Array.isArray(arr)) {
 			arr.forEach(function(ext) {
-				if (Array.isArray(ext) && !ext[5]) {
+				if (Array.isArray(ext) && !ext[5] && blocked.indexOf(ext[0]) < 0) {
 					ext[5] = true;
 				}
 			});
@@ -59,7 +89,7 @@
 				var origPush = arr.push;
 				arr.push = function() {
 					for (var i = 0; i < arguments.length; i++) {
-						if (Array.isArray(arguments[i]) && !arguments[i][5]) {
+						if (Array.isArray(arguments[i]) && !arguments[i][5] && blocked.indexOf(arguments[i][0]) < 0) {
 							arguments[i][5] = true;
 						}
 					}
@@ -220,15 +250,49 @@
 		};
 	}
 
+	/*
+	 * 防砖保险丝:个别扩展用代理包装 ui.create.arena,联机模式下自引用成环,
+	 * 引擎开机调 arena 时爆栈(RangeError),整次启动直接失败(真机实证:
+	 * 十周年B4UI,「加载内容失败」大屏)。保险丝包住 ui.create.arena:第一次
+	 * 爆栈就摘除全部扩展包装、退回原版 arena 让启动活下去,并把肇事扩展拉进
+	 * 隔离名单——下次启动其 content 不再加载,其余扩展照常开闸。
+	 */
+	function arenaFuse() {
+		var ui = nnk.env.ui;
+		if (!ui || !ui.create || typeof ui.create.arena !== "function" || ui.create.arena.__nnkFuse) {
+			return;
+		}
+		var pristine = ui.create.arena;
+		var fuse = function() {
+			var current = ui.create.arena;
+			var fn = current === fuse ? pristine : current;
+			try {
+				return fn.apply(this, arguments);
+			} catch (e) {
+				if (e instanceof RangeError && ui.create.arena !== pristine) {
+					var ext = extNameFromStack(e && e.stack);
+					console.error("[联机助手] arena 包装器爆栈,已摘除扩展包装退回原版:", ext, e);
+					ui.create.arena = pristine;
+					quarantine(ext);
+					return pristine.apply(this, arguments);
+				}
+				throw e;
+			}
+		};
+		ui.create.arena = fuse;
+	}
+
 	nnk.modules.compat = {
 		install: function() {
 			unlockExtensions();
+			arenaFuse();
 			shimInfoMap();
 			guardHooks();
 			guardErrorPopup();
-			console.log("[联机助手] 兼容层就绪(开闸+垫片+隔离" + (enabled() ? "" : ",总开关已关闭") + ")");
+			console.log("[联机助手] 兼容层就绪(开闸+垫片+隔离" + (enabled() ? "" : ",总开关已关闭") + ",隔离名单 " + blocklist().length + " 项)");
 		},
 		unlockExtensions: unlockExtensions,
-		unlockPacks: unlockPacks
+		unlockPacks: unlockPacks,
+		clearQuarantine: clearQuarantine
 	};
 })();
