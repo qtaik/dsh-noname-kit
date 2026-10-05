@@ -14,7 +14,7 @@
 	}
 	window.__nnkLoaded = true;
 	if (!window.__nnk__) {
-		window.__nnk__ = { version: "0.1.9", modules: {}, env: null, state: {} };
+		window.__nnk__ = { version: "0.2.0", modules: {}, env: null, state: {} };
 	}
 
 	game.import("extension", function(lib, game, ui, get, ai, _status) {
@@ -36,7 +36,16 @@
 	window.__nnk__.boot = async function(lib, game, ui, get, ai, _status) {
 		var nnk = window.__nnk__;
 		nnk.env = { lib: lib, game: game, ui: ui, get: get, ai: ai, _status: _status };
-		var files = ["config", "rtc", "host", "guest", "bridge"];
+		/* mqtt 库(UMD)经 <script> 标签加载进 window.mqtt——房号信令依赖它,
+		 * 加载失败只降级房号信令不可用(邀请码模式不受影响),不阻塞内核 */
+		await new Promise(function(resolve) {
+			var s = document.createElement("script");
+			s.src = location.origin + "/extension/" + encodeURIComponent("联机助手") + "/lib/mqtt.min.js";
+			s.onload = function() { resolve(); };
+			s.onerror = function() { resolve(); };
+			document.head.appendChild(s);
+		});
+		var files = ["config", "rtc", "signaling", "host", "guest", "bridge"];
 		for (var i = 0; i < files.length; i++) {
 			var name = files[i];
 			if (nnk.modules[name]) {
@@ -59,6 +68,6 @@
 		if (nnk.modules.bridge) {
 			nnk.modules.bridge.init();
 		}
-		console.log("[联机助手] 内核 v" + nnk.version + " 就绪(无头模式)");
+		console.log("[联机助手] 内核 v" + nnk.version + " 就绪(无头模式" + (window.mqtt ? ",MQTT 信令可用" : ",MQTT 库缺失,房号模式不可用") + ")");
 	};
 })();

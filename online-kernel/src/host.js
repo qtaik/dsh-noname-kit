@@ -8,11 +8,16 @@
 (function() {
 	var nnk = window.__nnk__;
 	var rtc;
+	var signaling;
 
 	var hostState = nnk.state.host = {
-		active: false,     /* 本次启动里已进入"互联网建房"流程(含跨重载接力) */
+		active: false,        /* 本次启动里已进入"互联网建房"流程(含跨重载接力) */
+		signaling: "mqtt",    /* mqtt=房号直连(默认) | invite=邀请码兜底 */
 		roomCode: null,
-		bridges: []
+		bridges: [],
+		invitePc: null,
+		mqttSession: null,
+		presenceTimer: null
 	};
 
 	function bridgeApi() {
@@ -58,7 +63,108 @@
 		hostState.roomCode = genRoomCode();
 		game.ip = "nnk://" + hostState.roomCode;
 		bridgeApi().setPhase("hosting", { roomCode: hostState.roomCode });
-		startInvite();
+		startHosting();
+	}
+
+	/* 按建房时选定的信令方式挂"互联网接入器" */
+	function startHosting() {
+		if (hostState.signaling === "invite") {
+			startInvite();
+		} else {
+			startMqtt();
+		}
+	}
+
+	/* 房号模式(MQTT):主机是 answer 方——订阅 offer 主题,每个客人一条
+	 * 连接提议就应答一条;同时以 retained 心跳向房号主题声明自己在房 */
+	function startMqtt() {
+		var env = nnk.env;
+		var code = hostState.roomCode;
+		bridgeApi().setPhase("mqtt_waiting", { roomCode: code });
+		signaling.openRoomSession(code, "host",
+			[signaling.roomTopic(code, "offer"), signaling.roomTopic(code, "host")],
+			function(topic, msg) {
+				if (/\/offer$/.test(topic) && msg && msg.guestId && msg.sdp) {
+					answerMqttOffer(code, msg);
+				}
+			}
+		).then(function(session) {
+			if (hostState.signaling !== "mqtt" || hostState.roomCode !== code) {
+				session.end();   /* 等待期间被换码/取消,这次会话作废 */
+				return;
+			}
+			hostState.mqttSession = session;
+			var presence = function() {
+				session.publish(signaling.roomTopic(code, "host"), { ts: Date.now() }, true)
+					.catch(function() { /* 单次心跳失败可容忍 */ });
+			};
+			presence();
+			hostState.presenceTimer = setInterval(presence, 10000);
+		}).catch(function(err) {
+			bridgeApi().emit("error", { message: "房号信令连接失败: " + (err.message || err) + " —— 可改用邀请码方式建房" });
+		});
+	}
+
+	/* 应答一条客人的连接提议(客人=offer 方) */
+	function answerMqttOffer(code, msg) {
+		var env = nnk.env;
+		var pc = new RTCPeerConnection(rtc.pcConfig());
+		pc.ondatachannel = function(e) {
+			var channel = e.channel;
+			channel.onopen = function() {
+				var conn = new rtc.HostBridge(channel);
+				conn._pc = pc;
+				hostState.bridges.push(conn);
+				conn.onDown(function() {
+					var i = hostState.bridges.indexOf(conn);
+					if (i >= 0) {
+						hostState.bridges.splice(i, 1);
+					}
+				});
+				env.lib.init.connection(conn);
+				bridgeApi().emit("guest_connected", { guests: hostState.bridges.length });
+			};
+		};
+		pc.onconnectionstatechange = function() {
+			if (pc.connectionState === "failed") {
+				bridgeApi().emit("error", { message: "一位客人的直连建立失败(网络没打通),需要其重新加入" });
+			}
+		};
+		pc.setRemoteDescription(msg.sdp).then(function() {
+			return pc.createAnswer();
+		}).then(function(answer) {
+			return pc.setLocalDescription(answer);
+		}).then(function() {
+			return rtc.waitGather(pc);
+		}).then(function() {
+			if (hostState.mqttSession) {
+				return hostState.mqttSession.publish(
+					signaling.roomTopic(code, "answer/" + msg.guestId),
+					{ k: "answer", sdp: pc.localDescription }
+				);
+			}
+		}).catch(function(err) {
+			try { pc.close(); } catch (e) { /* 清理半程 pc */ }
+			bridgeApi().emit("error", { message: "应答客人失败: " + (err.message || err) });
+		});
+	}
+
+	function cleanupMqtt() {
+		if (hostState.presenceTimer) {
+			clearInterval(hostState.presenceTimer);
+			hostState.presenceTimer = null;
+		}
+		if (hostState.mqttSession) {
+			var session = hostState.mqttSession;
+			hostState.mqttSession = null;
+			/* 清掉 retained 的在线心跳,客人端立即显示房主离线 */
+			if (hostState.roomCode) {
+				try {
+					session.publishRaw(signaling.roomTopic(hostState.roomCode, "host"), "", true);
+				} catch (e) { /* 忽略 */ }
+			}
+			session.end();
+		}
 	}
 
 	/* 邀请码模式:主机是 offer 方(邀请码→客人回执码→工坊粘贴回执) */
@@ -133,6 +239,7 @@
 		init: function() {
 			var env = nnk.env;
 			rtc = nnk.modules.rtc;
+			signaling = nnk.modules.signaling;
 			if (env.game.__nnkCreateServerPatched) {
 				return;
 			}
@@ -164,9 +271,10 @@
 		},
 
 		/* 工坊命令:创建互联网房间。无论游戏当前停在哪个界面,先落到联机模式再直启。 */
-		createInternetRoom: function(mode) {
+		createInternetRoom: function(mode, signalingMode) {
 			var env = nnk.env;
 			mode = String(mode || "identity");
+			hostState.signaling = signalingMode === "invite" ? "invite" : "mqtt";
 			/* 模式白名单:与引擎联机菜单一致(lib.mode[x].connect 为真值的五个) */
 			if (["identity", "guozhan", "versus", "doudizhu", "single"].indexOf(mode) < 0) {
 				bridgeApi().emit("error", { message: "不支持的模式: " + mode });
@@ -208,7 +316,7 @@
 					}, true);
 				}
 				bridgeApi().setPhase("hosting", { roomCode: hostState.roomCode });
-				startInvite();
+				startHosting();
 				return;
 			}
 			bridgeApi().setPhase("host_booting", { mode: mode });
@@ -229,6 +337,15 @@
 		refreshInvite: function() {
 			if (!hostState.roomCode || !env_ready()) {
 				bridgeApi().emit("error", { message: "还没有可用的房间,请先创建互联网房间" });
+				return;
+			}
+			if (hostState.signaling === "mqtt") {
+				/* 房号模式换码:重生成房号并重挂信令(旧房号的心跳随之停止) */
+				cleanupMqtt();
+				hostState.roomCode = genRoomCode();
+				env.game.ip = "nnk://" + hostState.roomCode;
+				bridgeApi().setPhase("hosting", { roomCode: hostState.roomCode });
+				startMqtt();
 				return;
 			}
 			if (hostState.invitePc) {
@@ -275,6 +392,7 @@
 				try { hostState.invitePc.close(); } catch (e) { /* 忽略 */ }
 				hostState.invitePc = null;
 			}
+			cleanupMqtt();
 			try {
 				localStorage.removeItem(env.lib.configprefix + "nnk_host_pending");
 			} catch (e) { /* 忽略 */ }

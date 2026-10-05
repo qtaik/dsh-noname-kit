@@ -6,6 +6,7 @@
 (function() {
 	var nnk = window.__nnk__;
 	var rtc;
+	var signaling;
 
 	var guestState = nnk.state.guest = {
 		session: null   /* { pc, fake, autoConnect } */
@@ -54,6 +55,9 @@
 		if (guestState.session && guestState.session.pc) {
 			try { guestState.session.pc.close(); } catch (e) { /* 忽略 */ }
 		}
+		if (guestState.session && guestState.session.mqtt) {
+			try { guestState.session.mqtt.end(); } catch (e) { /* 忽略 */ }
+		}
 		guestState.session = null;
 	}
 
@@ -61,6 +65,7 @@
 		init: function() {
 			var env = nnk.env;
 			rtc = nnk.modules.rtc;
+			signaling = nnk.modules.signaling;
 			if (env.game.__nnkConnectPatched) {
 				return;
 			}
@@ -152,6 +157,107 @@
 				bridgeApi().emit("answer_ready", { code: rtc.encodeCode("answer", pc.localDescription) });
 			}).catch(function(err) {
 				console.error("[联机助手] 加入失败", err);
+				resetSession();
+				bridgeApi().setPhase("idle");
+				bridgeApi().emit("error", { message: "加入失败: " + (err.message || err) });
+			});
+		},
+
+		/* 房号模式(客人=offer 方):输房号 → 经 MQTT 发连接提议,等房主应答 */
+		joinByRoomCode: function(codeText) {
+			resetSession();
+			var env = nnk.env;
+			if (env.game.online) {
+				bridgeApi().emit("error", { message: "游戏正在联机中,请先退出当前对局" });
+				return;
+			}
+			if (env._status.waitingForPlayer) {
+				bridgeApi().emit("error", { message: "本游戏正在建房等待中,不能同时加入其他房间" });
+				return;
+			}
+			var code = String(codeText || "").trim().toUpperCase();
+			if (!/^[A-HJ-NP-Z2-9]{6}$/.test(code)) {
+				bridgeApi().emit("error", { message: "房号格式不对(应为 6 位字母数字组合)" });
+				return;
+			}
+			var pc = new RTCPeerConnection(rtc.pcConfig());
+			var guestId = signaling.randomId();
+			var session = { pc: pc, autoConnect: true, code: code };
+			guestState.session = session;
+			bridgeApi().setPhase("joining", { code: code });
+			var channel = pc.createDataChannel("nnk-link", { ordered: true });
+			var fake = new rtc.FakeWebSocket(channel);
+			session.fake = fake;
+			fake.onUp(function() {
+				if (session.autoConnect) {
+					connectNow();
+				}
+			});
+			fake.onDown(function() {
+				if (guestState.session === session) {
+					guestState.session = null;
+					bridgeApi().setPhase("idle");
+					bridgeApi().emit("room_closed", { side: "guest" });
+				}
+			});
+			pc.onconnectionstatechange = function() {
+				if (pc.connectionState === "failed") {
+					bridgeApi().emit("error", { message: "直连建立失败(双方网络没打通)——反复失败检查防火墙是否放行无名杀(UDP),或换用邀请码方式" });
+					bridgeApi().setPhase("idle");
+					resetSession();
+				}
+			};
+			var answered = false;
+			pc.createOffer().then(function(offer) {
+				return pc.setLocalDescription(offer);
+			}).then(function() {
+				return rtc.waitGather(pc);
+			}).then(function() {
+				return signaling.openRoomSession(code, "guest-" + guestId,
+					[signaling.roomTopic(code, "answer/" + guestId), signaling.roomTopic(code, "host")],
+					function(topic, msg) {
+						if (/\/host$/.test(topic)) {
+							session.hostSeen = Date.now();
+							return;
+						}
+						if (/\/answer\//.test(topic) && !answered && msg && msg.sdp) {
+							answered = true;
+							session.hostSeen = Date.now();
+							pc.setRemoteDescription(msg.sdp).catch(function(err) {
+								bridgeApi().emit("error", { message: "房主应答处理失败: " + (err.message || err) });
+							});
+						}
+					}
+				).then(function(mqttSession) {
+					session.mqtt = mqttSession;
+					/* 房主在线校验:retained 心跳应在订阅后立即送达 */
+					return new Promise(function(resolve, reject) {
+						setTimeout(function() {
+							if (!session.hostSeen) {
+								reject(new Error("没有找到该房号的在线主机(房号可能输错,或房主已离线)"));
+							} else {
+								resolve();
+							}
+						}, 3500);
+					});
+				}).then(function() {
+					return mqttSession.publish(signaling.roomTopic(code, "offer"), {
+						guestId: guestId,
+						sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
+					});
+				}).then(function() {
+					bridgeApi().setPhase("waiting_host", {});
+					setTimeout(function() {
+						if (!answered && guestState.session === session) {
+							bridgeApi().emit("error", { message: "30 秒未收到房主应答(可能已掉线)——重新输入房号再试,或换用邀请码方式" });
+						}
+					}, 30000);
+				}).catch(function(err) {
+					resetSession();
+					bridgeApi().setPhase("idle");
+					bridgeApi().emit("error", { message: (err && err.message) || "加入失败" });
+				});
+			}).catch(function(err) {
 				resetSession();
 				bridgeApi().setPhase("idle");
 				bridgeApi().emit("error", { message: "加入失败: " + (err.message || err) });

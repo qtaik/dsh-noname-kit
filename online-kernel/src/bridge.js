@@ -38,7 +38,10 @@
 			var args = cmd.args || {};
 			switch (cmd.action) {
 				case "create_room":
-					host.createInternetRoom(args.mode);
+					host.createInternetRoom(args.mode, args.signaling);
+					break;
+				case "join_room":
+					guest.joinByRoomCode(args.code);
 					break;
 				case "invite_refresh":
 					host.refreshInvite();
