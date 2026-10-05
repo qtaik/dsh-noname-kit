@@ -311,10 +311,11 @@
 				bridgeApi().emit("error", { message: "游戏正在联机中,请先退出当前对局" });
 				return;
 			}
-			/* 离线对局进行中禁止建房:直启/重载都会把当前对局丢掉 */
+			/* 离线对局进行中不再拒绝(旧守卫会打断建房):重载进联机模式本身就是
+			 * "返回主页"的干净起手,自动丢弃当前对局——也顺带绕开官方版首次
+			 * 启动状态异常导致无法建房的问题 */
 			if (env.game.players && env.game.players.length && !env._status.over) {
-				bridgeApi().emit("error", { message: "游戏正在对局中,请先结束当前对局再创建互联网房间" });
-				return;
+				bridgeApi().emit("info", { message: "检测到单人对局未结束,将自动退出并重载建房" });
 			}
 			hostState.active = true;
 			/* 自愈:系统按钮栏(ui.system1/2)正常由引擎开机时的 ui.create.arena()
