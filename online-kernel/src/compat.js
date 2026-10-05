@@ -341,10 +341,59 @@
 		}
 	}
 
+	/*
+	 * 通用属性保险丝:接管 owner[prop],扩展替换的包装器一旦爆栈(RangeError)
+	 * 就熔断回原版,并按堆栈隔离肇事扩展(开机路径上的爆栈=启动杀手,直接
+	 * 隔离,下次启动其 content 不再加载)。真机实证的毒化点:
+	 * ui.create(arena)、lib.init.cssstyles——均出自同一族的包装器。
+	 */
+	function guardMethod(owner, propName) {
+		if (!owner || typeof owner !== "object" || owner.__nnkGuarded) {
+			return;
+		}
+		var pristine = owner[propName];
+		if (typeof pristine !== "function") {
+			return;
+		}
+		var current = pristine;
+		var fused = function() {
+			var target = current;
+			if (typeof target !== "function" || target === fused) {
+				target = pristine;
+			}
+			try {
+				return target.apply(this, arguments);
+			} catch (e) {
+				if (e instanceof RangeError && current !== pristine) {
+					var ext = extNameFromStack(e && e.stack);
+					console.error("[联机助手] " + propName + " 包装器爆栈,已熔断退回原版:", ext, e);
+					quarantine(ext);
+					owner[propName] = pristine;
+					return pristine.apply(this, arguments);
+				}
+				throw e;
+			}
+		};
+		try {
+			Object.defineProperty(owner, propName, {
+				configurable: true,
+				get: function() {
+					return current === pristine ? current : fused;
+				},
+				set: function(v) {
+					current = v;
+				}
+			});
+			owner.__nnkGuarded = true;
+		} catch (e) { /* 不可接管就放弃,不阻塞启动 */ }
+	}
+
 	nnk.modules.compat = {
 		install: function() {
 			unlockExtensions();
 			guardCreate();
+			/* 真机实证的毒化点清单:每确认一个就加一行 */
+			guardMethod(nnk.env.lib && nnk.env.lib.init, "cssstyles");
 			shimInfoMap();
 			guardHooks();
 			guardErrorPopup();
