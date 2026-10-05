@@ -969,10 +969,11 @@ window.__ModuleLoader__.load({
     ];
     /* 流程互斥:同一游戏实例要么在主机流程要么在客人流程,进行中时另一侧禁用 */
     var HOST_PHASES = ['host_booting', 'hosting', 'invite_ready', 'connecting', 'room_open'];
-    var GUEST_PHASES = ['joining', 'answer_ready', 'entering', 'connected'];
+    var GUEST_PHASES = ['guest_booting', 'joining', 'answer_ready', 'entering', 'connected'];
     var ONLINE_PHASE_TEXT = {
       idle: '待机',
       host_booting: '正在进入建房流程(游戏将自动重载,约几秒)…',
+      guest_booting: '正在重载进联机模式(约几秒),落地后自动继续加入…',
       hosting: '房间已建好,正在准备房号…',
       mqtt_waiting: '房号就绪!把 6 位房号发给朋友,等朋友加入…',
       invite_ready: '邀请码已生成,等待客人回执码…',
@@ -1143,12 +1144,12 @@ window.__ModuleLoader__.load({
               e('div', null, h('b', null, '🔗 我要加入')),
               e('div', 'nnk-hint', '输入房主发给你的 6 位房号,点「加入」;房主应答后自动进房。'),
               h('input', { className: 'nnk-input', value: roomText, maxLength: 6, onChange: function (ev) { setRoomText(ev.target.value.toUpperCase()) }, placeholder: '输入 6 位房号,如 AB2C9X', style: { textTransform: 'uppercase', letterSpacing: '4px', fontSize: '16px' } }),
-              h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow, onClick: function () { sendCmd('join_room', { code: roomText }) } }, '🚪 加入房间'),
+              h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow || guestFlow, onClick: function () { sendCmd('join_room', { code: roomText }) } }, '🚪 加入房间'),
               showInviteFallback
                 ? h('div', {},
                   e('div', 'nnk-label', '备用:粘贴房主的邀请码'),
                   h('textarea', { className: 'nnk-textarea nnk-code', value: offerText, onChange: function (ev) { setOfferText(ev.target.value) }, placeholder: '粘贴房主的邀请码…' }),
-                  h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow, onClick: function () { sendCmd('join_invite', { code: offerText }) } }, '生成回执码'),
+                  h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow || guestFlow, onClick: function () { sendCmd('join_invite', { code: offerText }) } }, '生成回执码'),
                   answerEv
                     ? h('div', { style: { marginTop: '10px' } },
                       e('div', 'nnk-label', '回执码(发回给房主)'),

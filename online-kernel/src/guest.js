@@ -61,6 +61,23 @@
 		guestState.session = null;
 	}
 
+	/*
+	 * 客人加入的前置:联机界面元素(ui.control/arenalog 等)只在 mode=connect
+	 * 开机时由引擎构建——从离线主菜单直接接线,引擎收到服务器的 init 包就会
+	 * clearArena 崩(真机实证:ui.control undefined)。与主机同款:先重载进
+	 * 联机模式,落地后 init 凭 localStorage 标记自动续跑(WebRTC/信令会话
+	 * 不跨重载,由续跑重建)。
+	 */
+	function ensureConnectBoot(task) {
+		var env = nnk.env;
+		try {
+			localStorage.setItem(env.lib.configprefix + "nnk_guest_pending", JSON.stringify(task));
+		} catch (e) { /* 忽略 */ }
+		bridgeApi().setPhase("guest_booting", task.kind === "room" ? { code: task.code } : {});
+		env.game.saveConfig("mode", "connect");
+		env.game.reload();
+	}
+
 	var api = {
 		init: function() {
 			var env = nnk.env;
@@ -86,12 +103,41 @@
 				}
 				return origConnect.call(env.game, ip, callback);
 			};
+			/* 重载落地:联机界面 HUD 就绪后自动续跑被重载打断的加入流程。
+			 * fromResume=true 直通,不再触发重载(防引擎异常时无限重载环) */
+			try {
+				var pendingJson = localStorage.getItem(env.lib.configprefix + "nnk_guest_pending");
+				if (pendingJson) {
+					localStorage.removeItem(env.lib.configprefix + "nnk_guest_pending");
+					var task = JSON.parse(pendingJson);
+					var waited = 0;
+					var resumeTimer = setInterval(function() {
+						waited += 300;
+						if (nnk.env.ui && nnk.env.ui.control && nnk.env.ui.arena) {
+							clearInterval(resumeTimer);
+							if (task && task.kind === "invite") {
+								api.joinByInvite(task.code, true);
+							} else if (task) {
+								api.joinByRoomCode(task.code, true);
+							}
+						} else if (waited > 15000) {
+							clearInterval(resumeTimer);
+							bridgeApi().setPhase("idle");
+							bridgeApi().emit("error", { message: "联机界面 15 秒未就绪,加入未完成——请重试" });
+						}
+					}, 300);
+				}
+			} catch (e) { /* localStorage 不可用则无续跑 */ }
 		},
 
 		/* 工坊命令:粘贴主机的邀请码,生成回执码(事件 answer_ready 上报) */
-		joinByInvite: function(offerText) {
-			resetSession();
+		joinByInvite: function(offerText, fromResume) {
 			var env = nnk.env;
+			if (!fromResume && !env._status.connectMode) {
+				ensureConnectBoot({ kind: "invite", code: String(offerText || "") });
+				return;
+			}
+			resetSession();
 			if (env.game.online) {
 				bridgeApi().emit("error", { message: "游戏正在联机中,请先退出当前对局" });
 				return;
@@ -164,9 +210,13 @@
 		},
 
 		/* 房号模式(客人=offer 方):输房号 → 经 MQTT 发连接提议,等房主应答 */
-		joinByRoomCode: function(codeText) {
-			resetSession();
+		joinByRoomCode: function(codeText, fromResume) {
 			var env = nnk.env;
+			if (!fromResume && !env._status.connectMode) {
+				ensureConnectBoot({ kind: "room", code: String(codeText || "") });
+				return;
+			}
+			resetSession();
 			if (env.game.online) {
 				bridgeApi().emit("error", { message: "游戏正在联机中,请先退出当前对局" });
 				return;
@@ -266,6 +316,10 @@
 
 		cancelJoin: function() {
 			resetSession();
+			/* 重载尚未落地就取消:把待续跑标记一并清掉,落地后不再自动加入 */
+			try {
+				localStorage.removeItem(nnk.env.lib.configprefix + "nnk_guest_pending");
+			} catch (e) { /* 忽略 */ }
 		}
 	};
 
