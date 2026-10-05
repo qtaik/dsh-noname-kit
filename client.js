@@ -1129,10 +1129,9 @@ window.__ModuleLoader__.load({
           extra.length ? e('div', 'nnk-hint', '对方多出的扩展(不影响联机):' + extra.join('、')) : null,
           (function () {
             var qEv = onlinePickEvent(evs, 'ext_quarantined');
-            if (!qEv) return null;
             return h('div', { style: { marginTop: '6px' } },
-              e('div', 'nnk-hint', '已隔离:' + ((qEv.data && qEv.data.ext) || '?') + '(联机下不再加载它的内容,其余扩展不受影响)。'),
-              hostFlow ? h('button', { className: 'nnk-copy', onClick: function () { sendCmd('clear_quarantine', {}) } }, '↩️ 重置隔离名单(重启游戏生效)') : null);
+              qEv ? e('div', 'nnk-hint', '本页记录到自动隔离:' + ((qEv.data && qEv.data.ext) || '?') + '(0.3.5 起已不再自动隔离)。') : null,
+              h('button', { className: 'nnk-copy', onClick: function () { sendCmd('clear_quarantine', {}) } }, '↩️ 重置隔离名单(清空历史拉黑,重启游戏生效)'));
           })(),
           txEv ? e('div', { className: 'nnk-break', style: { marginTop: '6px' } }, onlineEventText(txEv)) : null);
       }
