@@ -32,50 +32,50 @@
 			.catch(function() { return null; });
 	}
 
-		function dispatch(cmd) {
-			var host = nnk.modules.host;
-			var guest = nnk.modules.guest;
-			var args = cmd.args || {};
-			switch (cmd.action) {
-				case "create_room":
-					host.createInternetRoom(args.mode, args.signaling);
-					break;
-				case "join_room":
-					guest.joinByRoomCode(args.code);
-					break;
-				case "invite_refresh":
-					host.refreshInvite();
-					break;
-				case "accept_answer":
-					host.acceptAnswer(args.code);
-					break;
-				case "join_invite":
-					guest.joinByInvite(args.code);
-					break;
-				case "cancel":
-					host.cancelAll();
-					guest.cancelJoin();
-					setPhase("idle");
-					emit("cancelled");
-					break;
-				default:
-					emit("error", { message: "未知命令: " + cmd.action });
-			}
+	function dispatch(cmd) {
+		var host = nnk.modules.host;
+		var guest = nnk.modules.guest;
+		var args = cmd.args || {};
+		switch (cmd.action) {
+			case "create_room":
+				host.createInternetRoom(args.mode, args.signaling);
+				break;
+			case "join_room":
+				guest.joinByRoomCode(args.code);
+				break;
+			case "invite_refresh":
+				host.refreshInvite();
+				break;
+			case "accept_answer":
+				host.acceptAnswer(args.code);
+				break;
+			case "join_invite":
+				guest.joinByInvite(args.code);
+				break;
+			case "cancel":
+				host.cancelAll();
+				guest.cancelJoin();
+				setPhase("idle");
+				emit("cancelled");
+				break;
+			default:
+				emit("error", { message: "未知命令: " + cmd.action });
 		}
+	}
 
-		/* 命令执行报错时把堆栈前几行带回工坊——引擎/扩展深处的错误只有堆栈能定位 */
-		function dispatchSafe(cmd) {
+	/* 命令执行报错时把堆栈前几行带回工坊——引擎/扩展深处的错误只有堆栈能定位 */
+	function dispatchSafe(cmd) {
+		try {
+			dispatch(cmd);
+		} catch (err) {
+			console.error("[联机助手] 命令执行失败:", cmd.action, err);
+			var stack = "";
 			try {
-				dispatch(cmd);
-			} catch (err) {
-				console.error("[联机助手] 命令执行失败:", cmd.action, err);
-				var stack = "";
-				try {
-					stack = String(err.stack || "").split("\n").slice(1, 4).join(" ← ").trim();
-				} catch (e2) { /* 取不到就只报消息 */ }
-				emit("error", { cmd: cmd.action, message: (err.message || String(err)) + (stack ? "  @" + stack : "") });
-			}
+				stack = String(err.stack || "").split("\n").slice(1, 4).join(" ← ").trim();
+			} catch (e2) { /* 取不到就只报消息 */ }
+			emit("error", { cmd: cmd.action, message: (err.message || String(err)) + (stack ? "  @" + stack : "") });
 		}
+	}
 
 	function poll() {
 		if (!cfg) {
@@ -121,7 +121,6 @@
 			});
 		},
 		emit: emit,
-		setPhase: setPhase,
-		getState: function() { return state; }
+		setPhase: setPhase
 	};
 })();

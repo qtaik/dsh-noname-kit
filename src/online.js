@@ -236,7 +236,5 @@ export function createBridgeSession({ token }) {
       }
     },
     token,
-    /* 原始会话(单测 TTL 过期、运维自省用;常规代码请走上面三个方法) */
-    _session: session,
   }
 }

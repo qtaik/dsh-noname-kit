@@ -109,11 +109,18 @@
 				resolve(session);
 			});
 			client.on("message", function(topic, payload) {
-				try {
-					onMessage(topic, unseal(key, String(payload)));
-				} catch (err) {
+				/* unseal 是异步的:必须先等解密完成再把明文对象交给回调,
+				 * 直接把 Promise 传过去会让调用方判定 msg.guestId/msg.sdp 恒为
+				 * undefined,提议/应答被静默丢弃(与 mqttSession 作用域坑同族) */
+				unseal(key, String(payload)).then(function(msg) {
+					try {
+						onMessage(topic, msg);
+					} catch (err) {
+						console.error("[联机助手] 信令消息处理失败: " + topic, err);
+					}
+				}).catch(function() {
 					/* 解不开的载荷=别的房号/别的用途,静默忽略 */
-				}
+				});
 			});
 			client.on("error", function(err) {
 				if (!settled) {
@@ -131,9 +138,7 @@
 	}
 
 	var api = {
-		deriveKey: deriveKey,
-		seal: seal,
-		unseal: unseal,
+		/* deriveKey/seal/unseal 仅服务上方会话逻辑,不对外导出 */
 		randomId: randomId,
 		roomTopic: function(code, leaf) {
 			return "nnk2/room/" + code + (leaf ? "/" + leaf : "");

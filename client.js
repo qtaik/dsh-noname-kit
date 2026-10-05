@@ -1067,7 +1067,9 @@ window.__ModuleLoader__.load({
       var guestFlow = GUEST_PHASES.indexOf(phase) >= 0;
       /* 码只在对应流程阶段展示:事件会长期留存,无条件展示会让人对着
        * 已作废的邀请码/回执码继续操作 */
-      var inviteEv = (hostFlow && phase !== 'host_booting') ? onlinePickEvent(evs, 'invite_ready') : null;
+      /* 邀请码只在邀请码流程的专属阶段展示:曾在全部主机阶段展示,导致
+       * 先试过邀请码、后改用房号建房时,过期的邀请码事件一直压着新房号不显示 */
+      var inviteEv = (phase === 'invite_ready' || phase === 'connecting') ? onlinePickEvent(evs, 'invite_ready') : null;
       var answerEv = (phase === 'joining' || phase === 'answer_ready' || phase === 'entering') ? onlinePickEvent(evs, 'answer_ready') : null;
       /* bridge.state 在内核首次心跳前是 null——房号一律走安全局部变量 */
       var roomCode = (bridge.state && bridge.state.roomCode) || null;
@@ -1116,7 +1118,8 @@ window.__ModuleLoader__.load({
                 })),
               h('div', { className: 'nnk-row' },
                 h('button', { className: 'nnk-submit', style: { marginTop: '0' }, disabled: !bridgeOnline || guestFlow, onClick: function () { setAnswerText(''); setOfferText(''); sendCmd('create_room', { mode: mode, signaling: 'mqtt' }) } }, '🚀 创建互联网房间'),
-                phase === 'room_open' ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '➕ 再邀请一位')
+                phase === 'room_open' && (bridge.state && bridge.state.signaling) === 'mqtt' ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一个房号')
+                  : phase === 'room_open' ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '➕ 再邀请一位')
                   : phase === 'mqtt_waiting' ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一个房号')
                   : (phase === 'invite_ready' || phase === 'connecting') ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一张邀请码重试')
                   : null),

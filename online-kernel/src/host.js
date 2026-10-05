@@ -17,7 +17,8 @@
 		bridges: [],
 		invitePc: null,
 		mqttSession: null,
-		presenceTimer: null
+		presenceTimer: null,
+		mqttGen: 0            /* 信令会话代号:startMqtt 递增,作废迟到会话用 */
 	};
 
 	function bridgeApi() {
@@ -80,6 +81,10 @@
 	function startMqtt() {
 		var env = nnk.env;
 		var code = hostState.roomCode;
+		/* 幂等:重复建房/换码先清旧会话与心跳(顺带换代号);两条会话并存
+		 * 会对同一提议应答两次,守卫见下方 resolve 的代号比对 */
+		cleanupMqtt();
+		var gen = hostState.mqttGen;
 		bridgeApi().setPhase("mqtt_waiting", { roomCode: code });
 		signaling.openRoomSession(code, "host",
 			[signaling.roomTopic(code, "offer"), signaling.roomTopic(code, "host")],
@@ -89,8 +94,8 @@
 				}
 			}
 		).then(function(session) {
-			if (hostState.signaling !== "mqtt" || hostState.roomCode !== code) {
-				session.end();   /* 等待期间被换码/取消,这次会话作废 */
+			if (hostState.signaling !== "mqtt" || hostState.roomCode !== code || hostState.mqttGen !== gen) {
+				session.end();   /* 等待期间被换码/取消/重新建房,这次会话作废 */
 				return;
 			}
 			hostState.mqttSession = session;
@@ -122,6 +127,9 @@
 					}
 				});
 				env.lib.init.connection(conn);
+				/* 上报 room_open:工坊据此把「房号就绪…等朋友加入」换成
+				 * 「客人已连接,游戏里点开始游戏」(此前无阶段承载,文案是死的) */
+				bridgeApi().setPhase("room_open", { roomCode: code, signaling: hostState.signaling });
 				bridgeApi().emit("guest_connected", { guests: hostState.bridges.length });
 			};
 		};
@@ -137,12 +145,14 @@
 		}).then(function() {
 			return rtc.waitGather(pc);
 		}).then(function() {
-			if (hostState.mqttSession) {
+			if (hostState.mqttSession && hostState.roomCode === code) {
 				return hostState.mqttSession.publish(
 					signaling.roomTopic(code, "answer/" + msg.guestId),
 					{ k: "answer", sdp: pc.localDescription }
 				);
 			}
+			/* 等应答期间房号被换/信令被取消:这张应答发出去也没人收,关掉半程 pc */
+			try { pc.close(); } catch (e) { /* 忽略 */ }
 		}).catch(function(err) {
 			try { pc.close(); } catch (e) { /* 清理半程 pc */ }
 			bridgeApi().emit("error", { message: "应答客人失败: " + (err.message || err) });
@@ -150,6 +160,8 @@
 	}
 
 	function cleanupMqtt() {
+		/* 换代号:任何清理都让在途的迟到会话作废(含 cancelAll 后才连上的) */
+		hostState.mqttGen = (hostState.mqttGen || 0) + 1;
 		if (hostState.presenceTimer) {
 			clearInterval(hostState.presenceTimer);
 			hostState.presenceTimer = null;
@@ -170,6 +182,11 @@
 	/* 邀请码模式:主机是 offer 方(邀请码→客人回执码→工坊粘贴回执) */
 	function startInvite() {
 		var env = nnk.env;
+		/* 幂等:上一次邀请还挂着就先关掉(重复建房/换码),防泄漏与误应答 */
+		if (hostState.invitePc) {
+			try { hostState.invitePc.close(); } catch (e) { /* 忽略 */ }
+			hostState.invitePc = null;
+		}
 		var pc = new RTCPeerConnection(rtc.pcConfig());
 		var settled = false;
 		var channel = pc.createDataChannel("nnk-link", { ordered: true });
@@ -191,6 +208,7 @@
 				}
 			});
 			env.lib.init.connection(conn);
+			bridgeApi().setPhase("room_open", { roomCode: hostState.roomCode, signaling: hostState.signaling });
 			bridgeApi().emit("guest_connected", { guests: hostState.bridges.length });
 		};
 		pc.createOffer().then(function(offer) {
@@ -198,6 +216,11 @@
 		}).then(function() {
 			return rtc.waitGather(pc);
 		}).then(function() {
+			if (!hostState.active) {
+				/* 生成邀请码期间被取消:这张码作废,别把已取消的邀请挂回去 */
+				try { pc.close(); } catch (e) { /* 忽略 */ }
+				return;
+			}
 			hostState.invitePc = pc;
 			bridgeApi().setPhase("invite_ready", { roomCode: hostState.roomCode });
 			bridgeApi().emit("invite_ready", { code: rtc.encodeCode("offer", pc.localDescription) });
@@ -348,10 +371,7 @@
 				startMqtt();
 				return;
 			}
-			if (hostState.invitePc) {
-				try { hostState.invitePc.close(); } catch (e) { /* 忽略 */ }
-				hostState.invitePc = null;
-			}
+			/* 旧邀请码的关闭在 startInvite 里统一做 */
 			startInvite();
 		},
 
