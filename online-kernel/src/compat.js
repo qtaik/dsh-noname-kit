@@ -192,8 +192,27 @@
 		}
 		if (!importWrapped && typeof env.game.import === "function") {
 			var origImport = env.game.import;
-			env.game.import = function(type) {
-				var ret = origImport.apply(this, arguments);
+			env.game.import = function(type, func) {
+				var wrappedFunc = func;
+				if (type === "extension" && enabled() && typeof func === "function") {
+					wrappedFunc = function() {
+						var obj = func.apply(this, arguments);
+						try {
+							if (obj && obj.name) {
+								var want = decide(obj.name);
+								obj.connect = want;
+								/* 官方 1.11.5:未启用的扩展在 game.import 开头直接早退
+								 * (自动导入的扩展默认未启用)——内容扩展代为启用,
+								 * 否则联机模式下它们连注册记录都不会有 */
+								if (want && !nnk.env.lib.config["extension_" + obj.name + "_enable"]) {
+									env.game.saveConfig("extension_" + obj.name + "_enable", true);
+								}
+							}
+						} catch (e) { /* 忽略 */ }
+						return obj;
+					};
+				}
+				var ret = origImport.call(this, type, wrappedFunc);
 				if (type === "extension") {
 					try {
 						unlockExtensions();
