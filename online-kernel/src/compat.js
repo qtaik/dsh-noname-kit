@@ -237,6 +237,10 @@
 					var ext = extNameFromStack(err.stack);
 					if (ext) {
 						console.error("[联机助手] 扩展运行错误(联机下已拦截,不弹窗):", ext, err);
+						if (err instanceof RangeError) {
+							/* 爆栈级别的扩展错误会炸死启动/对局,直接隔离 */
+							quarantine(ext);
+						}
 						bridgeApi().emit("ext_error", {
 							ext: ext,
 							message: err.message || String(msg),
@@ -251,41 +255,79 @@
 	}
 
 	/*
-	 * 防砖保险丝:个别扩展用代理包装 ui.create.arena,联机模式下自引用成环,
-	 * 引擎开机调 arena 时爆栈(RangeError),整次启动直接失败(真机实证:
-	 * 十周年B4UI,「加载内容失败」大屏)。保险丝包住 ui.create.arena:第一次
-	 * 爆栈就摘除全部扩展包装、退回原版 arena 让启动活下去,并把肇事扩展拉进
-	 * 隔离名单——下次启动其 content 不再加载,其余扩展照常开闸。
+	 * 防砖保险丝 v2:个别扩展把整个 ui.create 换成自引用代理(真机实证:
+	 * 十周年B4UI——联机模式下 ui.create.arena 无限递归爆栈,炸死整次启动;
+	 * 第一版保险丝挂在原对象属性上,被整换绕过)。v2 接管 ui.create 属性:
+	 * 读取时返回影子视图——全部属性透传到当前对象,唯独 arena 换成保险丝;
+	 * 调用爆栈(RangeError)就摘除扩展的整换、退回引擎原版 arena,并把肇事
+	 * 扩展写进隔离名单(下次启动其 content 不再加载)。
 	 */
-	function arenaFuse() {
+	function guardCreate() {
 		var ui = nnk.env.ui;
-		if (!ui || !ui.create || typeof ui.create.arena !== "function" || ui.create.arena.__nnkFuse) {
+		if (!ui || ui.__nnkCreateGuarded) {
 			return;
 		}
-		var pristine = ui.create.arena;
-		var fuse = function() {
-			var current = ui.create.arena;
-			var fn = current === fuse ? pristine : current;
+		var pristine = ui.create;
+		var pristineArena = pristine.arena;
+		var current = pristine;
+		var view = null;
+		var viewTargets = new WeakMap();
+		var fused = function() {
+			var target = current.arena;
+			if (typeof target !== "function") {
+				target = pristineArena;
+			}
 			try {
-				return fn.apply(this, arguments);
+				return target.apply(this, arguments);
 			} catch (e) {
-				if (e instanceof RangeError && ui.create.arena !== pristine) {
+				if (e instanceof RangeError && current !== pristine) {
 					var ext = extNameFromStack(e && e.stack);
 					console.error("[联机助手] arena 包装器爆栈,已摘除扩展包装退回原版:", ext, e);
-					ui.create.arena = pristine;
 					quarantine(ext);
-					return pristine.apply(this, arguments);
+					ui.create = pristine;
+					return pristineArena.apply(this, arguments);
 				}
 				throw e;
 			}
 		};
-		ui.create.arena = fuse;
+		try {
+			Object.defineProperty(ui, "create", {
+				configurable: true,
+				get: function() {
+					if (!enabled() || current === pristine) {
+						return current;
+					}
+					if (!view || viewTargets.get(view) !== current) {
+						view = new Proxy(current, {
+							get: function(t, k, recv) {
+								if (k === "arena") {
+									return fused;
+								}
+								return Reflect.get(t, k, recv);
+							},
+							set: function(t, k, v, recv) {
+								return Reflect.set(t, k, v, recv);
+							}
+						});
+						viewTargets.set(view, current);
+					}
+					return view;
+				},
+				set: function(v) {
+					current = v;
+					view = null;
+				}
+			});
+			ui.__nnkCreateGuarded = true;
+		} catch (e) {
+			console.warn("[联机助手] ui.create 保护安装失败(不影响其他功能):", e);
+		}
 	}
 
 	nnk.modules.compat = {
 		install: function() {
 			unlockExtensions();
-			arenaFuse();
+			guardCreate();
 			shimInfoMap();
 			guardHooks();
 			guardErrorPopup();
