@@ -189,6 +189,13 @@
 					hostState.roomCode = genRoomCode();
 					env.game.ip = "nnk://" + hostState.roomCode;
 				}
+				/* 收编的原生遗留房没有「退出房间」按钮(原生路径才会建),补齐 */
+				if (!env.ui.exitroom) {
+					env.ui.exitroom = env.ui.create.system("退出房间", function() {
+						env.game.saveConfig("directstartmode");
+						env.game.reload();
+					}, true);
+				}
 				bridgeApi().setPhase("hosting", { roomCode: hostState.roomCode });
 				startInvite();
 				return;
