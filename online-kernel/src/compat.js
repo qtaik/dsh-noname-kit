@@ -161,14 +161,37 @@
 		 * 规则误伤);隔离名单内=关;内容扩展=开(哪怕作者没声明);
 		 * 美化类=关(哪怕作者声明了 connect:true——真机实证:美化族普遍自带
 		 * connect 声明,只拨亮不拨灭的话它们照样加载,开闸形同虚设) */
-		function decide(name) {
+		function decide(name, obj) {
 			if (name === KERNEL_NAME) {
 				return true;
 			}
 			if (blocked.indexOf(name) >= 0) {
 				return false;
 			}
-			return isContentExt(name);
+			return extKind(name, obj) === "content";
+		}
+		/* 内容/美化分类:现代扩展把武将/卡牌声明在 package 里(真机实证:小游戏
+		 * 的武将在 package.character.character,磁盘上没有特征文件),所以对象
+		 * 特征优先,磁盘特征(character.js/card.js)只做兜底。判定不了按美化。 */
+		function extKind(name, obj) {
+			try {
+				var src = obj || (nnk.env.lib.extensionPack && nnk.env.lib.extensionPack[name]) || null;
+				if (src) {
+					var files = src.files || null;
+					if (files && ((files.character && files.character.length) || (files.card && files.card.length))) {
+						return "content";
+					}
+					var pc = src.character;
+					if (pc && (Array.isArray(pc) ? pc.length : Object.keys(pc).length)) {
+						return "content";
+					}
+					var cc = src.card;
+					if (cc && (Array.isArray(cc) ? cc.length : Object.keys(cc).length)) {
+						return "content";
+					}
+				}
+			} catch (e) { /* 忽略 */ }
+			return isContentExt(name) ? "content" : "ui";
 		}
 		var arr = env.lib.extensions;
 		if (Array.isArray(arr)) {
@@ -199,7 +222,7 @@
 						var obj = func.apply(this, arguments);
 						try {
 							if (obj && obj.name) {
-								var want = decide(obj.name);
+								var want = decide(obj.name, obj);
 								obj.connect = want;
 								/* 官方 1.11.5:未启用的扩展在 game.import 开头直接早退
 								 * (自动导入的扩展默认未启用)——内容扩展代为启用,
