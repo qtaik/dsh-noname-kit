@@ -1069,6 +1069,8 @@ window.__ModuleLoader__.load({
        * 已作废的邀请码/回执码继续操作 */
       var inviteEv = (hostFlow && phase !== 'host_booting') ? onlinePickEvent(evs, 'invite_ready') : null;
       var answerEv = (phase === 'joining' || phase === 'answer_ready' || phase === 'entering') ? onlinePickEvent(evs, 'answer_ready') : null;
+      /* bridge.state 在内核首次心跳前是 null——房号一律走安全局部变量 */
+      var roomCode = (bridge.state && bridge.state.roomCode) || null;
       /* 渲染层任何异常都会被 slot 系统吞成空白(记忆坑),这里兜底把错误亮出来 */
       try {
         return renderOnlinePanel();
@@ -1119,11 +1121,11 @@ window.__ModuleLoader__.load({
                   : (phase === 'invite_ready' || phase === 'connecting') ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一张邀请码重试')
                   : null),
               !bridgeOnline ? e('div', 'nnk-hint', '内核离线(先启动游戏)') : null,
-              bridge.state.roomCode && (phase === 'hosting' || phase === 'mqtt_waiting' || phase === 'connecting' || phase === 'room_open') && !inviteEv
+              roomCode && (phase === 'hosting' || phase === 'mqtt_waiting' || phase === 'connecting' || phase === 'room_open') && !inviteEv
                 ? h('div', { style: { marginTop: '10px' } },
                   e('div', 'nnk-label', '房号(就这 6 位,发给朋友)'),
-                  h('div', { className: 'nnk-cmd', style: { fontSize: '24px', fontWeight: '700', letterSpacing: '6px', padding: '8px 16px' } }, bridge.state.roomCode),
-                  h('button', { className: 'nnk-copy', onClick: function () { copyText(bridge.state.roomCode) } }, '📋 复制房号'))
+                  h('div', { className: 'nnk-cmd', style: { fontSize: '24px', fontWeight: '700', letterSpacing: '6px', padding: '8px 16px' } }, roomCode),
+                  h('button', { className: 'nnk-copy', onClick: function () { copyText(roomCode) } }, '📋 复制房号'))
                 : null,
               inviteEv
                 ? h('div', { style: { marginTop: '10px' } },
