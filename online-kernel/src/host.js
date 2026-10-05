@@ -212,19 +212,18 @@
 				return;
 			}
 			bridgeApi().setPhase("host_booting", { mode: mode });
-			if (env.lib.config.mode === "connect") {
-				startDirect(mode);
-			} else {
-				/* 主菜单/对局等其他界面:存直启标记后重载,connect.js 的
-				 * directstartmode 分支会自动 switchMode 进等待房间 */
-				try {
-					localStorage.setItem(env.lib.configprefix + "nnk_host_pending", mode);
-					localStorage.setItem(env.lib.configprefix + "directstart", "true");
-				} catch (e) { /* 忽略 */ }
-				env.game.saveConfig("directstartmode", mode);
-				env.game.saveConfig("mode", "connect");
-				env.game.reload();
-			}
+			/* 无条件走重载直启:实测"同模式原地 switchMode"的快路径会把残留的
+			 * 离线开局界面 DOM 垫在联机房间下面(半截画面)——重载后从干净的
+			 * 联机界面起手是原生验证过的唯一干净路径,代价只是几秒启动。
+			 * connect.js start 的 directstartmode 分支(需 lib.node)会自动
+			 * switchMode 进等待房间,nnk_host_pending 让内核在那边接管软服务器 */
+			try {
+				localStorage.setItem(env.lib.configprefix + "nnk_host_pending", mode);
+				localStorage.setItem(env.lib.configprefix + "directstart", "true");
+			} catch (e) { /* 忽略 */ }
+			env.game.saveConfig("directstartmode", mode);
+			env.game.saveConfig("mode", "connect");
+			env.game.reload();
 		},
 
 		refreshInvite: function() {
@@ -284,61 +283,6 @@
 
 	function env_ready() {
 		return nnk.env && nnk.env._status.waitingForPlayer;
-	}
-
-	/* 复刻原生「启动服务器」的直启分支(ui/create/menu/pages/startMenu.js:77-91):
-	 * 联机界面里无需重载,直接 switchMode 进入所选模式的等待房间。 */
-	function startDirect(mode) {
-		var env = nnk.env;
-		var game = env.game;
-		var uiE = env.ui;
-		localStorage.setItem(env.lib.configprefix + "directstart", "true");
-		game.saveConfig("directstartmode", mode);
-		game.saveConfig("mode", "connect");
-		/* 退出房间按钮依赖系统按钮栏(ui.system2);个别环境缺失时上面的 HUD 自愈
-		 * 已重建,仍缺失就跳过按钮——绝不能让按钮创建的异常断掉建房流程 */
-		if (!uiE.exitroom && uiE.system1 && uiE.system2) {
-			uiE.exitroom = uiE.create.system("退出房间", function() {
-				game.saveConfig("directstartmode");
-				game.reload();
-			}, true);
-		}
-		/* 主机侧的联机总开关:引擎只在开机且开机模式恰为 connect 时设置它
-		 * (init/index.js:484)。我们任意时刻直启必须自己打开,否则 switchMode
-		 * 会跑进离线分支——实测跳到单人身份局的开局界面 */
-		env._status.connectMode = true;
-		/* 自愈联机启动状态:原生流程"运行中切进联机"不存在(原生开机即联机),
-		 * 开机时刻的联机前置状态在个别启动路径下会缺失——实测
-		 * lib.connectCharacterPack undefined 在 switchMode 里崩,按引擎同款
-		 * 规则(connect:true 的包)重建 */
-		if (!env.lib.connectCharacterPack) {
-			env.lib.connectCharacterPack = [];
-		}
-		if (!env.lib.connectCardPack) {
-			env.lib.connectCardPack = [];
-		}
-		if (!env.lib.config.connect_characters) {
-			env.lib.config.connect_characters = [];
-		}
-		if (!env.lib.config.connect_cards) {
-			env.lib.config.connect_cards = [];
-		}
-		if (!env.lib.connectCharacterPack.length) {
-			for (var pk in env.lib.characterPack) {
-				if (env.lib.characterPack[pk] && env.lib.characterPack[pk].connect) {
-					env.lib.connectCharacterPack.push(pk);
-				}
-			}
-		}
-		if (!env.lib.connectCardPack.length) {
-			for (var ck in env.lib.cardPack) {
-				if (env.lib.cardPack[ck] && env.lib.cardPack[ck].connect) {
-					env.lib.connectCardPack.push(ck);
-				}
-			}
-		}
-		game.switchMode(mode);
-		game.requireSandboxOn();
 	}
 
 	nnk.modules.host = api;

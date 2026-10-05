@@ -972,7 +972,7 @@ window.__ModuleLoader__.load({
     var GUEST_PHASES = ['joining', 'answer_ready', 'entering', 'connected'];
     var ONLINE_PHASE_TEXT = {
       idle: '待机',
-      host_booting: '正在进入建房流程(游戏可能会自动重载一次)…',
+      host_booting: '正在进入建房流程(游戏将自动重载,约几秒)…',
       hosting: '房间已建好,正在生成邀请码…',
       invite_ready: '邀请码已生成,等待客人回执码…',
       connecting: '正在建立点对点直连…(最长约 20 秒,打不通会自动换新码)',
