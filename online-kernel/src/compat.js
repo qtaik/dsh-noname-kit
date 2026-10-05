@@ -464,6 +464,33 @@
 		} catch (e) { /* 不可接管就放弃,不阻塞启动 */ }
 	}
 
+	/* 透视:把引擎里每条扩展的最终裁决结果报给工坊(建房/进房时调用,
+	 * 此刻所有扩展已注册完毕)。加载=引擎会跑它的 content;跳过=不加载。 */
+	function dumpExtensions() {
+		try {
+			var arr = nnk.env.lib.extensions;
+			if (!Array.isArray(arr)) {
+				return;
+			}
+			var loaded = [];
+			var skipped = [];
+			arr.forEach(function(ext) {
+				if (!Array.isArray(ext)) {
+					return;
+				}
+				var kind = isContentExt(ext[0]) ? "content" : "ui";
+				if (ext[5]) {
+					loaded.push(ext[0]);
+				} else if (kind === "content") {
+					skipped.push(ext[0] + "(内容扩展被关)");
+				} else {
+					skipped.push(ext[0]);
+				}
+			});
+			bridgeApi().emit("ext_dump", { loaded: loaded, skipped: skipped });
+		} catch (e) { /* 忽略 */ }
+	}
+
 	nnk.modules.compat = {
 		install: function() {
 			unlockExtensions();
@@ -478,6 +505,7 @@
 		unlockExtensions: unlockExtensions,
 		unlockPacks: unlockPacks,
 		clearQuarantine: clearQuarantine,
-		gameRoot: gameRoot
+		gameRoot: gameRoot,
+		dumpExtensions: dumpExtensions
 	};
 })();

@@ -64,7 +64,8 @@
 		hostState.roomCode = genRoomCode();
 		game.ip = "nnk://" + hostState.roomCode;
 		if (nnk.modules.compat) {
-			nnk.modules.compat.unlockPacks();   /* 本地扩展包进联机选将池(闸2) */
+			nnk.modules.compat.unlockPacks();
+			nnk.modules.compat.dumpExtensions();   /* 透视:本次联机实际加载/跳过了哪些扩展 */
 		}
 		bridgeApi().setPhase("hosting", { roomCode: hostState.roomCode });
 		startHosting();

@@ -26,6 +26,7 @@
 		}
 		if (nnk.modules.compat) {
 			nnk.modules.compat.unlockPacks();   /* 本地扩展包进联机选将池(闸2) */
+			nnk.modules.compat.dumpExtensions();   /* 透视:本次联机实际加载/跳过了哪些扩展 */
 		}
 		env._status.connectCallback = function(success) {
 			if (success) {

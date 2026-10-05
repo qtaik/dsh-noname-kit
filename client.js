@@ -1010,6 +1010,12 @@ window.__ModuleLoader__.load({
         }
         case 'ext_error': return '🧩 扩展报错(已拦截' + ((ev.data && ev.data.ext) ? ':' + ev.data.ext : '') + ')';
         case 'ext_quarantined': return '🚫 扩展「' + ((ev.data && ev.data.ext) || '?') + '」联机下爆栈,已自动隔离';
+        case 'ext_dump': {
+          var dd = ev.data || {};
+          var loaded = dd.loaded || [];
+          var skipped = dd.skipped || [];
+          return '🧩 联机加载扩展(' + loaded.length + '):' + (loaded.join('、') || '无') + (skipped.length ? ' | 跳过:' + skipped.join('、') : '');
+        }
         case 'transfer_begin': return '📦 开始补传「' + ((ev.data && ev.data.name) || '') + '」';
         case 'transfer_progress': return '⏳ 补传中「' + ((ev.data && ev.data.name) || '') + '」' + ((ev.data && ev.data.pct) || 0) + '%';
         case 'transfer_done': return '📦 补传完成「' + ((ev.data && ev.data.name) || '') + '」(客人重启游戏生效)';
