@@ -307,6 +307,36 @@
 		 * (init/index.js:484)。我们任意时刻直启必须自己打开,否则 switchMode
 		 * 会跑进离线分支——实测跳到单人身份局的开局界面 */
 		env._status.connectMode = true;
+		/* 自愈联机启动状态:原生流程"运行中切进联机"不存在(原生开机即联机),
+		 * 开机时刻的联机前置状态在个别启动路径下会缺失——实测
+		 * lib.connectCharacterPack undefined 在 switchMode 里崩,按引擎同款
+		 * 规则(connect:true 的包)重建 */
+		if (!env.lib.connectCharacterPack) {
+			env.lib.connectCharacterPack = [];
+		}
+		if (!env.lib.connectCardPack) {
+			env.lib.connectCardPack = [];
+		}
+		if (!env.lib.config.connect_characters) {
+			env.lib.config.connect_characters = [];
+		}
+		if (!env.lib.config.connect_cards) {
+			env.lib.config.connect_cards = [];
+		}
+		if (!env.lib.connectCharacterPack.length) {
+			for (var pk in env.lib.characterPack) {
+				if (env.lib.characterPack[pk] && env.lib.characterPack[pk].connect) {
+					env.lib.connectCharacterPack.push(pk);
+				}
+			}
+		}
+		if (!env.lib.connectCardPack.length) {
+			for (var ck in env.lib.cardPack) {
+				if (env.lib.cardPack[ck] && env.lib.cardPack[ck].connect) {
+					env.lib.connectCardPack.push(ck);
+				}
+			}
+		}
 		game.switchMode(mode);
 		game.requireSandboxOn();
 	}
