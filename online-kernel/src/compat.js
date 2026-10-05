@@ -338,155 +338,6 @@
 		};
 	}
 
-	/*
-	 * 防砖保险丝 v3:坏扩展会偷换 arena(整换 ui.create 或在原对象上
-	 * defineProperty,真机实证:十周年B4UI 缓存幽灵,联机模式下无限递归
-	 * 爆栈炸死启动)。v3 无条件接管 ui.create:读取返回影子视图(全部属性
-	 * 透传,唯独 arena 恒为保险丝);保险丝调用爆栈即熔断——整换的换回
-	 * 原版、原地偷换的删掉 getter,统统退回引擎原版 arena,并把肇事扩展
-	 * 按堆栈写进隔离名单(下次启动其 content 不再加载)。
-	 */
-	function guardCreate() {
-		var ui = nnk.env.ui;
-		/* 默认关闭:代理层与引擎的类私有字段天然冲突(真机连炸三轮)。
-		 * 仅当工坊明确开启 guardUICreate(第三方壳环境)时才接管 ui.create */
-		if (!nnk.modules.config.get("guardUICreate")) {
-			return;
-		}
-		if (!ui || ui.__nnkCreateGuarded) {
-			return;
-		}
-		var pristine = ui.create;
-		var pristineArena = pristine.arena;
-		var current = pristine;
-		var view = null;
-		var viewTargets = new WeakMap();
-		var fused = function() {
-			var target = null;
-			try {
-				target = current.arena;
-			} catch (e) { /* 读都读不动就直接原版 */ }
-			if (typeof target !== "function" || target === fused) {
-				target = pristineArena;
-			}
-			try {
-				return target.apply(this, arguments);
-			} catch (e) {
-				if (e instanceof RangeError) {
-					var ext = extNameFromStack(e && e.stack);
-					console.error("[联机助手] arena 包装器爆栈,已降级为原版 arena:", ext, e);
-					bridgeApi().emit("ext_error", {
-						ext: ext,
-						hook: "arena",
-						message: (e && e.message) || String(e),
-						stack: firstStackLines(e && e.stack, 4)
-					});
-					/* 不拉黑:只让这一次调用降级。链式包装里谁崩都算到单个扩展
-					 * 头上必然误伤(真机实证:十周年UI 被连坐),降级即可保启动 */
-					return pristineArena.apply(this, arguments);
-				}
-				throw e;
-			}
-		};
-		try {
-			Object.defineProperty(ui, "create", {
-				configurable: true,
-				get: function() {
-					if (!enabled()) {
-						return current;
-					}
-					/* 快路径:没人碰过 ui.create(未整换、arena 未被偷换)时直接给
-					 * 原对象——引擎大量方法使用类私有字段,代理的 this 会炸(官方
-					 * 1.11.5 选将界面真机实证),所以不设防时绝不包代理 */
-					if (current === pristine && current.arena === pristineArena) {
-						view = null;
-						return pristine;
-					}
-					if (!view || viewTargets.get(view) !== current) {
-						var boundCache = new Map();
-						view = new Proxy(current, {
-							get: function(t, k) {
-								if (k === "arena") {
-									return fused;
-								}
-								var v = Reflect.get(t, k, t);
-								if (typeof v === "function") {
-									/* 方法绑定到真身:调用点的 this 不能是代理(私有字段) */
-									var b = boundCache.get(k);
-									if (!b) {
-										b = v.bind(t);
-										boundCache.set(k, b);
-									}
-									return b;
-								}
-								return v;
-							},
-							set: function(t, k, v) {
-								return Reflect.set(t, k, v, t);
-							}
-						});
-						viewTargets.set(view, current);
-					}
-					return view;
-				},
-				set: function(v) {
-					current = v;
-					view = null;
-				}
-			});
-			ui.__nnkCreateGuarded = true;
-		} catch (e) {
-			console.warn("[联机助手] ui.create 保护安装失败(不影响其他功能):", e);
-		}
-	}
-
-	/*
-	 * 通用属性保险丝:接管 owner[prop],扩展替换的包装器一旦爆栈(RangeError)
-	 * 就熔断回原版,并按堆栈隔离肇事扩展(开机路径上的爆栈=启动杀手,直接
-	 * 隔离,下次启动其 content 不再加载)。真机实证的毒化点:
-	 * ui.create(arena)、lib.init.cssstyles——均出自同一族的包装器。
-	 */
-	function guardMethod(owner, propName) {
-		if (!owner || typeof owner !== "object" || owner.__nnkGuarded) {
-			return;
-		}
-		var pristine = owner[propName];
-		if (typeof pristine !== "function") {
-			return;
-		}
-		var current = pristine;
-		var fused = function() {
-			var target = current;
-			if (typeof target !== "function" || target === fused) {
-				target = pristine;
-			}
-			try {
-				return target.apply(this, arguments);
-			} catch (e) {
-				if (e instanceof RangeError && current !== pristine) {
-					var ext = extNameFromStack(e && e.stack);
-					console.error("[联机助手] " + propName + " 包装器爆栈,已熔断退回原版:", ext, e);
-					quarantine(ext);
-					owner[propName] = pristine;
-					return pristine.apply(this, arguments);
-				}
-				throw e;
-			}
-		};
-		try {
-			Object.defineProperty(owner, propName, {
-				configurable: true,
-				get: function() {
-					return current === pristine ? current : fused;
-				},
-				set: function(v) {
-					current = v;
-				}
-			});
-			owner.__nnkGuarded = true;
-		} catch (e) { /* 不可接管就放弃,不阻塞启动 */ }
-	}
-
 	/* 透视:把引擎里每条扩展的最终裁决结果报给工坊(建房/进房时调用,
 	 * 此刻所有扩展已注册完毕)。加载=引擎会跑它的 content;跳过=不加载。 */
 	function dumpExtensions() {
@@ -517,13 +368,10 @@
 	nnk.modules.compat = {
 		install: function() {
 			unlockExtensions();
-			guardCreate();
-			/* 真机实证的毒化点清单:每确认一个就加一行 */
-			guardMethod(nnk.env.lib && nnk.env.lib.init, "cssstyles");
 			shimInfoMap();
 			guardHooks();
 			guardErrorPopup();
-			console.log("[联机助手] 兼容层就绪(开闸+垫片+隔离" + (enabled() ? "" : ",总开关已关闭") + ",隔离名单 " + blocklist().length + " 项)");
+			console.log("[联机助手] 兼容层就绪(开闸+垫片+错误拦截" + (enabled() ? "" : ",总开关已关闭") + ",隔离名单 " + blocklist().length + " 项)");
 		},
 		unlockExtensions: unlockExtensions,
 		unlockPacks: unlockPacks,

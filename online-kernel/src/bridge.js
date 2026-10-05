@@ -64,7 +64,7 @@
 					break;
 				case "set_config": {
 					/* 只放行允许工坊改的内核配置键,值做强转 */
-					var allowed = { unlockUIExtensions: "boolean", autoUnlockExtensions: "boolean", guardUICreate: "boolean" };
+					var allowed = { unlockUIExtensions: "boolean", autoUnlockExtensions: "boolean" };
 					if (allowed.hasOwnProperty(args.key)) {
 						nnk.modules.config.set(args.key, args.value === true);
 					} else {
@@ -111,7 +111,6 @@
 				cfg: {
 					unlockUIExtensions: !!nnk.modules.config.get("unlockUIExtensions"),
 					autoUnlockExtensions: !!nnk.modules.config.get("autoUnlockExtensions"),
-					guardUICreate: !!nnk.modules.config.get("guardUICreate"),
 					root: !!(nnk.modules.compat && nnk.modules.compat.gameRoot())
 				},
 				events: events.splice(0, events.length)
