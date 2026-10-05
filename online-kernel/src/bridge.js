@@ -49,10 +49,15 @@
 			case "accept_answer":
 				host.acceptAnswer(args.code);
 				break;
-			case "join_invite":
-				guest.joinByInvite(args.code);
-				break;
-			case "cancel":
+				case "join_invite":
+					guest.joinByInvite(args.code);
+					break;
+				case "transfer_pack":
+					if (nnk.modules.transfer) {
+						nnk.modules.transfer.start(args.name);
+					}
+					break;
+				case "cancel":
 				host.cancelAll();
 				guest.cancelJoin();
 				setPhase("idle");

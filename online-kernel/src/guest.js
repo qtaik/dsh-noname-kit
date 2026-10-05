@@ -24,6 +24,9 @@
 		if (!session || !session.fake || env.game.online) {
 			return;
 		}
+		if (nnk.modules.compat) {
+			nnk.modules.compat.unlockPacks();   /* 本地扩展包进联机选将池(闸2) */
+		}
 		env._status.connectCallback = function(success) {
 			if (success) {
 				bridgeApi().setPhase("connected");
@@ -49,6 +52,10 @@
 		}
 		bridgeApi().setPhase("entering");
 		bridgeApi().emit("entering_room");
+		/* 包清单上报房主体检(消息走对局连接,房主内核已登记处理器) */
+		if (nnk.modules.manifest) {
+			nnk.modules.manifest.sendManifest();
+		}
 	}
 
 	function resetSession() {

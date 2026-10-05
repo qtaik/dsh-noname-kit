@@ -1001,6 +1001,18 @@ window.__ModuleLoader__.load({
         case 'room_closed': return '🔌 连接断开';
         case 'cancelled': return '🚫 已取消';
         case 'error': return '❌ ' + ((ev.data && ev.data.message) || '出错');
+        case 'manifest_diff': {
+          var d = ev.data || {};
+          var miss = (d.exts && d.exts.missing || []).length;
+          var missPack = (d.packs && d.packs.missing || []).length;
+          if (!miss && !missPack) return '📦 包体检:双方扩展一致';
+          return '📦 包体检:客人缺 ' + miss + ' 个扩展、' + missPack + ' 个武将包';
+        }
+        case 'ext_error': return '🧩 扩展报错(已拦截' + ((ev.data && ev.data.ext) ? ':' + ev.data.ext : '') + ')';
+        case 'transfer_begin': return '📦 开始补传「' + ((ev.data && ev.data.name) || '') + '」';
+        case 'transfer_progress': return '⏳ 补传中「' + ((ev.data && ev.data.name) || '') + '」' + ((ev.data && ev.data.pct) || 0) + '%';
+        case 'transfer_done': return '📦 补传完成「' + ((ev.data && ev.data.name) || '') + '」(客人重启游戏生效)';
+        case 'transfer_failed': return '❌ 补传失败「' + ((ev.data && ev.data.name) || '') + '」:' + ((ev.data && ev.data.message) || '');
         default: return ev.type;
       }
     }
@@ -1081,6 +1093,42 @@ window.__ModuleLoader__.load({
         return e('div', 'nnk-err', '❌ 联机页渲染出错: ' + ((renderErr && renderErr.message) || renderErr) + ' —— 请截图本行文字与当时的操作发给开发者');
       }
 
+      function renderManifestCard(evs, hostFlow) {
+        var diffEv = onlinePickEvent(evs, 'manifest_diff');
+        if (!diffEv || !diffEv.data) {
+          return h('div', { className: 'nnk-card' },
+            e('div', null, h('b', null, '📦 包体检')),
+            e('div', 'nnk-hint', '客人进房后自动对比双方扩展清单,缺什么这里会列出来,一键补传。'));
+        }
+        var d = diffEv.data;
+        var missing = (d.exts && d.exts.missing) || [];
+        var extra = (d.exts && d.exts.extra) || [];
+        var missPacks = (d.packs && d.packs.missing) || [];
+        var txEv = null;
+        for (var i = evs.length - 1; i >= 0; i--) {
+          if (evs[i].type === 'transfer_begin' || evs[i].type === 'transfer_progress' || evs[i].type === 'transfer_done' || evs[i].type === 'transfer_failed') {
+            txEv = evs[i];
+            break;
+          }
+        }
+        return h('div', { className: 'nnk-card' },
+          e('div', null, h('b', null, '📦 包体检')),
+          missing.length
+            ? h('div', {},
+              e('div', 'nnk-hint', hostFlow
+                ? '客人缺少以下扩展,点「补传」把本机文件传过去(传完客人在游戏里重开一次生效):'
+                : '你这边缺少以下扩展,请房主点「补传」传给你(传完重开游戏生效):'),
+              missing.map(function (name) {
+                return h('div', { key: name, style: { marginTop: '6px' } },
+                  h('span', null, name + ' '),
+                  hostFlow ? h('button', { className: 'nnk-copy', onClick: function () { sendCmd('transfer_pack', { name: name }) } }, '📦 补传') : null);
+              }))
+            : e('div', 'nnk-ok', '✅ 双方扩展一致,不需要补传。'),
+          missPacks.length ? e('div', 'nnk-hint', '客人少的武将包(都在上面的扩展里,补传扩展即可):' + missPacks.join('、')) : null,
+          extra.length ? e('div', 'nnk-hint', '对方多出的扩展(不影响联机):' + extra.join('、')) : null,
+          txEv ? e('div', { className: 'nnk-break', style: { marginTop: '6px' } }, onlineEventText(txEv)) : null);
+      }
+
       function renderOnlinePanel() {
         return h('div', {},
         h('div', { className: 'nnk-card' },
@@ -1157,6 +1205,7 @@ window.__ModuleLoader__.load({
                       h('button', { className: 'nnk-copy', onClick: function () { copyText((answerEv.data && answerEv.data.code) || '') } }, '📋 复制回执码'))
                     : null)
                 : h('button', { className: 'nnk-copy', onClick: function () { setShowInviteFallback(true) } }, '房号连不上?换邀请码方式(备用)…')),
+            renderManifestCard(evs, hostFlow),
             evs.length
               ? h('div', { className: 'nnk-card' },
                 e('div', null, h('b', null, '📡 动态')),

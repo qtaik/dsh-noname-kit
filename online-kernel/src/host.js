@@ -63,6 +63,9 @@
 		uiE.create.chat();
 		hostState.roomCode = genRoomCode();
 		game.ip = "nnk://" + hostState.roomCode;
+		if (nnk.modules.compat) {
+			nnk.modules.compat.unlockPacks();   /* 本地扩展包进联机选将池(闸2) */
+		}
 		bridgeApi().setPhase("hosting", { roomCode: hostState.roomCode });
 		startHosting();
 	}
@@ -337,6 +340,9 @@
 						env.game.saveConfig("directstartmode");
 						env.game.reload();
 					}, true);
+				}
+				if (nnk.modules.compat) {
+					nnk.modules.compat.unlockPacks();
 				}
 				bridgeApi().setPhase("hosting", { roomCode: hostState.roomCode });
 				startHosting();

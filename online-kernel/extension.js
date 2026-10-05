@@ -14,7 +14,7 @@
 	}
 	window.__nnkLoaded = true;
 	if (!window.__nnk__) {
-		window.__nnk__ = { version: "0.2.3", modules: {}, env: null, state: {} };
+		window.__nnk__ = { version: "0.3.0", modules: {}, env: null, state: {} };
 	}
 
 	game.import("extension", function(lib, game, ui, get, ai, _status) {
@@ -45,7 +45,7 @@
 			s.onerror = function() { resolve(); };
 			document.head.appendChild(s);
 		});
-		var files = ["config", "rtc", "signaling", "host", "guest", "bridge"];
+		var files = ["config", "rtc", "signaling", "host", "guest", "bridge", "compat", "manifest", "transfer"];
 		for (var i = 0; i < files.length; i++) {
 			var name = files[i];
 			if (nnk.modules[name]) {
@@ -67,6 +67,17 @@
 		}
 		if (nnk.modules.bridge) {
 			nnk.modules.bridge.init();
+		}
+		/* 兼容层(开闸+垫片+隔离)与体检/补包的消息表登记——都在内容加载前
+		 * 装好:开闸必须在 onload 的 loadExtension 闸门检查之前生效 */
+		if (nnk.modules.compat) {
+			nnk.modules.compat.install();
+		}
+		if (nnk.modules.manifest) {
+			nnk.modules.manifest.install();
+		}
+		if (nnk.modules.transfer) {
+			nnk.modules.transfer.install();
 		}
 		console.log("[联机助手] 内核 v" + nnk.version + " 就绪(无头模式" + (window.mqtt ? ",MQTT 信令可用" : ",MQTT 库缺失,房号模式不可用") + ")");
 	};

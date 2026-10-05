@@ -886,7 +886,7 @@ export function apply(ctx, config) {
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/online/command') {
           const body = await readBody()
-          const actions = new Set(['create_room', 'join_room', 'invite_refresh', 'accept_answer', 'join_invite', 'cancel'])
+          const actions = new Set(['create_room', 'join_room', 'invite_refresh', 'accept_answer', 'join_invite', 'transfer_pack', 'cancel'])
           if (!actions.has(body.action)) return json(400, { ok: false, error: `未知命令: ${body.action}` })
           const cmd = bridge.pushCommand(body.action, body.args)
           return json(200, { ok: true, id: cmd.id })
