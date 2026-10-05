@@ -1101,7 +1101,7 @@ window.__ModuleLoader__.load({
           var qEv = onlinePickEvent(evs, 'ext_quarantined');
           return h('div', { style: { marginTop: '6px' } },
             qEv ? e('div', 'nnk-hint', '本页记录到自动隔离:' + ((qEv.data && qEv.data.ext) || '?') + '(0.3.5 起已不再自动隔离)。') : null,
-            h('button', { className: 'nnk-copy', onClick: function () { sendCmd('clear_quarantine', {}) } }, '↩️ 重置隔离名单(清空历史拉黑,重启游戏生效)'));
+            h('button', { className: 'nnk-copy', onClick: function () { setNote('↩️ 清空命令已发送(游戏在线时立即生效)'); sendCmd('clear_quarantine', {}); } }, '↩️ 重置隔离名单(清空历史拉黑,重启游戏生效)'));
         })();
         if (!diffEv || !diffEv.data) {
           return h('div', { className: 'nnk-card' },
@@ -1216,13 +1216,13 @@ window.__ModuleLoader__.load({
                     : null)
                 : h('button', { className: 'nnk-copy', onClick: function () { setShowInviteFallback(true) } }, '房号连不上?换邀请码方式(备用)…')),
             renderManifestCard(evs, hostFlow),
-            evs.length
-              ? h('div', { className: 'nnk-card' },
-                e('div', null, h('b', null, '📡 动态')),
-                h('div', { className: 'nnk-log' }, evs.slice(-8).reverse().map(function (ev, i) {
+            h('div', { className: 'nnk-card' },
+              e('div', null, h('b', null, '📡 动态')),
+              h('div', { className: 'nnk-log' }, evs.length
+                ? evs.slice(-8).reverse().map(function (ev, i) {
                   return e('div', { key: i, className: 'nnk-break' }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
-                })))
-              : null)
+                })
+                : e('div', { className: 'nnk-hint' }, '暂无动态——建房/加入/扩展报错都会显示在这里。'))))
           : null,
         h('div', { className: 'nnk-card' },
           e('div', null, h('b', null, '📖 怎么用(三步)')),
