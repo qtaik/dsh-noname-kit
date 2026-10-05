@@ -424,6 +424,22 @@
 	nnk.modules.compat = {
 		install: function() {
 			unlockExtensions();
+			/* 包池解锁必须赶在引擎快照之前:switchMode 组装房间配置时会把
+			 * connectCharacterPack slice 成 configOL.characterPack(真机实证:
+			 * 解锁挂在 createServer 里晚于快照,自定义武将/卡牌进不了房间) */
+			var env = nnk.env;
+			if (typeof env.game.switchMode === "function" && !env.game.switchMode.__nnkPackUnlock) {
+				var origSwitchMode = env.game.switchMode;
+				env.game.switchMode = function(name2, configx) {
+					try {
+						if (enabled()) {
+							unlockPacks();
+						}
+					} catch (e) { /* 忽略 */ }
+					return origSwitchMode.apply(this, arguments);
+				};
+				env.game.switchMode.__nnkPackUnlock = true;
+			}
 			shimInfoMap();
 			guardHooks();
 			guardErrorPopup();
