@@ -258,15 +258,31 @@
 			return;
 		}
 		var lib = nnk.env.lib;
-		[["characterPack", "connectCharacterPack"], ["cardPack", "connectCardPack"]].forEach(function(pair) {
+		/* 自定义包要进房间设置,需要三处注册(真机逐层实证):
+		 * 1. connectCharacterPack/connectCardPack——联机资格池;
+		 * 2. config.all.characters/cards——总注册表,房间设置菜单的数据源
+		 *    (用户当年手改游戏本体文件注册的就是这个数组);
+		 * 3. config.characters/cards——启用列表,菜单开关默认打开。 */
+		[
+			["characterPack", "connectCharacterPack", "characters"],
+			["cardPack", "connectCardPack", "cards"]
+		].forEach(function(pair) {
 			var packs = lib[pair[0]];
 			var connectList = lib[pair[1]];
 			if (!packs || !Array.isArray(connectList)) {
 				return;
 			}
+			var allList = lib.config.all && Array.isArray(lib.config.all[pair[2]]) ? lib.config.all[pair[2]] : null;
+			var enabledList = Array.isArray(lib.config[pair[2]]) ? lib.config[pair[2]] : null;
 			for (var name in packs) {
 				if (connectList.indexOf(name) < 0) {
 					connectList.push(name);
+				}
+				if (allList && allList.indexOf(name) < 0) {
+					allList.push(name);
+				}
+				if (enabledList && enabledList.indexOf(name) < 0) {
+					enabledList.push(name);
 				}
 				/* 官方 translate 无兜底:扩展没配「包名_character_config」翻译时,
 				 * 房间设置里的标签渲染成空白,看起来像"没加载"(真机实证)——
