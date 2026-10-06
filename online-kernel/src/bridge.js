@@ -72,6 +72,25 @@
 					}
 					break;
 				}
+				case "set_identity": {
+					/* 人物标识:名字截 12 字(引擎同款),头像必须是本机存在的武将 id
+					 * (不存在的话引擎会渲染成默认灰头像,不如当场拦下告诉工坊) */
+					var compat = nnk.modules.compat;
+					var name2 = String(args.name || "").slice(0, 12);
+					var avatar2 = String(args.avatar || "").slice(0, 24);
+					if (avatar2 && !compat.hasCharacter(avatar2)) {
+						emit("error", { message: "头像武将不存在: " + avatar2 + "(可能是对面补传还没完成,先选本机已有的武将)" });
+						break;
+					}
+					nnk.modules.config.set("onlineName", name2);
+					nnk.modules.config.set("onlineAvatar", avatar2);
+					compat.applyIdentity();
+					emit("identity_applied", {
+						name: name2,
+						avatar: avatar2 && nnk.env.lib.translate[avatar2] ? nnk.env.lib.translate[avatar2] : avatar2
+					});
+					break;
+				}
 				case "cancel":
 				host.cancelAll();
 				guest.cancelJoin();
@@ -111,7 +130,10 @@
 				cfg: {
 					unlockUIExtensions: !!nnk.modules.config.get("unlockUIExtensions"),
 					autoUnlockExtensions: !!nnk.modules.config.get("autoUnlockExtensions"),
-					root: !!(nnk.modules.compat && nnk.modules.compat.gameRoot())
+					root: !!(nnk.modules.compat && nnk.modules.compat.gameRoot()),
+					/* 人物标识:工坊靠它回填输入框、插件靠它判断要不要离线补发 */
+					onlineName: String(nnk.modules.config.get("onlineName") || ""),
+					onlineAvatar: String(nnk.modules.config.get("onlineAvatar") || "")
 				},
 				events: events.splice(0, events.length)
 			})

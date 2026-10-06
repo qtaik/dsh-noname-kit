@@ -15,7 +15,13 @@
 		autoUnlockExtensions: true,
 		/* 美化类扩展(不带武将/卡牌包的)是否也参与联机加载:默认关——
 		 * 美化族是联机不稳定的大头,默认只开内容扩展保稳定 */
-		unlockUIExtensions: false
+		unlockUIExtensions: false,
+		/* 人物标识:工坊「👤 人物标识」保存的联机身份。
+		 * onlineName 写进引擎原生键 connect_nickname(游戏内联机昵称),
+		 * onlineAvatar 是武将 id,写进 connect_avatar(联机头像)。
+		 * 留空 = 不动,游戏内自己的设置照常生效。 */
+		onlineName: "",
+		onlineAvatar: ""
 	};
 
 	nnk.modules.config = {

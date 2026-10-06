@@ -188,8 +188,11 @@ export function installKernel({ nonameDir, baseUrl, token, intervalMs }) {
 /**
  * 心跳桥会话(每插件实例一份,内存态,不落盘):
  * 内核轮询时上报状态与事件,取回到期命令;工坊经 pushCommand 下发命令。
+ * identitySource:返回已保存的人物标识({name,avatar})或 null——内核上报的
+ * cfg 与之不一致时自动补发一次 set_identity,覆盖「保存时游戏没开(命令
+ * 60s TTL 内没被取走)」「换游戏目录后新内核副本没身份」两个场景。
  */
-export function createBridgeSession({ token }) {
+export function createBridgeSession({ token, identitySource }) {
   const session = {
     token,
     lastSeen: 0,
@@ -199,13 +202,26 @@ export function createBridgeSession({ token }) {
     commands: [],
     nextCmdId: 1,
   }
-  return {
+  let lastIdentityPushed = null
+  const api = {
     /** 内核每次轮询调用:收事件、刷新在线状态、吐出到期命令。 */
     poll(payload) {
       session.lastSeen = Date.now()
       session.kernelVersion = payload?.kernel?.version ?? session.kernelVersion
       session.state = payload?.state ?? session.state
       session.cfg = payload?.cfg ?? session.cfg
+      /* 身份离线补发:同一个值只补一次,内核应用后 cfg 追平即不再发 */
+      let want = null
+      try { want = typeof identitySource === 'function' ? identitySource() : null } catch { want = null }
+      if (want && payload?.cfg) {
+        const key = JSON.stringify(want)
+        const curName = String(payload.cfg.onlineName || '')
+        const curAvatar = String(payload.cfg.onlineAvatar || '')
+        if ((curName !== String(want.name || '') || curAvatar !== String(want.avatar || '')) && key !== lastIdentityPushed) {
+          lastIdentityPushed = key
+          api.pushCommand('set_identity', { name: String(want.name || ''), avatar: String(want.avatar || '') })
+        }
+      }
       for (const ev of payload?.events || []) {
         session.events.push(ev)
       }
@@ -239,4 +255,5 @@ export function createBridgeSession({ token }) {
     },
     token,
   }
+  return api
 }

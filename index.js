@@ -196,7 +196,10 @@ export function apply(ctx, config) {
     try { writeFileSync(settingsPath, JSON.stringify(next, null, 2), 'utf8') } catch { /* 只影响重启用,不阻塞 */ }
     return token
   })()
-  const bridge = createBridgeSession({ token: bridgeToken })
+  // 人物标识:工坊「👤 人物标识」保存的联机身份(内存缓存 + 落盘 noname-kit.json,
+  // 该文件在 dsh 家目录、跟游戏目录无关——换目录/重装内核不丢,内核上线时自动补发)
+  let savedIdentity = readSettingsFile().onlineIdentity || null
+  const bridge = createBridgeSession({ token: bridgeToken, identitySource: () => savedIdentity })
 
   // ── 1) 常驻规范知识(文本随配置状态动态生成) ─────────────────
   // POSIX 形式路径:模型在 bash 里习惯 /d/... 写法,直接给两种形式免得它自己转换/寻找
@@ -886,8 +889,19 @@ export function apply(ctx, config) {
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/online/command') {
           const body = await readBody()
-          const actions = new Set(['create_room', 'join_room', 'invite_refresh', 'accept_answer', 'join_invite', 'transfer_pack', 'clear_quarantine', 'set_config', 'cancel'])
+          const actions = new Set(['create_room', 'join_room', 'invite_refresh', 'accept_answer', 'join_invite', 'transfer_pack', 'clear_quarantine', 'set_config', 'set_identity', 'cancel'])
           if (!actions.has(body.action)) return json(400, { ok: false, error: `未知命令: ${body.action}` })
+          if (body.action === 'set_identity') {
+            // 人物标识:名字截 12 字(引擎同款)、头像武将 id 截 24,内核还会做存在性校验
+            const name = String(body.args?.name || '').trim().slice(0, 12)
+            const avatar = String(body.args?.avatar || '').trim().slice(0, 24)
+            savedIdentity = { name, avatar }
+            const next = readSettingsFile()
+            next.onlineIdentity = savedIdentity
+            try { writeFileSync(settingsPath, JSON.stringify(next, null, 2), 'utf8') } catch { /* 写不进只影响跨目录补发 */ }
+            console.log(`[noname-kit] 联机人物标识已保存: ${name || '(空)'} / ${avatar || '(空)'}`)
+            body.args = { name, avatar }
+          }
           const cmd = bridge.pushCommand(body.action, body.args)
           return json(200, { ok: true, id: cmd.id })
         }

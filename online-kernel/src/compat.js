@@ -450,8 +450,80 @@
 		} catch (e) { /* 忽略 */ }
 	}
 
+	/*
+	 * 人物标识:把工坊保存的联机身份写进引擎原生键,零包装零补丁。
+	 * 名字 → connect_nickname(引擎 get.connectNickname() 同款截 12 字,
+	 * 联机握手包与 game.me.nickname 都读它);头像 → connect_avatar
+	 * (武将 id,引擎拿 id 自己找图)。双写(普通 + "connect")与原生
+	 * 设置页姿势一致。留空 = 完全不动,游戏内自己的设置照常生效。
+	 */
+	function applyIdentity() {
+		try {
+			var game = nnk.env.game;
+			var name2 = String(nnk.modules.config.get("onlineName") || "").slice(0, 12);
+			if (name2) {
+				game.saveConfig("connect_nickname", name2);
+				game.saveConfig("connect_nickname", name2, "connect");
+			}
+			var avatar2 = String(nnk.modules.config.get("onlineAvatar") || "").slice(0, 24);
+			if (avatar2) {
+				game.saveConfig("connect_avatar", avatar2);
+				game.saveConfig("connect_avatar", avatar2, "connect");
+			}
+		} catch (e) { /* 身份写不进去不致命,引擎默认值(无名玩家/caocao)兜底 */ }
+	}
+
+	/* 头像列表:本机已加载的全部武将(含扩展包),给工坊下拉框用。
+	 * 滤掉国战 gz_ 变体(引擎会按原武将找图,单独列出来纯属噪音),
+	 * 配上中文名(没翻译的显示 id),按中文名排序好找。 */
+	function collectAvatars() {
+		var list = [];
+		try {
+			var lib = nnk.env.lib;
+			var seen = {};
+			Object.keys(lib.character || {}).forEach(function(id) {
+				if (!id || seen[id] || /^gz_/.test(id)) {
+					return;
+				}
+				seen[id] = true;
+				var name2 = lib.translate[id];
+				list.push({ id: id, name: (typeof name2 === "string" && name2) ? name2 : id });
+			});
+			list.sort(function(a, b) {
+				try {
+					return a.name.localeCompare(b.name, "zh-Hans-CN");
+				} catch (e2) {
+					return a.id < b.id ? -1 : 1;
+				}
+			});
+		} catch (e) { /* 列表收集失败=工坊下拉为空,不影响联机本身 */ }
+		return list;
+	}
+
+	/* 武将 id 是否本机存在:set_identity 的头像校验用。lib.character 已含全部
+	 * 已加载包,characterPack 查询兜底 mode_ 临时包;判定不了按原生姿势放行
+	 * (原生设置页就是个文本框,啥 id 都收,引擎自己兜底渲染)。 */
+	function hasCharacter(id) {
+		try {
+			var lib = nnk.env.lib;
+			if (lib.character && lib.character[id]) {
+				return true;
+			}
+			var packs = lib.characterPack || {};
+			for (var p in packs) {
+				if (packs[p] && packs[p][id]) {
+					return true;
+				}
+			}
+			return false;
+		} catch (e) {
+			return true;
+		}
+	}
+
 	nnk.modules.compat = {
 		install: function() {
+			applyIdentity();
 			unlockExtensions();
 			/* 包池解锁的三个时机,层层兜底(真机实证:联机菜单页在 connect 启动
 			 * 时一次性构建,晚于包解析、早于 switchMode——必须赶在菜单构建前):
@@ -464,6 +536,16 @@
 						if (enabled()) {
 							unlockPacks();
 						}
+					});
+					/* 头像列表必须在包全部导完后收集,arenaReady 是已知够晚的时机——
+					 * 工坊下拉框的数据源,每次开机报一次(补包要重启,重启后重报) */
+					nnk.env.lib.arenaReady.push(function() {
+						try {
+							var avatars = collectAvatars();
+							if (avatars.length) {
+								bridgeApi().emit("avatar_list", { list: avatars });
+							}
+						} catch (e) { /* 忽略 */ }
 					});
 				}
 			} catch (e) { /* 忽略 */ }
@@ -551,6 +633,9 @@
 		unlockPacks: unlockPacks,
 		clearQuarantine: clearQuarantine,
 		gameRoot: gameRoot,
-		dumpExtensions: dumpExtensions
+		dumpExtensions: dumpExtensions,
+		applyIdentity: applyIdentity,
+		collectAvatars: collectAvatars,
+		hasCharacter: hasCharacter
 	};
 })();

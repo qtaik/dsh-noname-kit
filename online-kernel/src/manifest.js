@@ -18,12 +18,14 @@
 		return "联机助手";
 	}
 
-	/* 本机清单:已启用扩展 + 本地全部武将/卡牌包名(包名作参考信息展示) */
+	/* 本机清单:已启用扩展 + 本地全部武将/卡牌包名(包名作参考信息展示)
+	 * + 人物标识(引擎生效值:名字没设过兜底「无名玩家」,头像给显示名) */
 	function collect() {
 		var lib = nnk.env.lib;
 		var exts = [];
 		var packs = [];
 		var cards = [];
+		var identity = { name: "", avatar: "" };
 		try {
 			(lib.config.extensions || []).forEach(function(name) {
 				if (name !== KERNEL_NAME()) {
@@ -41,8 +43,15 @@
 				cards.push(c);
 			}
 		} catch (e) { /* 忽略 */ }
+		try {
+			identity.name = nnk.env.get.connectNickname();
+		} catch (e) { /* 忽略 */ }
+		try {
+			var av = lib.config.connect_avatar;
+			identity.avatar = av ? (typeof lib.translate[av] === "string" && lib.translate[av]) || av : "";
+		} catch (e) { /* 忽略 */ }
 		exts.sort();
-		return { exts: exts, packs: packs.sort(), cards: cards.sort(), kernel: nnk.version };
+		return { exts: exts, packs: packs.sort(), cards: cards.sort(), kernel: nnk.version, identity: identity };
 	}
 
 	function validManifest(m) {
@@ -74,7 +83,11 @@
 			exts: split(host.exts || [], guest.exts || []),
 			packs: split(host.packs || [], guest.packs || []),
 			cards: split(host.cards || [], guest.cards || []),
-			guestKernel: guest.kernel || null
+			guestKernel: guest.kernel || null,
+			/* 双向身份:房主工坊显示「👤 客人:某某」,客人侧显示房主身份——
+			 * P2P 连接识别 v1(名字随清单走,头像给显示名) */
+			guestIdentity: guest.identity || null,
+			hostIdentity: host.identity || null
 		};
 	}
 
@@ -88,7 +101,8 @@
 		try {
 			nnk.env.game.broadcast("nnk_manifest_diff", result);
 		} catch (e) { /* 广播失败不影响工坊展示 */ }
-		console.log("[联机助手] 包体检完成:客人缺扩展 " + result.exts.missing.length + " 个、缺武将包 " + result.packs.missing.length + " 个");
+		var guestName = result.guestIdentity && result.guestIdentity.name ? result.guestIdentity.name : "?";
+		console.log("[联机助手] 包体检完成:客人「" + guestName + "」缺扩展 " + result.exts.missing.length + " 个、缺武将包 " + result.packs.missing.length + " 个");
 		/* 自动补传:缺什么传什么(排队逐个),传完客人重启游戏重新加入 */
 		var missing = result.exts.missing || [];
 		if (missing.length && nnk.modules.transfer) {

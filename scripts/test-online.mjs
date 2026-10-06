@@ -85,12 +85,28 @@ try {
   resp = bridge.poll({ kernel: {}, state: {}, events: [] })
   ok(resp.commands.length === 0, '命令下发即出队(不重复执行)')
 
-  // TTL 过期:伪造一条 61s 前的命令
-  const stale = { id: 99, action: 'create_room', args: {}, createdAt: Date.now() - 61_000 }
+  // TTL 过期:pushCommand 返回的就是队列内对象,拨老 createdAt 模拟陈旧
   bridge.pushCommand('invite_refresh', {})
-  bridge._session.commands.push(stale)
+  const stale = bridge.pushCommand('join_room', {})
+  stale.createdAt = Date.now() - 61_000
   resp = bridge.poll({ kernel: {}, state: {}, events: [] })
   ok(resp.commands.length === 1 && resp.commands[0].action === 'invite_refresh', '超过 60s 的陈旧命令被丢弃')
+
+  // 人物标识离线补发:cfg 与保存值不一致时补发一次 set_identity,追平后不再发
+  let saved = { name: '大将军', avatar: 'caocao' }
+  const bridge2 = online.createBridgeSession({ token: 't2', identitySource: () => saved })
+  resp = bridge2.poll({ kernel: {}, state: {}, cfg: { onlineName: '', onlineAvatar: '' }, events: [] })
+  ok(resp.commands.length === 1 && resp.commands[0].action === 'set_identity' && resp.commands[0].args.name === '大将军' && resp.commands[0].args.avatar === 'caocao', '身份不一致自动补发 set_identity')
+  resp = bridge2.poll({ kernel: {}, state: {}, cfg: { onlineName: '', onlineAvatar: '' }, events: [] })
+  ok(resp.commands.length === 0, '同一身份只补发一次')
+  resp = bridge2.poll({ kernel: {}, state: {}, cfg: { onlineName: '大将军', onlineAvatar: 'caocao' }, events: [] })
+  ok(resp.commands.length === 0, 'cfg 追平后不再补发')
+  saved = { name: '无名玩家', avatar: '' }
+  resp = bridge2.poll({ kernel: {}, state: {}, cfg: { onlineName: '大将军', onlineAvatar: 'caocao' }, events: [] })
+  ok(resp.commands.length === 1 && resp.commands[0].action === 'set_identity' && resp.commands[0].args.name === '无名玩家' && resp.commands[0].args.avatar === '', '保存值变化后会再次补发')
+  const bridge3 = online.createBridgeSession({ token: 't3' })
+  resp = bridge3.poll({ kernel: {}, state: {}, cfg: { onlineName: 'x', onlineAvatar: 'y' }, events: [] })
+  ok(resp.commands.length === 0, '无 identitySource 不补发')
 
   // 事件上限 200
   const flood = []

@@ -1001,6 +1001,7 @@ window.__ModuleLoader__.load({
         case 'room_closed': return '🔌 连接断开';
         case 'cancelled': return '🚫 已取消';
         case 'error': return '❌ ' + ((ev.data && ev.data.message) || '出错');
+        case 'identity_applied': return '✅ 人物标识已生效:名字「' + ((ev.data && ev.data.name) || '') + '」/ 头像「' + ((ev.data && ev.data.avatar) || '不设置') + '」';
         case 'manifest_diff': {
           var d = ev.data || {};
           var miss = (d.exts && d.exts.missing || []).length;
@@ -1057,6 +1058,16 @@ window.__ModuleLoader__.load({
       var showInviteFallback = invFb[0], setShowInviteFallback = invFb[1];
       var noteState = React.useState('');
       var note = noteState[0], setNote = noteState[1];
+      /* 人物标识:本地编辑值。回填只在内核 cfg 变化时做一次(idCfgKey 指纹),
+       * 免得每 1.5s 的状态轮询把正在输入的字覆盖掉 */
+      var idNameState = React.useState('');
+      var idName = idNameState[0], setIdName = idNameState[1];
+      var idAvatarState = React.useState('');
+      var idAvatar = idAvatarState[0], setIdAvatar = idAvatarState[1];
+      var avFilterState = React.useState('');
+      var avFilter = avFilterState[0], setAvFilter = avFilterState[1];
+      var idCfgKeyState = React.useState(null);
+      var idCfgKey = idCfgKeyState[0], setIdCfgKey = idCfgKeyState[1];
       React.useEffect(function () {
         var alive = true;
         var tick = function () {
@@ -1068,6 +1079,16 @@ window.__ModuleLoader__.load({
         var timer = setInterval(tick, 1500);
         return function () { alive = false; clearInterval(timer); };
       }, []);
+      React.useEffect(function () {
+        var cfg = status && status.bridge && status.bridge.cfg;
+        if (!cfg) return;
+        var key = (cfg.onlineName || '') + '|' + (cfg.onlineAvatar || '');
+        if (key !== idCfgKey) {
+          setIdCfgKey(key);
+          setIdName(cfg.onlineName || '');
+          setIdAvatar(cfg.onlineAvatar || '');
+        }
+      });
       var sendCmd = function (action, args) {
         return fetch('/noname-kit-api/online/command', {
           method: 'POST',
@@ -1119,6 +1140,43 @@ window.__ModuleLoader__.load({
         return e('div', 'nnk-err', '❌ 联机页渲染出错: ' + ((renderErr && renderErr.message) || renderErr) + ' —— 请截图本行文字与当时的操作发给开发者');
       }
 
+      function renderIdentityCard() {
+        var listEv = onlinePickEvent(evs, 'avatar_list');
+        var avatars = (listEv && listEv.data && listEv.data.list) || [];
+        var kw = avFilter.trim().toLowerCase();
+        var filtered = kw ? avatars.filter(function (a) {
+          return a.name.toLowerCase().indexOf(kw) >= 0 || a.id.toLowerCase().indexOf(kw) >= 0;
+        }) : avatars;
+        var known = avatars.some(function (a) { return a.id === idAvatar; });
+        return h('div', { className: 'nnk-card' },
+          e('div', null, h('b', null, '👤 人物标识')),
+          e('div', 'nnk-hint', '用户名 = 朋友看到的名字,也是游戏内联机昵称;头像下拉选一个武将形象。保存后游戏内即时生效(对方屏幕上的头像下一局生效)。'),
+          h('div', { style: { marginTop: '8px' } },
+            e('div', 'nnk-label', '用户名(最长 12 字,留空用游戏内设置)'),
+            h('input', { className: 'nnk-input', value: idName, maxLength: 12, placeholder: '例: 大将军', onChange: function (ev) { setIdName(ev.target.value) } })),
+          h('div', { style: { marginTop: '8px' } },
+            e('div', 'nnk-label', '头像(选武将,留「不设置」用游戏内默认)'),
+            avatars.length
+              ? h('div', {},
+                h('input', { className: 'nnk-input', value: avFilter, placeholder: '打字过滤,如: 曹 / 吕 / sp', onChange: function (ev) { setAvFilter(ev.target.value) } }),
+                h('select', {
+                  className: 'nnk-input', style: { marginTop: '4px' },
+                  value: known || !idAvatar ? idAvatar : '__nnk_keep',
+                  onChange: function (ev) { if (ev.target.value !== '__nnk_keep') setIdAvatar(ev.target.value) }
+                },
+                  h('option', { key: '', value: '' }, '不设置(用游戏内默认)'),
+                  !known && idAvatar ? h('option', { key: '__nnk_keep', value: '__nnk_keep' }, idAvatar + '(当前,列表里没有)') : null,
+                  filtered.map(function (a) { return h('option', { key: a.id, value: a.id }, a.name); })))
+              : e('div', 'nnk-hint', bridgeOnline
+                ? '头像列表还没就绪——游戏进到主菜单后几秒内自动就绪。'
+                : '内核离线(启动游戏后加载头像列表);现在也能先填好保存,内核上线自动补发。')),
+          h('div', { className: 'nnk-row', style: { marginTop: '8px' } },
+            h('button', { className: 'nnk-submit', style: { marginTop: '0' }, onClick: function () {
+              setNote(bridgeOnline ? '已发送,游戏内即时生效' : '已保存到本机,内核上线后自动补发');
+              sendCmd('set_identity', { name: idName.trim(), avatar: idAvatar });
+            } }, '💾 保存人物标识')));
+      }
+
       function renderManifestCard(evs, hostFlow) {
         var diffEv = onlinePickEvent(evs, 'manifest_diff');
         /* 重置按钮常驻:隔离名单持久化在游戏配置里,清它不能依赖会话内的事件记录 */
@@ -1138,6 +1196,8 @@ window.__ModuleLoader__.load({
         var missing = (d.exts && d.exts.missing) || [];
         var extra = (d.exts && d.exts.extra) || [];
         var missPacks = (d.packs && d.packs.missing) || [];
+        /* P2P 连接识别 v1:身份随清单交换,主机看客人、客人看房主 */
+        var peer = hostFlow ? (d.guestIdentity || null) : (d.hostIdentity || null);
         var txEv = null;
         for (var i = evs.length - 1; i >= 0; i--) {
           if (evs[i].type === 'transfer_begin' || evs[i].type === 'transfer_progress' || evs[i].type === 'transfer_done' || evs[i].type === 'transfer_failed') {
@@ -1150,6 +1210,7 @@ window.__ModuleLoader__.load({
           e('div', 'nnk-hint', (bridge.cfg && bridge.cfg.root === false)
             ? '⚠️ 本机无法定位游戏目录,扩展分类已跳过(全部扩展会参与联机加载)。'
             : '联机默认只加载带武将/卡牌包的内容扩展,美化类不参与。'),
+          peer && peer.name ? e('div', 'nnk-ok', '👤 对方(' + (hostFlow ? '客人' : '房主') + '):「' + peer.name + '」' + (peer.avatar ? '(头像:' + peer.avatar + ')' : '')) : null,
           missing.length
             ? h('div', {},
               e('div', 'nnk-hint', hostFlow
@@ -1197,6 +1258,7 @@ window.__ModuleLoader__.load({
                   : null)),
         status.active && kernel && kernel.state === 'ok'
           ? h('div', {},
+            renderIdentityCard(),
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '🏠 我要当主机')),
               e('div', 'nnk-hint', '选玩法 → 创建房间 → 把 6 位房号发给朋友,朋友在「我要加入」输房号即可。开局(开始游戏/选将)在游戏里点。建房会自动关闭「禁止不同版本玩家进房」,不同游戏版本的朋友也能进。'),
@@ -1250,7 +1312,7 @@ window.__ModuleLoader__.load({
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '📡 动态')),
               h('div', { className: 'nnk-log' }, evs.length
-                ? evs.slice(-8).reverse().map(function (ev, i) {
+                ? evs.filter(function (ev2) { return ev2.type !== 'avatar_list'; }).slice(-8).reverse().map(function (ev, i) {
                   return e('div', { key: i, className: 'nnk-break' }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
                 })
                 : e('div', { className: 'nnk-hint' }, '暂无动态——建房/加入/扩展报错都会显示在这里。'))))
