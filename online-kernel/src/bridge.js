@@ -133,10 +133,10 @@
 		fetch(cfg.baseUrl + "/online/bridge", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({
-				token: cfg.token,
-				kernel: { version: nnk.version },
-				state: state,
+				body: JSON.stringify({
+					token: cfg.token,
+					kernel: { version: nnk.version, stage: nnk.state.bootStage || "booting" },
+					state: state,
 				cfg: {
 					unlockUIExtensions: !!nnk.modules.config.get("unlockUIExtensions"),
 					autoUnlockExtensions: !!nnk.modules.config.get("autoUnlockExtensions"),

@@ -14,7 +14,7 @@
 	}
 	window.__nnkLoaded = true;
 	if (!window.__nnk__) {
-		window.__nnk__ = { version: "0.3.36", modules: {}, env: null, state: {} };
+		window.__nnk__ = { version: "0.3.37", modules: {}, env: null, state: {} };
 	}
 
 	game.import("extension", function(lib, game, ui, get, ai, _status) {
@@ -36,6 +36,10 @@
 	window.__nnk__.boot = async function(lib, game, ui, get, ai, _status) {
 		var nnk = window.__nnk__;
 		nnk.env = { lib: lib, game: game, ui: ui, get: get, ai: ai, _status: _status };
+		/* 启动面包屑:每完成一步记一次,随心跳上报。偶发"进游戏就离线"
+		 * (双机实测)死因不明,游戏死了心跳停了,但工坊里最后一条面包屑
+		 * 能说明它死在了哪一步 */
+		nnk.state.bootStage = "env-ready";
 		/* mqtt 库(UMD)经 <script> 标签加载进 window.mqtt——房号信令依赖它,
 		 * 加载失败只降级房号信令不可用(邀请码模式不受影响),不阻塞内核 */
 		await new Promise(function(resolve) {
@@ -45,6 +49,7 @@
 			s.onerror = function() { resolve(); };
 			document.head.appendChild(s);
 		});
+		nnk.state.bootStage = "mqtt-loaded";
 		var files = ["config", "rtc", "signaling", "host", "guest", "bridge", "compat", "manifest", "transfer"];
 		for (var i = 0; i < files.length; i++) {
 			var name = files[i];
@@ -56,9 +61,12 @@
 				await import(base + name + ".js");
 			} catch (e) {
 				console.error("[联机助手] 子模块加载失败: " + name, e);
+				nnk.state.bootStage = "load-fail:" + name;
 				return;
 			}
 		}
+		nnk.state.bootStage = "modules-loaded";
+		/* 各安装步骤独立兜底:一步炸了不能带走其余安装与心跳上报 */
 		if (nnk.modules.host) {
 			nnk.modules.host.init();
 		}
@@ -68,17 +76,27 @@
 		if (nnk.modules.bridge) {
 			nnk.modules.bridge.init();
 		}
+		nnk.state.bootStage = "inits-done";
 		/* 兼容层(开闸+垫片+隔离)与体检/补包的消息表登记——都在内容加载前
 		 * 装好:开闸必须在 onload 的 loadExtension 闸门检查之前生效 */
-		if (nnk.modules.compat) {
-			nnk.modules.compat.install();
+		var installs = [["compat", nnk.modules.compat], ["manifest", nnk.modules.manifest], ["transfer", nnk.modules.transfer]];
+		for (var j = 0; j < installs.length; j++) {
+			var mod = installs[j][1];
+			if (!mod) {
+				continue;
+			}
+			try {
+				mod.install();
+				nnk.state.bootStage = installs[j][0] + "-done";
+			} catch (err) {
+				nnk.state.bootStage = "install-fail:" + installs[j][0];
+				console.error("[联机助手] " + installs[j][0] + " 安装失败", err);
+				if (nnk.modules.bridge) {
+					nnk.modules.bridge.emit("error", { message: "内核模块 " + installs[j][0] + " 安装失败: " + ((err && err.message) || err) });
+				}
+			}
 		}
-		if (nnk.modules.manifest) {
-			nnk.modules.manifest.install();
-		}
-		if (nnk.modules.transfer) {
-			nnk.modules.transfer.install();
-		}
+		nnk.state.bootStage = "ready";
 		console.log("[联机助手] 内核 v" + nnk.version + " 就绪(无头模式" + (window.mqtt ? ",MQTT 信令可用" : ",MQTT 库缺失,房号模式不可用") + ")");
 	};
 })();

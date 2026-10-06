@@ -1357,7 +1357,8 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'nnk-phaseline' },
                   bridgeOnline
                     ? e('span', 'nnk-ok', '🟢 内核在线(游戏运行中)')
-                    : e('span', 'nnk-hint', '⚪ 内核离线 —— 启动游戏后在线;游戏开着却始终离线时,检查游戏「扩展」菜单里「联机助手」是否已点「启」开启(列表里没有它?官方版先开 设置→通用→自动导入扩展 再重启游戏)')),
+                    : e('span', 'nnk-hint', '⚪ 内核离线 —— 启动游戏后在线;游戏开着却始终离线时,检查游戏「扩展」菜单里「联机助手」是否已点「启」开启(列表里没有它?官方版先开 设置→通用→自动导入扩展 再重启游戏)'
+                      + (bridge.bootStage && bridge.lastSeen ? '(最后心跳:启动阶段 ' + bridge.bootStage + ',' + new Date(bridge.lastSeen).toLocaleTimeString() + '——几十秒内自己变回在线是加载卡顿,一直不回来是游戏页真的死了,按这个判断)' : ''))),
                 phase !== 'idle'
                   ? e('div', 'nnk-hint', '当前状态:' + phaseText + (bridge.state && bridge.state.roomCode ? '(房号 ' + bridge.state.roomCode + ')' : ''))
                   : null)),
