@@ -1140,6 +1140,9 @@ window.__ModuleLoader__.load({
       var evs = bridge.events || [];
       var phase = (bridge.state && bridge.state.phase) || 'idle';
       var phaseText = ONLINE_PHASE_TEXT[phase] || phase;
+      if (phase === 'hosting' && (bridge.state && bridge.state.signaling) === 'invite') {
+        phaseText = '正在生成邀请码…';
+      }
       var bridgeOnline = Boolean(bridge.online);
       var kernelBad = !kernel || kernel.state === 'unknown';
       var hostFlow = HOST_PHASES.indexOf(phase) >= 0;
@@ -1319,7 +1322,7 @@ window.__ModuleLoader__.load({
                 ? h('button', { className: 'nnk-copy', disabled: !bridgeOnline, onClick: function () { setAnswerText(''); setOfferText(''); sendCmd('create_room', { mode: mode, signaling: 'invite' }) } }, '📨 房号反复连不上?改用邀请码方式建房(备用)')
                 : null,
               !bridgeOnline ? e('div', 'nnk-hint', '内核离线(先启动游戏)') : null,
-              roomCode && (phase === 'hosting' || phase === 'mqtt_waiting' || phase === 'connecting' || phase === 'room_open') && !inviteEv
+              roomCode && (phase === 'hosting' || phase === 'mqtt_waiting' || phase === 'connecting' || phase === 'room_open') && !inviteEv && (bridge.state && bridge.state.signaling) !== 'invite'
                 ? h('div', { style: { marginTop: '10px' } },
                   e('div', 'nnk-label', '房号(就这 6 位,发给朋友)'),
                   h('div', { className: 'nnk-cmd', style: { fontSize: '24px', fontWeight: '700', letterSpacing: '6px', padding: '8px 16px' } }, roomCode),
