@@ -15,6 +15,7 @@
 		signaling: "mqtt",    /* mqtt=房号直连(默认) | invite=邀请码兜底 */
 		roomCode: null,
 		reuseCode: null,      /* 打完一把重载重组:接力上局的房号,客人自动重进 */
+		inviteAt: 0,          /* 当前邀请码生成时刻:候选地址会随 NAT 映射过期,时效提示用 */
 		bridges: [],
 		invitePc: null,
 		mqttSession: null,
@@ -232,6 +233,7 @@
 				return;
 			}
 			hostState.invitePc = pc;
+			hostState.inviteAt = Date.now();
 			bridgeApi().setPhase("invite_ready", { roomCode: hostState.roomCode });
 			bridgeApi().emit("invite_ready", { code: rtc.encodeCode("offer", pc.localDescription) });
 		}).catch(function(err) {
@@ -250,11 +252,11 @@
 			if (dead || hostState.invitePc !== pc) {
 				return;   /* 已连上(连接建立时 invitePc 会被摘牌)或已换过码 */
 			}
-			dead = true;
-			bridgeApi().emit("error", { message: reason + "。已自动生成新邀请码——让客人从「加入互联网房间」重新走一遍;反复失败请检查两台电脑防火墙是否放行无名杀(UDP),或换个网络再试" });
-			hostState.invitePc = null;
-			try { pc.close(); } catch (e) { /* 忽略 */ }
-			startInvite();
+		dead = true;
+		bridgeApi().emit("error", { message: reason + "。已自动生成新邀请码——常见原因是码放太久(里面的候选地址过期)或防火墙拦 UDP:新码生成后要马上发给朋友马上用,别攒" });
+		hostState.invitePc = null;
+		try { pc.close(); } catch (e) { /* 忽略 */ }
+		startInvite();
 		};
 		pc.onconnectionstatechange = function() {
 			if (pc.connectionState === "failed") {
@@ -455,12 +457,18 @@
 				bridgeApi().emit("error", { message: err.message });
 				return;
 			}
-			pc.setRemoteDescription(data.sdp).then(function() {
-				bridgeApi().setPhase("connecting", { roomCode: hostState.roomCode });
-				watchHostConnection(pc);
-			}).catch(function(err) {
-				bridgeApi().emit("error", { message: "回执码无效: " + (err.message || err) });
-			});
+	pc.setRemoteDescription(data.sdp).then(function() {
+		bridgeApi().setPhase("connecting", { roomCode: hostState.roomCode });
+		/* 码龄预警:邀请码里的 ICE 候选跟着 NAT 端口映射活,映射几十秒到几
+		 * 分钟就过期——实测放 14 分钟的码必失败。粘码时先报个龄,失败了别懵 */
+		var ageMin = hostState.inviteAt ? Math.round((Date.now() - hostState.inviteAt) / 60000) : 0;
+		if (ageMin >= 3) {
+			bridgeApi().emit("info", { message: "这张邀请码已生成 " + ageMin + " 分钟——码放太久,里面的候选地址基本过期了,直连大概率失败;失败后点「换一张邀请码重试」,新码要马上发马上用" });
+		}
+		watchHostConnection(pc);
+	}).catch(function(err) {
+		bridgeApi().emit("error", { message: "回执码无效: " + (err.message || err) });
+	});
 		},
 
 		cancelAll: function() {

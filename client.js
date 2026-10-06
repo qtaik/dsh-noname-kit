@@ -1174,6 +1174,18 @@ window.__ModuleLoader__.load({
       /* 码交接弹窗:邀请码/回执码生成是最容易错过的时刻,光靠一行阶段文案
        * 不够(实测反馈),直接弹到屏幕中间。关了不重复弹,换新码才再弹;
        * 阶段推进(连接中/进房中)自动消失,卡片里的同款操作仍可用 */
+      /* 码龄:邀请码里的 ICE 候选跟着 NAT 端口映射活,几十秒到几分钟就过期
+       * (实测放 14 分钟必失败),超 3 分钟就亮牌催换 */
+      function codeAgeText(ts) {
+        if (!ts) return '';
+        var sec = Math.max(0, Math.round((Date.now() - ts) / 1000));
+        if (sec < 60) return '刚生成,趁热用';
+        var min = Math.floor(sec / 60);
+        var text = '此码已生成 ' + min + ' 分钟';
+        return sec >= 180
+          ? '⚠️ ' + text + '——里面的候选地址基本过期了,直连大概率失败!点「换一张邀请码重试」重新生成,新码马上发马上用'
+          : text + '——放太久会失效,建议 3 分钟内用完';
+      }
       function renderCodeModal(opts) {
         return h('div', { className: 'nnk-modal-mask', onClick: function (ev) { if (ev.target === ev.currentTarget) opts.onClose() } },
           h('div', { className: 'nnk-modal' },
@@ -1182,26 +1194,30 @@ window.__ModuleLoader__.load({
             h('div', { className: 'nnk-modal-actions' },
               h('button', { className: 'nnk-copy', onClick: opts.onClose }, '收起(下方卡片里仍可操作)'))));
       }
-      function renderInviteModal(code) {
+      function renderInviteModal(ev) {
+        var code = (ev.data && ev.data.code) || '';
         return renderCodeModal({
           title: '📨 邀请码已生成——发给朋友',
           onClose: function () { setInvitePopupDismissed(code) },
           body: h('div', {},
             e('div', 'nnk-hint', '1. 点「复制」把整段邀请码发给朋友;2. 朋友在「我要加入 → 备用」粘贴,把生成的「回执码」发回给你;3. 回执码粘到下面,点「连接」。'),
+            codeAgeText(ev.ts) ? e('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(ev.ts)) : null,
             e('div', 'nnk-label', '邀请码(整段复制)'),
             h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: code }),
             h('button', { className: 'nnk-copy', onClick: function () { copyText(code) } }, '📋 复制邀请码'),
             e('div', 'nnk-label', '朋友回发的「回执码」粘贴到这里'),
-            h('textarea', { className: 'nnk-textarea nnk-code', value: answerText, onChange: function (ev) { setAnswerText(ev.target.value) }, placeholder: '粘贴客人的回执码…' }),
+            h('textarea', { className: 'nnk-textarea nnk-code', value: answerText, onChange: function (ev2) { setAnswerText(ev2.target.value) }, placeholder: '粘贴客人的回执码…' }),
             h('button', { className: 'nnk-copy', onClick: function () { sendCmd('accept_answer', { code: answerText }) } }, '🔗 连接'))
         });
       }
-      function renderAnswerModal(code) {
+      function renderAnswerModal(ev) {
+        var code = (ev.data && ev.data.code) || '';
         return renderCodeModal({
           title: '📨 回执码已生成——发回给房主',
           onClose: function () { setAnswerPopupDismissed(code) },
           body: h('div', {},
             e('div', 'nnk-hint', '把回执码整段发给房主,房主粘贴后点「连接」,直连打通后自动进房。房主没回音时在工坊动态看进度。'),
+            codeAgeText(ev.ts) ? e('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(ev.ts)) : null,
             e('div', 'nnk-label', '回执码(整段复制)'),
             h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: code }),
             h('button', { className: 'nnk-copy', onClick: function () { copyText(code) } }, '📋 复制回执码'))
@@ -1377,6 +1393,7 @@ window.__ModuleLoader__.load({
               inviteEv
                 ? h('div', { style: { marginTop: '10px' } },
                   e('div', 'nnk-label', '邀请码(整段复制发给朋友)——备用方式'),
+                  codeAgeText(inviteEv.ts) ? e('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(inviteEv.ts)) : null,
                   h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: (inviteEv.data && inviteEv.data.code) || '' }),
                   h('button', { className: 'nnk-copy', onClick: function () { copyText((inviteEv.data && inviteEv.data.code) || '') } }, '📋 复制邀请码'),
                   e('div', 'nnk-label', '朋友回发的「回执码」粘贴到这里'),
@@ -1396,6 +1413,7 @@ window.__ModuleLoader__.load({
                   answerEv
                     ? h('div', { style: { marginTop: '10px' } },
                       e('div', 'nnk-label', '回执码(发回给房主)'),
+                      codeAgeText(answerEv.ts) ? e('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(answerEv.ts)) : null,
                       h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: (answerEv.data && answerEv.data.code) || '' }),
                       h('button', { className: 'nnk-copy', onClick: function () { copyText((answerEv.data && answerEv.data.code) || '') } }, '📋 复制回执码'))
                     : null)
@@ -1421,9 +1439,9 @@ window.__ModuleLoader__.load({
           e('div', 'nnk-hint', '房号模式经国内可达的公共信令服务器交换连接信息(载荷按房号加密,点对点直连、无需公网 IP);个别网络(如手机热点)打不通时换个网络再试,或改用邀请码兜底。无人大厅在后续版本。')),
         note ? e('div', { className: note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err' }, note) : null,
         phase === 'invite_ready' && inviteEv && (inviteEv.data && inviteEv.data.code) && invitePopupDismissed !== inviteEv.data.code
-          ? renderInviteModal(inviteEv.data.code) : null,
+          ? renderInviteModal(inviteEv) : null,
         phase === 'answer_ready' && answerEv && (answerEv.data && answerEv.data.code) && answerPopupDismissed !== answerEv.data.code
-          ? renderAnswerModal(answerEv.data.code) : null
+          ? renderAnswerModal(answerEv) : null
         );
       }
     }
