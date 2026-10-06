@@ -215,19 +215,30 @@
 					}
 				});
 			};
-			/* 连接监视:打不通不能无声悬挂(与主机端同款),失败了明确说,让房主换码 */
+			/* 关键时机差:回执码生成后,客人这边的 ICE 检查立刻开跑,而主机要
+			 * 等人工粘贴回执码才开始检查——时间差里客人的候选对会全部超时
+			 * (实测 ~11 秒 connectionState 就到 failed)。这是常态不是故障,
+			 * 绝不能据此断会话:主机粘贴后它的检查会打过来,本机监听还在,
+			 * 通道照样接上(此前一看到 failed 就 resetSession,房主贴慢一点
+			 * 就永远连不上)。给 3 分钟保底,超时才判死码引导重来 */
 			pc.onconnectionstatechange = function() {
-				if (pc.connectionState === "failed") {
-					bridgeApi().emit("error", { message: "直连建立失败——最常见原因是邀请码放太久(里面的候选地址已过期,实测放十几分钟必失败):请房主立刻换一张新邀请码,拿到后马上粘贴生成回执码;新码也失败再查两台电脑防火墙是否放行无名杀(UDP)" });
-					bridgeApi().setPhase("idle");
-					resetSession();
+				if (pc.connectionState === "failed" && !session.failNoted) {
+					session.failNoted = true;
+					bridgeApi().emit("info", { message: "直连检查暂时没打通(房主还没粘贴回执码属正常)——把回执码发给房主,他点「连接」后通道会自动接上;本页别关,最多再等 3 分钟" });
+					setTimeout(function() {
+						if (guestState.session === session && pc.connectionState !== "connected" && pc.connectionState !== "closed") {
+							bridgeApi().emit("error", { message: "3 分钟没等来房主的连接——回执码可能已失效(候选过期)或房主没粘贴;请房主换一张新邀请码,马上发马上用" });
+							bridgeApi().setPhase("idle");
+							resetSession();
+						}
+					}, 180000);
 				}
 			};
 			setTimeout(function() {
-				if (pc.connectionState !== "connected" && pc.connectionState !== "closed") {
-					bridgeApi().emit("error", { message: "20 秒仍未打通直连(网络受限)——请房主换一张新邀请码再试" });
+				if (guestState.session === session && pc.connectionState !== "connected" && pc.connectionState !== "closed") {
+					bridgeApi().emit("info", { message: "还没连上?确认房主已粘贴你的回执码并点了「连接」——他粘贴前,你这边的直连检查打不通是正常的" });
 				}
-			}, 20000);
+			}, 30000);
 			pc.setRemoteDescription(data.sdp).then(function() {
 				return pc.createAnswer();
 			}).then(function(answer) {
