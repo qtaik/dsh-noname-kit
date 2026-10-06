@@ -473,33 +473,6 @@
 		} catch (e) { /* 身份写不进去不致命,引擎默认值(无名玩家/caocao)兜底 */ }
 	}
 
-	/* 头像列表:本机已加载的全部武将(含扩展包),给工坊下拉框用。
-	 * 滤掉国战 gz_ 变体(引擎会按原武将找图,单独列出来纯属噪音),
-	 * 配上中文名(没翻译的显示 id),按中文名排序好找。 */
-	function collectAvatars() {
-		var list = [];
-		try {
-			var lib = nnk.env.lib;
-			var seen = {};
-			Object.keys(lib.character || {}).forEach(function(id) {
-				if (!id || seen[id] || /^gz_/.test(id)) {
-					return;
-				}
-				seen[id] = true;
-				var name2 = lib.translate[id];
-				list.push({ id: id, name: (typeof name2 === "string" && name2) ? name2 : id });
-			});
-			list.sort(function(a, b) {
-				try {
-					return a.name.localeCompare(b.name, "zh-Hans-CN");
-				} catch (e2) {
-					return a.id < b.id ? -1 : 1;
-				}
-			});
-		} catch (e) { /* 列表收集失败=工坊下拉为空,不影响联机本身 */ }
-		return list;
-	}
-
 	/* 武将 id 是否本机存在:set_identity 的头像校验用。lib.character 已含全部
 	 * 已加载包,characterPack 查询兜底 mode_ 临时包;判定不了按原生姿势放行
 	 * (原生设置页就是个文本框,啥 id 都收,引擎自己兜底渲染)。 */
@@ -536,16 +509,6 @@
 						if (enabled()) {
 							unlockPacks();
 						}
-					});
-					/* 头像列表必须在包全部导完后收集,arenaReady 是已知够晚的时机——
-					 * 工坊下拉框的数据源,每次开机报一次(补包要重启,重启后重报) */
-					nnk.env.lib.arenaReady.push(function() {
-						try {
-							var avatars = collectAvatars();
-							if (avatars.length) {
-								bridgeApi().emit("avatar_list", { list: avatars });
-							}
-						} catch (e) { /* 忽略 */ }
 					});
 				}
 			} catch (e) { /* 忽略 */ }
@@ -635,7 +598,6 @@
 		gameRoot: gameRoot,
 		dumpExtensions: dumpExtensions,
 		applyIdentity: applyIdentity,
-		collectAvatars: collectAvatars,
 		hasCharacter: hasCharacter
 	};
 })();

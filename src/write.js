@@ -425,22 +425,24 @@ export async function rollbackExtension(nonameDir, folder, backupName) {
 /** 尽力从 translate 区段提取条目显示名(工坊「编辑已有条目」下拉的括号注):
  * 对象值找 name 字段,数组值取首元素(老式扩展武将 `cs_x: ['名字','描述']`),
  * 字符串值本身就是名字;x 与 x_info 以先出现者为准。提不到就不入表。 */
-function extractDisplayNames(code) {
+function extractDisplayNames(code, sectionNames = ['translate']) {
   const names = new Map()
-  for (const sec of findAllSections(code, 'translate')) {
-    for (const p of sectionProperties(code, sec.open, sec.close)) {
-      const base = p.name.replace(/_info$/, '')
-      if (names.has(base)) continue
-      const seg = code.slice(p.start, p.end + 1)
-      const m = /name\s*:\s*(['"`])((?:\\.|(?!\1).)*?)\1/.exec(seg)
-        || /[:[]\s*\[\s*(['"`])((?:\\.|(?!\1).)*?)\1/.exec(seg)
-      let name = m && m[2] ? m[2] : ''
-      if (!name && (code[p.end] === '"' || code[p.end] === "'")) {
-        // 简单字符串值(`cs_a: "甲"`):整段结尾的引号字面量就是名字
-        const lit = /(['"])((?:\\.|(?!\1).)*?)\1\s*$/.exec(seg)
-        if (lit) name = lit[2]
+  for (const secName of sectionNames) {
+    for (const sec of findAllSections(code, secName)) {
+      for (const p of sectionProperties(code, sec.open, sec.close)) {
+        const base = p.name.replace(/_info$/, '')
+        if (names.has(base)) continue
+        const seg = code.slice(p.start, p.end + 1)
+        const m = /name\s*:\s*(['"`])((?:\\.|(?!\1).)*?)\1/.exec(seg)
+          || /[:[]\s*\[\s*(['"`])((?:\\.|(?!\1).)*?)\1/.exec(seg)
+        let name = m && m[2] ? m[2] : ''
+        if (!name && (code[p.end] === '"' || code[p.end] === "'")) {
+          // 简单字符串值(`cs_a: "甲"`):整段结尾的引号字面量就是名字
+          const lit = /(['"])((?:\\.|(?!\1).)*?)\1\s*$/.exec(seg)
+          if (lit) name = lit[2]
+        }
+        if (name) names.set(base, name)
       }
-      if (name) names.set(base, name)
     }
   }
   return names
@@ -523,4 +525,76 @@ export async function listEntrySkills(nonameDir, folder, entryId) {
   if (!entry) return { ok: true, skills: [] }
   const skills = entrySkillIds(entry.text).map((id) => ({ id, name: names.get(id) || '' }))
   return { ok: true, skills }
+}
+
+/** 深度枚举目录下全部 .js 绝对路径;目录不存在/读不了返回空。 */
+async function listJsDeepAbs(absDir) {
+  const out = []
+  let entries
+  try { entries = await readdir(absDir, { withFileTypes: true }) } catch { return out }
+  for (const e of entries) {
+    if (e.name.startsWith('.')) continue
+    const child = join(absDir, e.name)
+    if (e.isDirectory()) out.push(...await listJsDeepAbs(child))
+    else if (e.isFile() && /\.js$/i.test(e.name)) out.push(child)
+  }
+  return out
+}
+
+/**
+ * 头像列表(工坊「👤 人物标识」下拉数据源):直接扫游戏目录,不依赖游戏运行。
+ * 自带包 = <nonameDir>/character/ 递归:官方 1.11.5 新版 `const characters = {}`
+ * 顶层键(findAllSections/sectionProperties)与老版 game.import 武将段
+ * (virtualCharacterBlocks)两种形态都认;显示名从各文件 translate 段聚合
+ * (子目录 character.js 的名字常在同名 translate.js,全文件扫自然覆盖)。
+ * 扩展包复用 listEntries——工坊「编辑已有武将」同款识别。国战 gz_ 变体滤掉。
+ * 只读;自带包 16MB 级+全部扩展,调用方自行缓存。返回 [{id,name}],按中文名排序。
+ */
+export async function listAvatars(nonameDir) {
+  const ids = []
+  const seen = new Set()
+  const add = (id) => {
+    if (id && !seen.has(id) && !/^gz_/.test(id)) {
+      seen.add(id)
+      ids.push(id)
+    }
+  }
+  const names = new Map()
+  // 自带包(character/ 子目录也要进:sp/、offline/ 等整目录都是包)。
+  // 官方 1.11.5 新版文件里名字变量是复数 const translates(导出时才展开进
+  // translate:),段名集合两种都要喂。
+  for (const abs of await listJsDeepAbs(join(resolve(nonameDir), 'character'))) {
+    let code
+    try { code = await readFile(abs, 'utf8') } catch { continue }
+    for (const [id, name] of extractDisplayNames(code, ['translate', 'translates'])) if (!names.has(id)) names.set(id, name)
+    for (const sec of findAllSections(code, 'characters')) {
+      for (const p of sectionProperties(code, sec.open, sec.close)) add(p.name)
+    }
+    for (const b of virtualCharacterBlocks(code)) add(b.id)
+  }
+  // 扩展包(extension/<名>/:工坊同款识别;内核自身无武将,跳过省读盘)
+  let folders = []
+  try {
+    folders = (await readdir(extRootOf(nonameDir), { withFileTypes: true }))
+      .filter((d) => d.isDirectory()).map((d) => d.name)
+  } catch { /* 没有 extension 目录就只出自带包 */ }
+  for (const folder of folders) {
+    if (folder === '联机助手') continue
+    try {
+      const r = await listEntries(nonameDir, folder, 'character')
+      if (r.ok) {
+        for (const e of r.entries) {
+          add(e.id)
+          if (e.name && !names.has(e.id)) names.set(e.id, e.name)
+        }
+      }
+    } catch { /* 单个扩展解析失败不拖垮整个列表 */ }
+  }
+  const list = ids.map((id) => ({ id, name: names.get(id) || '' }))
+  list.sort((a, b) => {
+    const an = a.name || a.id
+    const bn = b.name || b.id
+    try { return an.localeCompare(bn, 'zh-Hans-CN') } catch { return an < bn ? -1 : 1 }
+  })
+  return list
 }

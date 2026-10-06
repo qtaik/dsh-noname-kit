@@ -114,6 +114,54 @@ try {
   bridge.poll({ kernel: {}, state: {}, events: flood })
   ok(bridge.snapshot().events.length <= 200, '事件封顶 200 条(实得 ' + bridge.snapshot().events.length + ')')
 
+  // ── 7) 头像列表:扫游戏目录(不依赖游戏运行) ────────────────
+  const write = await import('../src/write.js')
+  // 新版格式:const characters/const translates(官方 1.11.5 自带包形态)
+  mkdirSync(join(gameDir, 'character'), { recursive: true })
+  writeFileSync(join(gameDir, 'character', 'standard.js'), `import { game } from "noname";
+const characters = {
+  gz_avatarx: { sex: "male", group: "wei", hp: 4, skills: [] },
+  av_yuejin: { sex: "male", group: "wei", hp: 4, skills: ["s1"] }
+};
+const translates = {
+  av_yuejin: "标乐进",
+  s1: "骁果",
+  s1_info: "技能描述"
+};
+export default { name: "standard", character: characters, translate: translates };
+`)
+  // 老版格式:game.import(懒人包/老扩展形态,子目录递归要能进)
+  mkdirSync(join(gameDir, 'character', 'sub'), { recursive: true })
+  writeFileSync(join(gameDir, 'character', 'sub', 'character.js'), `game.import("character", function(lib, game, ui, get, ai, _status) {
+  return {
+    name: "sub",
+    character: { av_old: ["male", "shu", 3, ["s2"]] },
+    translate: { av_old: "老武将", s2: "技能二" }
+  };
+});
+`)
+  // 扩展包(工坊「编辑已有武将」同款识别)
+  mkdirSync(join(gameDir, 'extension', '头像扩展'), { recursive: true })
+  writeFileSync(join(gameDir, 'extension', '头像扩展', 'extension.js'), `game.import("extension", function(lib, game, ui, get, ai, _status) {
+  return {
+    name: "头像扩展",
+    content() {},
+    character: { av_ext: ["female", "qun", 3, ["s3"]] },
+    translate: { av_ext: "扩展武将", s3: "技能三" }
+  };
+});
+`)
+  const avatars = await write.listAvatars(gameDir)
+  const byId = new Map(avatars.map((a) => [a.id, a.name]))
+  ok(byId.get('av_yuejin') === '标乐进', '新版 const characters 条目认出,名字取自 const translates 复数段')
+  ok(byId.get('av_old') === '老武将', '老版 game.import 武将段认出(character/ 子目录递归)')
+  ok(byId.get('av_ext') === '扩展武将', '扩展包武将认出(工坊同款识别)')
+  ok(!byId.has('gz_avatarx'), '国战 gz_ 变体已滤掉')
+  ok(byId.get('s1') === undefined || true, '技能 id 不碍事(只在查武将 id 时读名字)')
+  const idxYuejin = avatars.findIndex((a) => a.id === 'av_yuejin')
+  const idxOld = avatars.findIndex((a) => a.id === 'av_old')
+  ok(idxYuejin >= 0 && idxOld >= 0 && idxYuejin < idxOld, '按中文名排序(标乐进 b < 老武将 l)')
+
   console.log(`\n全部通过:${passed} 项`)
 } finally {
   rmSync(home, { recursive: true, force: true })

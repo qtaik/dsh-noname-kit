@@ -22,7 +22,7 @@ import { KNOWLEDGE_TEXT } from './src/knowledge.js'
 import { validateExtensionCode } from './src/validate.js'
 import { searchReference } from './src/reference.js'
 import { detectCandidates } from './src/detect.js'
-import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateExtension, prunePackageBackups, listEntries, listEntrySkills } from './src/write.js'
+import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateExtension, prunePackageBackups, listEntries, listEntrySkills, listAvatars } from './src/write.js'
 import { readHistory, archiveTask, listExtensionHistories, recordBackup, deleteNote } from './src/history.js'
 import { copyImages } from './src/images.js'
 import { listExtensionFolders } from './src/detect.js'
@@ -200,6 +200,8 @@ export function apply(ctx, config) {
   // 该文件在 dsh 家目录、跟游戏目录无关——换目录/重装内核不丢,内核上线时自动补发)
   let savedIdentity = readSettingsFile().onlineIdentity || null
   const bridge = createBridgeSession({ token: bridgeToken, identitySource: () => savedIdentity })
+  // 头像列表缓存(工坊「👤 人物标识」下拉):扫游戏目录的结果,见 /online/avatars
+  const avatarsCache = { at: 0, list: null }
 
   // ── 1) 常驻规范知识(文本随配置状态动态生成) ─────────────────
   // POSIX 形式路径:模型在 bash 里习惯 /d/... 写法,直接给两种形式免得它自己转换/寻找
@@ -886,6 +888,21 @@ export function apply(ctx, config) {
             console.log(`[noname-kit] 联机内核已安装到 ${result.target}(重启游戏生效)${result.backup ? `,旧版备份到 ${result.backup}` : ''}`)
           }
           return json(result.ok ? 200 : 400, { ...result, version: bundledKernelVersion() })
+        }
+        if (req.method === 'GET' && url.pathname === '/noname-kit-api/online/avatars') {
+          // 人物标识的头像下拉:直接扫游戏目录(自带包+扩展包),不依赖游戏运行。
+          // 扫全盘 1 秒级,缓存 5 分钟(空结果 30 秒重试,兼容目录还没就绪)。
+          if (!active) return json(503, { ok: false, avatars: [], error: 'noname-kit 未配置 nonameDir' })
+          const ttl = avatarsCache.list && avatarsCache.list.length ? 5 * 60_000 : 30_000
+          if (!avatarsCache.list || Date.now() - avatarsCache.at > ttl) {
+            try {
+              avatarsCache.list = await listAvatars(nonameDir)
+              avatarsCache.at = Date.now()
+            } catch (error) {
+              return json(200, { ok: false, avatars: [], error: `扫描武将失败: ${error.message}` })
+            }
+          }
+          return json(200, { ok: true, avatars: avatarsCache.list })
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/online/command') {
           const body = await readBody()

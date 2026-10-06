@@ -1068,6 +1068,17 @@ window.__ModuleLoader__.load({
       var avFilter = avFilterState[0], setAvFilter = avFilterState[1];
       var idCfgKeyState = React.useState(null);
       var idCfgKey = idCfgKeyState[0], setIdCfgKey = idCfgKeyState[1];
+      /* 头像列表:插件直接扫游戏目录(自带包+扩展包),开不开游戏都有;
+       * null=加载中,字符串=失败原因 */
+      var avListState = React.useState(null);
+      var avatarList = avListState[0], setAvatarList = avListState[1];
+      React.useEffect(function () {
+        var alive = true;
+        fetch('/noname-kit-api/online/avatars').then(function (r) { return r.json() }).then(function (d) {
+          if (alive) setAvatarList(d.ok ? (d.avatars || []) : (d.error || '扫描失败'));
+        }, function () { if (alive) setAvatarList('插件服务不可达'); });
+        return function () { alive = false; };
+      }, []);
       React.useEffect(function () {
         var alive = true;
         var tick = function () {
@@ -1141,8 +1152,7 @@ window.__ModuleLoader__.load({
       }
 
       function renderIdentityCard() {
-        var listEv = onlinePickEvent(evs, 'avatar_list');
-        var avatars = (listEv && listEv.data && listEv.data.list) || [];
+        var avatars = Array.isArray(avatarList) ? avatarList : [];
         var kw = avFilter.trim().toLowerCase();
         var filtered = kw ? avatars.filter(function (a) {
           return a.name.toLowerCase().indexOf(kw) >= 0 || a.id.toLowerCase().indexOf(kw) >= 0;
@@ -1150,26 +1160,29 @@ window.__ModuleLoader__.load({
         var known = avatars.some(function (a) { return a.id === idAvatar; });
         return h('div', { className: 'nnk-card' },
           e('div', null, h('b', null, '👤 人物标识')),
-          e('div', 'nnk-hint', '用户名 = 朋友看到的名字,也是游戏内联机昵称;头像下拉选一个武将形象。保存后游戏内即时生效(对方屏幕上的头像下一局生效)。'),
+          e('div', 'nnk-hint', '用户名 = 朋友看到的名字,也是游戏内联机昵称;头像下拉选一个武将形象(列表直接读游戏目录,不用开游戏)。保存后游戏内即时生效(对方屏幕上的头像下一局生效)。'),
           h('div', { style: { marginTop: '8px' } },
             e('div', 'nnk-label', '用户名(最长 12 字,留空用游戏内设置)'),
             h('input', { className: 'nnk-input', value: idName, maxLength: 12, placeholder: '例: 大将军', onChange: function (ev) { setIdName(ev.target.value) } })),
           h('div', { style: { marginTop: '8px' } },
             e('div', 'nnk-label', '头像(选武将,留「不设置」用游戏内默认)'),
-            avatars.length
-              ? h('div', {},
-                h('input', { className: 'nnk-input', value: avFilter, placeholder: '打字过滤,如: 曹 / 吕 / sp', onChange: function (ev) { setAvFilter(ev.target.value) } }),
-                h('select', {
-                  className: 'nnk-input', style: { marginTop: '4px' },
-                  value: known || !idAvatar ? idAvatar : '__nnk_keep',
-                  onChange: function (ev) { if (ev.target.value !== '__nnk_keep') setIdAvatar(ev.target.value) }
-                },
-                  h('option', { key: '', value: '' }, '不设置(用游戏内默认)'),
-                  !known && idAvatar ? h('option', { key: '__nnk_keep', value: '__nnk_keep' }, idAvatar + '(当前,列表里没有)') : null,
-                  filtered.map(function (a) { return h('option', { key: a.id, value: a.id }, a.name); })))
-              : e('div', 'nnk-hint', bridgeOnline
-                ? '头像列表还没就绪——游戏进到主菜单后几秒内自动就绪。'
-                : '内核离线(启动游戏后加载头像列表);现在也能先填好保存,内核上线自动补发。')),
+            avatarList === null
+              ? e('div', 'nnk-hint', '正在扫描游戏目录里的武将…(首次约一两秒)')
+              : !Array.isArray(avatarList)
+                ? e('div', 'nnk-err', '❌ 头像列表加载失败: ' + avatarList)
+                : avatars.length === 0
+                  ? e('div', 'nnk-hint', '没扫到武将——确认「⚙ 设置」里的游戏目录指向游戏本体(下面要有 character 文件夹和 extension 文件夹)。')
+                  : h('div', {},
+                    h('input', { className: 'nnk-input', value: avFilter, placeholder: '打字过滤,如: 曹 / 吕 / sp', onChange: function (ev) { setAvFilter(ev.target.value) } }),
+                    h('select', {
+                      className: 'nnk-input', style: { marginTop: '4px' },
+                      value: known || !idAvatar ? idAvatar : '__nnk_keep',
+                      onChange: function (ev) { if (ev.target.value !== '__nnk_keep') setIdAvatar(ev.target.value) }
+                    },
+                      h('option', { key: '', value: '' }, '不设置(用游戏内默认)'),
+                      !known && idAvatar ? h('option', { key: '__nnk_keep', value: '__nnk_keep' }, idAvatar + '(当前,列表里没有)') : null,
+                      filtered.map(function (a) { return h('option', { key: a.id, value: a.id }, a.name || a.id); }))),
+            !known && idAvatar && avatarList !== null && Array.isArray(avatarList) && avatars.length ? e('div', 'nnk-hint', '当前保存的头像「' + idAvatar + '」不在本机列表里(可能扩展已删),保存别的武将会覆盖它。') : null),
           h('div', { className: 'nnk-row', style: { marginTop: '8px' } },
             h('button', { className: 'nnk-submit', style: { marginTop: '0' }, onClick: function () {
               setNote(bridgeOnline ? '已发送,游戏内即时生效' : '已保存到本机,内核上线后自动补发');
@@ -1312,7 +1325,7 @@ window.__ModuleLoader__.load({
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '📡 动态')),
               h('div', { className: 'nnk-log' }, evs.length
-                ? evs.filter(function (ev2) { return ev2.type !== 'avatar_list'; }).slice(-8).reverse().map(function (ev, i) {
+                ? evs.slice(-8).reverse().map(function (ev, i) {
                   return e('div', { key: i, className: 'nnk-break' }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
                 })
                 : e('div', { className: 'nnk-hint' }, '暂无动态——建房/加入/扩展报错都会显示在这里。'))))
