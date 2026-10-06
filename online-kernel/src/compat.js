@@ -453,6 +453,20 @@
 	nnk.modules.compat = {
 		install: function() {
 			unlockExtensions();
+			/* 包池解锁的三个时机,层层兜底(真机实证:联机菜单页在 connect 启动
+			 * 时一次性构建,晚于包解析、早于 switchMode——必须赶在菜单构建前):
+			 * 时机一 arenaReady——arena 建好、联机菜单未构建(主时机);
+			 * 时机二 switchMode——房间配置快照前;
+			 * 时机三 createServer——软服务器启动(兜底)。 */
+			try {
+				if (Array.isArray(nnk.env.lib.arenaReady)) {
+					nnk.env.lib.arenaReady.push(function() {
+						if (enabled()) {
+							unlockPacks();
+						}
+					});
+				}
+			} catch (e) { /* 忽略 */ }
 			/* 包池解锁必须赶在引擎快照之前:switchMode 组装房间配置时会把
 			 * connectCharacterPack slice 成 configOL.characterPack(真机实证:
 			 * 解锁挂在 createServer 里晚于快照,自定义武将/卡牌进不了房间) */
