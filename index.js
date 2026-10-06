@@ -199,7 +199,12 @@ export function apply(ctx, config) {
   // 人物标识:工坊「👤 人物标识」保存的联机身份(内存缓存 + 落盘 noname-kit.json,
   // 该文件在 dsh 家目录、跟游戏目录无关——换目录/重装内核不丢,内核上线时自动补发)
   let savedIdentity = readSettingsFile().onlineIdentity || null
-  const bridge = createBridgeSession({ token: bridgeToken, identitySource: () => savedIdentity })
+  // 自定义信令服务器(联机页「📡 信令服务器」):null = 不覆盖(各游戏目录用自己的值)
+  let savedSignaling = readSettingsFile().onlineSignaling || null
+  const bridge = createBridgeSession({
+    token: bridgeToken,
+    syncSource: () => ({ identity: savedIdentity, mqttUrl: savedSignaling ? savedSignaling.mqttUrl : '' }),
+  })
   // 头像列表缓存(工坊「👤 人物标识」下拉):扫游戏目录的结果,见 /online/avatars
   const avatarsCache = { at: 0, list: null }
 
@@ -908,6 +913,20 @@ export function apply(ctx, config) {
           const body = await readBody()
           const actions = new Set(['create_room', 'join_room', 'invite_refresh', 'accept_answer', 'join_invite', 'transfer_pack', 'clear_quarantine', 'set_config', 'set_identity', 'cancel'])
           if (!actions.has(body.action)) return json(400, { ok: false, error: `未知命令: ${body.action}` })
+          if (body.action === 'set_config' && body.args?.key === 'mqttUrl') {
+            // 自定义信令服务器:ws(s):// 开头才收;存 noname-kit.json 跨游戏目录
+            const url = String(body.args.value || '').trim().slice(0, 200)
+            if (url && !/^wss?:\/\//i.test(url)) {
+              return json(400, { ok: false, error: `信令地址必须是 ws:// 或 wss:// 开头的 WebSocket 地址,收到「${url.slice(0, 60)}」` })
+            }
+            savedSignaling = url ? { mqttUrl: url } : null
+            const next = readSettingsFile()
+            if (savedSignaling) next.onlineSignaling = savedSignaling
+            else delete next.onlineSignaling
+            try { writeFileSync(settingsPath, JSON.stringify(next, null, 2), 'utf8') } catch { /* 写不进只影响跨目录补发 */ }
+            console.log(`[noname-kit] 联机信令服务器已保存: ${url || '(恢复默认)'}`)
+            body.args = { key: 'mqttUrl', value: url }
+          }
           if (body.action === 'set_identity') {
             // 人物标识:名字截 12 字(引擎同款)、头像武将 id 截 24,内核还会做存在性校验
             const name = String(body.args?.name || '').trim().slice(0, 12)

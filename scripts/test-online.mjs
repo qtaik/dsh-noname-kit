@@ -94,7 +94,7 @@ try {
 
   // 人物标识离线补发:cfg 与保存值不一致时补发一次 set_identity,追平后不再发
   let saved = { name: '大将军', avatar: 'caocao' }
-  const bridge2 = online.createBridgeSession({ token: 't2', identitySource: () => saved })
+  const bridge2 = online.createBridgeSession({ token: 't2', syncSource: () => ({ identity: saved }) })
   resp = bridge2.poll({ kernel: {}, state: {}, cfg: { onlineName: '', onlineAvatar: '' }, events: [] })
   ok(resp.commands.length === 1 && resp.commands[0].action === 'set_identity' && resp.commands[0].args.name === '大将军' && resp.commands[0].args.avatar === 'caocao', '身份不一致自动补发 set_identity')
   resp = bridge2.poll({ kernel: {}, state: {}, cfg: { onlineName: '', onlineAvatar: '' }, events: [] })
@@ -106,7 +106,20 @@ try {
   ok(resp.commands.length === 1 && resp.commands[0].action === 'set_identity' && resp.commands[0].args.name === '无名玩家' && resp.commands[0].args.avatar === '', '保存值变化后会再次补发')
   const bridge3 = online.createBridgeSession({ token: 't3' })
   resp = bridge3.poll({ kernel: {}, state: {}, cfg: { onlineName: 'x', onlineAvatar: 'y' }, events: [] })
-  ok(resp.commands.length === 0, '无 identitySource 不补发')
+  ok(resp.commands.length === 0, '无 syncSource 不补发')
+
+  // 自定义信令服务器离线补发(空值 = 不覆盖,跟随各游戏目录自己的值)
+  let sig = 'wss://my.broker/mqtt'
+  const bridge4 = online.createBridgeSession({ token: 't4', syncSource: () => ({ mqttUrl: sig }) })
+  resp = bridge4.poll({ kernel: {}, state: {}, cfg: { mqttUrl: 'wss://default.example/mqtt' }, events: [] })
+  ok(resp.commands.length === 1 && resp.commands[0].action === 'set_config' && resp.commands[0].args.key === 'mqttUrl' && resp.commands[0].args.value === 'wss://my.broker/mqtt', '信令地址不一致自动补发 set_config')
+  resp = bridge4.poll({ kernel: {}, state: {}, cfg: { mqttUrl: 'wss://default.example/mqtt' }, events: [] })
+  ok(resp.commands.length === 0, '同一信令地址只补发一次')
+  resp = bridge4.poll({ kernel: {}, state: {}, cfg: { mqttUrl: 'wss://my.broker/mqtt' }, events: [] })
+  ok(resp.commands.length === 0, '信令地址追平后不再补发')
+  sig = ''
+  resp = bridge4.poll({ kernel: {}, state: {}, cfg: { mqttUrl: 'wss://my.broker/mqtt' }, events: [] })
+  ok(resp.commands.length === 0, '清空信令 = 不覆盖,不补发')
 
   // 事件上限 200
   const flood = []

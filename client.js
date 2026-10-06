@@ -1068,6 +1068,8 @@ window.__ModuleLoader__.load({
       var avFilter = avFilterState[0], setAvFilter = avFilterState[1];
       var idCfgKeyState = React.useState(null);
       var idCfgKey = idCfgKeyState[0], setIdCfgKey = idCfgKeyState[1];
+      var sigUrlState = React.useState('');
+      var sigUrl = sigUrlState[0], setSigUrl = sigUrlState[1];
       /* 头像列表:插件直接扫游戏目录(自带包+扩展包),开不开游戏都有;
        * null=加载中,字符串=失败原因 */
       var avListState = React.useState(null);
@@ -1098,11 +1100,12 @@ window.__ModuleLoader__.load({
       React.useEffect(function () {
         var cfg = status && status.bridge && status.bridge.cfg;
         if (!cfg) return;
-        var key = (cfg.onlineName || '') + '|' + (cfg.onlineAvatar || '');
+        var key = (cfg.onlineName || '') + '|' + (cfg.onlineAvatar || '') + '|' + (cfg.mqttUrl || '');
         if (key !== idCfgKey) {
           setIdCfgKey(key);
           setIdName(cfg.onlineName || '');
           setIdAvatar(cfg.onlineAvatar || '');
+          setSigUrl(cfg.mqttUrl || '');
         }
       });
       var sendCmd = function (action, args) {
@@ -1154,6 +1157,25 @@ window.__ModuleLoader__.load({
         return renderOnlinePanel();
       } catch (renderErr) {
         return e('div', 'nnk-err', '❌ 联机页渲染出错: ' + ((renderErr && renderErr.message) || renderErr) + ' —— 请截图本行文字与当时的操作发给开发者');
+      }
+
+      function renderSignalingCard() {
+        var effective = (bridge.cfg && bridge.cfg.mqttUrl) || '';
+        return h('div', { className: 'nnk-card' },
+          e('div', null, h('b', null, '📡 信令服务器(可选)')),
+          e('div', 'nnk-hint', '房号方式的牵线中转(只过加密后的连接信息,游戏数据仍是点对点直连)。双方必须用同一个信令服务器才能互相看到——都不填即用同一个默认公共服务器;默认服务器连不上时可换成自建或其它公共 MQTT 的 ws 地址。改完下次建房生效。'),
+          h('div', { style: { marginTop: '8px' } },
+            e('div', 'nnk-label', 'MQTT over WebSocket 地址(ws:// 或 wss:// 开头,留空用默认)'),
+            h('input', { className: 'nnk-input', value: sigUrl, placeholder: '默认 wss://broker.emqx.io:8084/mqtt', onChange: function (ev) { setSigUrl(ev.target.value) } })),
+          effective ? e('div', 'nnk-hint', '当前生效:' + effective) : null,
+          h('div', { className: 'nnk-row', style: { marginTop: '8px' } },
+            h('button', { className: 'nnk-copy', onClick: function () {
+              var v = sigUrl.trim();
+              if (v && !/^wss?:\/\//i.test(v)) { setNote('❌ 地址必须以 ws:// 或 wss:// 开头'); return; }
+              setNote(v ? '已发送,下次建房生效' : '已发送恢复默认,下次建房生效');
+              sendCmd('set_config', { key: 'mqttUrl', value: v });
+            } }, '💾 保存信令地址'),
+            (sigUrl.trim() || effective) ? h('button', { className: 'nnk-copy', onClick: function () { setSigUrl(''); sendCmd('set_config', { key: 'mqttUrl', value: '' }) } }, '↩️ 恢复默认') : null));
       }
 
       function renderIdentityCard() {
@@ -1330,6 +1352,7 @@ window.__ModuleLoader__.load({
                     : null)
                 : h('button', { className: 'nnk-copy', onClick: function () { setShowInviteFallback(true) } }, '房号连不上?换邀请码方式(备用)…')),
             renderManifestCard(evs, hostFlow),
+            renderSignalingCard(),
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '📡 动态')),
               h('div', { className: 'nnk-log' }, evs.length

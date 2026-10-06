@@ -63,10 +63,20 @@
 					}
 					break;
 				case "set_config": {
-					/* 只放行允许工坊改的内核配置键,值做强转 */
-					var allowed = { unlockUIExtensions: "boolean", autoUnlockExtensions: "boolean" };
+					/* 只放行允许工坊改的内核配置键,值按类型强转 */
+					var allowed = { unlockUIExtensions: "boolean", autoUnlockExtensions: "boolean", mqttUrl: "string" };
 					if (allowed.hasOwnProperty(args.key)) {
-						nnk.modules.config.set(args.key, args.value === true);
+						if (allowed[args.key] === "string") {
+							var strVal = String(args.value == null ? "" : args.value).slice(0, 200);
+							if (args.key === "mqttUrl" && strVal && !/^wss?:\/\//i.test(strVal)) {
+								emit("error", { message: "信令地址必须是 ws:// 或 wss:// 开头的 WebSocket 地址: " + strVal });
+								break;
+							}
+							/* 空值 = 恢复默认(空串存进去会让 config.get 绕过 DEFAULTS) */
+							nnk.modules.config.set(args.key, strVal || nnk.modules.config.defaults[args.key]);
+						} else {
+							nnk.modules.config.set(args.key, args.value === true);
+						}
 					} else {
 						emit("error", { message: "不允许修改的配置: " + args.key });
 					}
@@ -133,7 +143,9 @@
 					root: !!(nnk.modules.compat && nnk.modules.compat.gameRoot()),
 					/* 人物标识:工坊靠它回填输入框、插件靠它判断要不要离线补发 */
 					onlineName: String(nnk.modules.config.get("onlineName") || ""),
-					onlineAvatar: String(nnk.modules.config.get("onlineAvatar") || "")
+					onlineAvatar: String(nnk.modules.config.get("onlineAvatar") || ""),
+					/* 信令服务器当前生效值(自定义或默认) */
+					mqttUrl: String(nnk.modules.config.get("mqttUrl") || "")
 				},
 				events: events.splice(0, events.length)
 			})
