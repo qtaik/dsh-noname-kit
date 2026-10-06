@@ -483,6 +483,65 @@
 				};
 				env.game.switchMode.__nnkPackUnlock = true;
 			}
+			/* 模式页右侧面板补建:引擎的模式面板是懒构建(点标签才生成),无头
+			 * 建房没人点过,进房后其它模式面板被移除、房间模式面板不存在→空白。
+			 * 包装 ui.click.connectMenu(菜单打开)后自动补建房间模式的面板 */
+			try {
+				var clickTarget = env.ui.click;
+				if (clickTarget && !clickTarget.__nnkMenuPatched) {
+					var rawConnectMenu = clickTarget.connectMenu || null;
+					var wrappedMenu = null;
+					var ensureModePane = function() {
+						try {
+							var cfgOL = env.lib.configOL;
+							var mode = cfgOL && cfgOL.mode;
+							if (!mode || !env._status.waitingForPlayer) {
+								return;
+							}
+							var container = env.ui.connectMenuContainer;
+							if (!container) {
+								return;
+							}
+							var all = container.getElementsByTagName("*");
+							for (var i = 0; i < all.length; i++) {
+								var node = all[i];
+								if (node.mode === mode && typeof node._initLink === "function") {
+									node.classList.add("active");
+									if (!node.link) {
+										node._initLink();
+									}
+									if (node.link && node.parentNode && node.parentNode.nextSibling) {
+										node.parentNode.nextSibling.appendChild(node.link);
+									}
+									break;
+								}
+							}
+						} catch (e) { /* 忽略 */ }
+					};
+					Object.defineProperty(clickTarget, "connectMenu", {
+						configurable: true,
+						get: function() {
+							if (rawConnectMenu && !wrappedMenu) {
+								wrappedMenu = function() {
+									var ret = rawConnectMenu.apply(this, arguments);
+									try {
+										if (env._status && env._status.waitingForPlayer) {
+											setTimeout(ensureModePane, 30);
+										}
+									} catch (e) { /* 忽略 */ }
+									return ret;
+								};
+							}
+							return wrappedMenu || rawConnectMenu;
+						},
+						set: function(v) {
+							rawConnectMenu = v;
+							wrappedMenu = null;
+						}
+					});
+					clickTarget.__nnkMenuPatched = true;
+				}
+			} catch (e) { /* 忽略 */ }
 			shimInfoMap();
 			guardHooks();
 			guardErrorPopup();

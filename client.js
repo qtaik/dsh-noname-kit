@@ -1023,6 +1023,9 @@ window.__ModuleLoader__.load({
           if (pk.excluded && pk.excluded.length) {
             line += ' | ⚠️ 被排除的武将包:' + pk.excluded.join('、');
           }
+          if (pk.cardsConnect) {
+            line += ' || 连接卡牌包池(' + pk.cardsConnect.length + '):' + (pk.cardsConnect.join('、') || '空');
+          }
           if (pk.all && pk.all.length !== pk.connect.length) {
             line += ' | 全部包(' + pk.all.length + '):' + pk.all.join('、');
           }
