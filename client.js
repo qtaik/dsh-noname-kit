@@ -1074,8 +1074,13 @@ window.__ModuleLoader__.load({
       var avatarList = avListState[0], setAvatarList = avListState[1];
       React.useEffect(function () {
         var alive = true;
-        fetch('/noname-kit-api/online/avatars').then(function (r) { return r.json() }).then(function (d) {
-          if (alive) setAvatarList(d.ok ? (d.avatars || []) : (d.error || '扫描失败'));
+        fetch('/noname-kit-api/online/avatars').then(function (r) {
+          return r.json().then(function (d) { return { code: r.status, d: d } });
+        }).then(function (res) {
+          if (!alive) return;
+          if (res.d && res.d.ok) setAvatarList(res.d.avatars || []);
+          else if (res.code === 404) setAvatarList('这个 dsh 实例还在跑旧版代码(没有本接口)——重启 dsh 后刷新本页即可');
+          else setAvatarList((res.d && res.d.error) || '扫描失败');
         }, function () { if (alive) setAvatarList('插件服务不可达'); });
         return function () { alive = false; };
       }, []);
