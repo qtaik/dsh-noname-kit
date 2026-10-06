@@ -24,6 +24,10 @@ window.__ModuleLoader__.load({
       '.nnk-input:focus,.nnk-textarea:focus{outline:none;border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 2px rgba(0,0,0,.06)}',
       '.nnk-textarea{min-height:88px;resize:vertical;font-family:inherit}',
       '.nnk-code{font-family:Consolas,monospace;font-size:12px;min-height:140px;white-space:pre;overflow:auto}',
+      '.nnk-modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px}',
+      '.nnk-modal{background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:var(--nnk-r);box-shadow:0 12px 48px rgba(0,0,0,.35);width:580px;max-width:100%;max-height:88vh;overflow:auto;padding:18px 20px}',
+      '.nnk-modal-title{font-size:16px;font-weight:700;margin-bottom:4px}',
+      '.nnk-modal-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}',
       '.nnk-radio{display:inline-flex;align-items:center;gap:6px;margin:0;padding:6px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:13px;cursor:pointer;transition:border-color var(--nnk-t),color var(--nnk-t),background var(--nnk-t);user-select:none}',
       '.nnk-radio:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary)}',
       '.nnk-radio.nnk-radio-on{border-color:transparent;background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary));color:var(--dsw-alias-label-primary-foreground,var(--dsw-alias-bg-layer-1))}',
@@ -1070,6 +1074,11 @@ window.__ModuleLoader__.load({
       var idCfgKey = idCfgKeyState[0], setIdCfgKey = idCfgKeyState[1];
       var sigUrlState = React.useState('');
       var sigUrl = sigUrlState[0], setSigUrl = sigUrlState[1];
+      /* 码交接弹窗的关闭标记:同一张码关了不再弹,换新码(重试/重生成)才再弹 */
+      var invPopState = React.useState('');
+      var invitePopupDismissed = invPopState[0], setInvitePopupDismissed = invPopState[1];
+      var ansPopState = React.useState('');
+      var answerPopupDismissed = ansPopState[0], setAnswerPopupDismissed = ansPopState[1];
       /* 头像列表:插件直接扫游戏目录(自带包+扩展包),开不开游戏都有;
        * null=加载中,字符串=失败原因 */
       var avListState = React.useState(null);
@@ -1160,6 +1169,43 @@ window.__ModuleLoader__.load({
         return renderOnlinePanel();
       } catch (renderErr) {
         return e('div', 'nnk-err', '❌ 联机页渲染出错: ' + ((renderErr && renderErr.message) || renderErr) + ' —— 请截图本行文字与当时的操作发给开发者');
+      }
+
+      /* 码交接弹窗:邀请码/回执码生成是最容易错过的时刻,光靠一行阶段文案
+       * 不够(实测反馈),直接弹到屏幕中间。关了不重复弹,换新码才再弹;
+       * 阶段推进(连接中/进房中)自动消失,卡片里的同款操作仍可用 */
+      function renderCodeModal(opts) {
+        return h('div', { className: 'nnk-modal-mask', onClick: function (ev) { if (ev.target === ev.currentTarget) opts.onClose() } },
+          h('div', { className: 'nnk-modal' },
+            e('div', 'nnk-modal-title', opts.title),
+            opts.body,
+            h('div', { className: 'nnk-modal-actions' },
+              h('button', { className: 'nnk-copy', onClick: opts.onClose }, '收起(下方卡片里仍可操作)'))));
+      }
+      function renderInviteModal(code) {
+        return renderCodeModal({
+          title: '📨 邀请码已生成——发给朋友',
+          onClose: function () { setInvitePopupDismissed(code) },
+          body: h('div', {},
+            e('div', 'nnk-hint', '1. 点「复制」把整段邀请码发给朋友;2. 朋友在「我要加入 → 备用」粘贴,把生成的「回执码」发回给你;3. 回执码粘到下面,点「连接」。'),
+            e('div', 'nnk-label', '邀请码(整段复制)'),
+            h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: code }),
+            h('button', { className: 'nnk-copy', onClick: function () { copyText(code) } }, '📋 复制邀请码'),
+            e('div', 'nnk-label', '朋友回发的「回执码」粘贴到这里'),
+            h('textarea', { className: 'nnk-textarea nnk-code', value: answerText, onChange: function (ev) { setAnswerText(ev.target.value) }, placeholder: '粘贴客人的回执码…' }),
+            h('button', { className: 'nnk-copy', onClick: function () { sendCmd('accept_answer', { code: answerText }) } }, '🔗 连接'))
+        });
+      }
+      function renderAnswerModal(code) {
+        return renderCodeModal({
+          title: '📨 回执码已生成——发回给房主',
+          onClose: function () { setAnswerPopupDismissed(code) },
+          body: h('div', {},
+            e('div', 'nnk-hint', '把回执码整段发给房主,房主粘贴后点「连接」,直连打通后自动进房。房主没回音时在工坊动态看进度。'),
+            e('div', 'nnk-label', '回执码(整段复制)'),
+            h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: code }),
+            h('button', { className: 'nnk-copy', onClick: function () { copyText(code) } }, '📋 复制回执码'))
+        });
       }
 
       function renderSignalingCard() {
@@ -1373,7 +1419,11 @@ window.__ModuleLoader__.load({
             '3. 游戏里出现等待房间(房主座位已就位),朋友进房后主机在游戏里点「开始游戏」。\n' +
             '禁将/武将包/卡牌包/人数:游戏内等待房间右上角点「房间设置」打开模式菜单,改完点「启」自动广播到全房。'),
           e('div', 'nnk-hint', '房号模式经国内可达的公共信令服务器交换连接信息(载荷按房号加密,点对点直连、无需公网 IP);个别网络(如手机热点)打不通时换个网络再试,或改用邀请码兜底。无人大厅在后续版本。')),
-        note ? e('div', { className: note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err' }, note) : null
+        note ? e('div', { className: note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err' }, note) : null,
+        phase === 'invite_ready' && inviteEv && (inviteEv.data && inviteEv.data.code) && invitePopupDismissed !== inviteEv.data.code
+          ? renderInviteModal(inviteEv.data.code) : null,
+        phase === 'answer_ready' && answerEv && (answerEv.data && answerEv.data.code) && answerPopupDismissed !== answerEv.data.code
+          ? renderAnswerModal(answerEv.data.code) : null
         );
       }
     }
