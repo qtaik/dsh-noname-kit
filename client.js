@@ -1293,6 +1293,9 @@ window.__ModuleLoader__.load({
                   : phase === 'mqtt_waiting' ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一个房号')
                   : (phase === 'invite_ready' || phase === 'connecting') ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一张邀请码重试')
                   : null),
+              !hostFlow && !guestFlow
+                ? h('button', { className: 'nnk-copy', disabled: !bridgeOnline, onClick: function () { setAnswerText(''); setOfferText(''); sendCmd('create_room', { mode: mode, signaling: 'invite' }) } }, '📨 房号反复连不上?改用邀请码方式建房(备用)')
+                : null,
               !bridgeOnline ? e('div', 'nnk-hint', '内核离线(先启动游戏)') : null,
               roomCode && (phase === 'hosting' || phase === 'mqtt_waiting' || phase === 'connecting' || phase === 'room_open') && !inviteEv
                 ? h('div', { style: { marginTop: '10px' } },

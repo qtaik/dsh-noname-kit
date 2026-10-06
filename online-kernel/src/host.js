@@ -139,7 +139,10 @@
 		};
 		pc.onconnectionstatechange = function() {
 			if (pc.connectionState === "failed") {
-				bridgeApi().emit("error", { message: "一位客人的直连建立失败(网络没打通),需要其重新加入" });
+				/* failed 是终态且本侧不做 ICE restart,半死 pc 必须关掉,
+				 * 否则客人每重试一次就漏一个连接对象 */
+				try { pc.close(); } catch (e2) { /* 忽略 */ }
+				bridgeApi().emit("error", { message: "一位客人的直连建立失败(双方网络没打通),需要其重新加入——房号反复失败,主机可改用邀请码方式建房" });
 			}
 		};
 		pc.setRemoteDescription(msg.sdp).then(function() {
