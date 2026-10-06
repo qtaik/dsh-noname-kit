@@ -69,6 +69,26 @@
 		guestState.session = null;
 	}
 
+	/* 同房号自动重进(打完一把主机端重组后):连接突然断开且对局已结束,
+	 * 说明房主正在重载重建同一房间——隔几秒用原房号再敲一次门,给主机
+	 * 重载重建留出时间;次数用完或用户已离开就明说,引导手动重进 */
+	function autoRejoin(code, attempts) {
+		var env = nnk.env;
+		if (attempts <= 0 || !env._status.connectMode) {
+			bridgeApi().setPhase("idle");
+			bridgeApi().emit("error", { message: "自动重回房间失败——请手动输入房号 " + code + " 重进" });
+			return;
+		}
+		bridgeApi().emit("info", { message: "房主正在重组房间,自动重回 " + code + "(第 " + (9 - attempts) + " 次尝试)…" });
+		api.joinByRoomCode(code);
+		setTimeout(function() {
+			if (guestState.session && guestState.session.code === code) {
+				return;   /* 这次尝试还在连接中或已连上,交给它自己走完 */
+			}
+			autoRejoin(code, attempts - 1);
+		}, 4000);
+	}
+
 	/*
 	 * 客人加入的前置:联机界面元素(ui.control/arenalog 等)只在 mode=connect
 	 * 开机时由引擎构建——从离线主菜单直接接线,引擎收到服务器的 init 包就会
@@ -247,6 +267,7 @@
 			var fake = new rtc.FakeWebSocket(channel);
 			session.fake = fake;
 			fake.onUp(function() {
+				session.wasIn = true;
 				if (session.autoConnect) {
 					connectNow();
 				}
@@ -254,6 +275,12 @@
 			fake.onDown(function() {
 				if (guestState.session === session) {
 					guestState.session = null;
+					/* 打完一把主机端重组:连接突然断开且对局已结束,自动同房号重进 */
+					if (session.wasIn && session.code && nnk.env._status.over && nnk.env._status.connectMode) {
+						bridgeApi().setPhase("joining", { code: session.code });
+						autoRejoin(session.code, 8);
+						return;
+					}
 					bridgeApi().setPhase("idle");
 					bridgeApi().emit("room_closed", { side: "guest" });
 				}

@@ -14,6 +14,7 @@
 		active: false,        /* 本次启动里已进入"互联网建房"流程(含跨重载接力) */
 		signaling: "mqtt",    /* mqtt=房号直连(默认) | invite=邀请码兜底 */
 		roomCode: null,
+		reuseCode: null,      /* 打完一把重载重组:接力上局的房号,客人自动重进 */
 		bridges: [],
 		invitePc: null,
 		mqttSession: null,
@@ -61,7 +62,9 @@
 		} catch (e) { /* 个别版本无此键也不影响建房 */ }
 		uiE.create.roomInfo();
 		uiE.create.chat();
-		hostState.roomCode = genRoomCode();
+		/* 打完一把重载重组:接力上局房号,客人凭同一房号自动重进 */
+		hostState.roomCode = hostState.reuseCode || genRoomCode();
+		hostState.reuseCode = null;
 		game.ip = "nnk://" + hostState.roomCode;
 		if (nnk.modules.compat) {
 			nnk.modules.compat.unlockPacks();
@@ -290,14 +293,44 @@
 				var pending = localStorage.getItem(env.lib.configprefix + "nnk_host_pending");
 				if (pending) {
 					localStorage.removeItem(env.lib.configprefix + "nnk_host_pending");
+					/* 打完一把重组的接力房号(普通建房没有这个键,照常生成新号) */
+					var reuseCode = localStorage.getItem(env.lib.configprefix + "nnk_host_roomcode");
+					if (reuseCode && /^[A-HJ-NP-Z2-9]{6}$/.test(reuseCode)) {
+						hostState.reuseCode = reuseCode;
+					}
+					localStorage.removeItem(env.lib.configprefix + "nnk_host_roomcode");
 					hostState.active = true;
-					console.log("[联机助手] 检测到待建房间标记,重载后继续互联网建房");
+					console.log("[联机助手] 检测到待建房间标记,重载后继续互联网建房" + (hostState.reuseCode ? "(沿用原房号 " + hostState.reuseCode + ")" : ""));
 				} else if (env.lib.config.directstartmode || localStorage.getItem(env.lib.configprefix + "directstart")) {
 					env.game.saveConfig("directstartmode");
 					localStorage.removeItem(env.lib.configprefix + "directstart");
 					console.log("[联机助手] 已清除上次建房残留的自动回房标记,本次开机不自动进房");
 				}
 			} catch (e) { /* localStorage 不可用则无接力 */ }
+			/* 打完一把不散房:引擎在联机对局结束后强制 game.reload(结束 15 秒定时器
+			 * 和「重新开始」按钮都走它),软服务器随页面消失,房间即散。包装 reload:
+			 * 对局刚结束(over)且房号模式房间还在时,把同一房号接力过去再重载——
+			 * 重载后沿用原房号续建,客人凭断线感知自动重进,谁都不用再输码。
+			 * 邀请码模式的 SDP 一次性无法复用,仍是重载即散(备用方式不变) */
+			if (!env.game.__nnkReloadPatched) {
+				env.game.__nnkReloadPatched = true;
+				var origReload = env.game.reload;
+				env.game.reload = function() {
+					try {
+						if (hostState.active && hostState.roomCode && hostState.signaling === "mqtt"
+							&& env._status.connectMode && env._status.over) {
+							var overMode = env._status.mode || "identity";
+							localStorage.setItem(env.lib.configprefix + "nnk_host_pending", overMode);
+							localStorage.setItem(env.lib.configprefix + "nnk_host_roomcode", hostState.roomCode);
+							localStorage.setItem(env.lib.configprefix + "directstart", "true");
+							env.game.saveConfig("directstartmode", overMode);
+							env.game.saveConfig("mode", "connect");
+							bridgeApi().emit("info", { message: "对局结束,正在用原房号 " + hostState.roomCode + " 重组房间(几秒后自动就绪,客人会自动重回)" });
+						}
+					} catch (e) { /* 接力失败则按老行为散房 */ }
+					return origReload.apply(this, arguments);
+				};
+			}
 		},
 
 		/* 工坊命令:创建互联网房间。无论游戏当前停在哪个界面,先落到联机模式再直启。 */
@@ -336,7 +369,8 @@
 			 * 不再叠加 switchMode(实测叠加会崩 UI),直接收编——生成房号挂上互联网邀请 */
 			if (env._status.waitingForPlayer) {
 				if (!hostState.roomCode) {
-					hostState.roomCode = genRoomCode();
+					hostState.roomCode = hostState.reuseCode || genRoomCode();
+					hostState.reuseCode = null;
 					env.game.ip = "nnk://" + hostState.roomCode;
 				}
 				/* 收编的原生遗留房没有「退出房间」按钮(原生路径才会建),补齐 */
