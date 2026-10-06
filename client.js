@@ -1232,7 +1232,7 @@ window.__ModuleLoader__.load({
           missing.length
             ? h('div', {},
               e('div', 'nnk-hint', hostFlow
-                ? '客人缺少以下扩展,点「补传」把本机文件传过去(传完客人在游戏里重开一次生效):'
+                ? '客人缺少以下已启用扩展,点「补传」把本机文件传过去(只补传已启用的;传完客人在游戏里重开一次生效):'
                 : '你这边缺少以下扩展,请房主点「补传」传给你(传完重开游戏生效):'),
               missing.map(function (name) {
                 return h('div', { key: name, style: { marginTop: '6px' } },
