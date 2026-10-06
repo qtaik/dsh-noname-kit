@@ -7,7 +7,8 @@
 	var DEFAULTS = {
 		/* 打洞用的 STUN 服务器(国内可达 + 国外兜底) */
 		stunServers: ["stun:stun.miwifi.com:3478", "stun:stun.l.google.com:19302"],
-		/* M2 起使用的公共信令(MQTT over WebSocket) */
+		/* 房号信令(MQTT over WebSocket):默认公共 broker,工坊「📡 信令服务器」
+		 * 卡可改(自建/其它公共服务器,双方须一致),空值经 set_config 恢复此默认 */
 		mqttUrl: "wss://broker.emqx.io:8084/mqtt",
 		/* M4 自动补包的单次传输体积上限(MB) */
 		transferLimitMB: 300,

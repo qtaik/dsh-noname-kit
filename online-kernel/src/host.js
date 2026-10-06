@@ -453,6 +453,7 @@
 		cancelAll: function() {
 			var env = nnk.env;
 			hostState.active = false;
+			hostState.reuseCode = null;
 			if (hostState.invitePc) {
 				try { hostState.invitePc.close(); } catch (e) { /* 忽略 */ }
 				hostState.invitePc = null;
@@ -460,6 +461,7 @@
 			cleanupMqtt();
 			try {
 				localStorage.removeItem(env.lib.configprefix + "nnk_host_pending");
+				localStorage.removeItem(env.lib.configprefix + "nnk_host_roomcode");
 			} catch (e) { /* 忽略 */ }
 		}
 	};

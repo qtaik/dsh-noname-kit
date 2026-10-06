@@ -71,18 +71,26 @@
 
 	/* 同房号自动重进(打完一把主机端重组后):连接突然断开且对局已结束,
 	 * 说明房主正在重载重建同一房间——隔几秒用原房号再敲一次门,给主机
-	 * 重载重建留出时间;次数用完或用户已离开就明说,引导手动重进 */
+	 * 重载重建留出时间;次数用完或用户已取消/离开就明说,引导手动重进。
+	 * rejoinCode 是会话令牌:cancelJoin 置空即可停掉整个循环。 */
 	function autoRejoin(code, attempts) {
 		var env = nnk.env;
-		if (attempts <= 0 || !env._status.connectMode) {
-			bridgeApi().setPhase("idle");
-			bridgeApi().emit("error", { message: "自动重回房间失败——请手动输入房号 " + code + " 重进" });
+		if (guestState.rejoinCode !== code || attempts <= 0 || !env._status.connectMode) {
+			if (guestState.rejoinCode === code) {
+				guestState.rejoinCode = null;
+				bridgeApi().setPhase("idle");
+				bridgeApi().emit("error", { message: "自动重回房间失败——请手动输入房号 " + code + " 重进" });
+			}
 			return;
 		}
 		bridgeApi().emit("info", { message: "房主正在重组房间,自动重回 " + code + "(第 " + (9 - attempts) + " 次尝试)…" });
 		api.joinByRoomCode(code);
 		setTimeout(function() {
+			if (guestState.rejoinCode !== code) {
+				return;   /* 用户已取消 */
+			}
 			if (guestState.session && guestState.session.code === code) {
+				guestState.rejoinCode = null;
 				return;   /* 这次尝试还在连接中或已连上,交给它自己走完 */
 			}
 			autoRejoin(code, attempts - 1);
@@ -278,6 +286,7 @@
 					/* 打完一把主机端重组:连接突然断开且对局已结束,自动同房号重进 */
 					if (session.wasIn && session.code && nnk.env._status.over && nnk.env._status.connectMode) {
 						bridgeApi().setPhase("joining", { code: session.code });
+						guestState.rejoinCode = session.code;
 						autoRejoin(session.code, 8);
 						return;
 					}
@@ -350,6 +359,7 @@
 		},
 
 		cancelJoin: function() {
+			guestState.rejoinCode = null;   /* 停掉还在跑的自动重进循环 */
 			resetSession();
 			/* 重载尚未落地就取消:把待续跑标记一并清掉,落地后不再自动加入 */
 			try {

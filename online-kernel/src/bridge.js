@@ -89,7 +89,7 @@
 					var name2 = String(args.name || "").slice(0, 12);
 					var avatar2 = String(args.avatar || "").slice(0, 24);
 					if (avatar2 && !compat.hasCharacter(avatar2)) {
-						emit("error", { message: "头像武将不存在: " + avatar2 + "(可能是对面补传还没完成,先选本机已有的武将)" });
+						emit("error", { message: "头像武将「" + avatar2 + "」本机没有(扩展未装或未启用)——先选本机已有的武将,或在游戏里启用对应扩展" });
 						break;
 					}
 					nnk.modules.config.set("onlineName", name2);

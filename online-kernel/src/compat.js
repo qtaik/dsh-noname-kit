@@ -592,7 +592,6 @@
 			guardErrorPopup();
 			console.log("[联机助手] 兼容层就绪(开闸+垫片+错误拦截" + (enabled() ? "" : ",总开关已关闭") + ",隔离名单 " + blocklist().length + " 项)");
 		},
-		unlockExtensions: unlockExtensions,
 		unlockPacks: unlockPacks,
 		clearQuarantine: clearQuarantine,
 		gameRoot: gameRoot,
