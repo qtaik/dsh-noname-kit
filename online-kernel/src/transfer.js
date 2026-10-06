@@ -1,7 +1,13 @@
 /*
- * 自动补包(M4):房主把客人缺少的扩展目录整包传过去。
+ * 自动补包(M4):房主把客人缺少的扩展自动传过去。
+ * 流程:客人进房 → 清单交换(manifest)→ 房主算差集 → 自动排队补传全部缺失
+ * → 客人落盘 → 提示客人重启游戏、重新输房号加入(重启后清单复查,缺的续传)。
  * 通道复用引擎 ws 消息分发(同 manifest):房主 game.broadcast 分块发,
  * 客人在 lib.message.client 上收块落盘;进度经 game.send 回报房主。
+ *
+ * 传输安全(真机实证:一次把整个文件的块灌进对局 DataChannel,客人 20% 被踢出
+ * 房间):背压按【块】检查(旧版按文件检查,大文件一次灌爆通道挤掉对局心跳),
+ * 积压超限就暂停等待,保证对局消息优先。
  *
  * 文件读写直接用 Node fs——两台测试机的游戏外壳(Electron)渲染进程都是
  * nodeIntegration:true、contextIsolation:false,内核以扩展身份运行在
@@ -14,7 +20,7 @@
 (function() {
 	var nnk = window.__nnk__;
 	var CHUNK = 48 * 1024;          /* 二进制块大小(b64 后 64KB,远小于 DC 消息上限) */
-	var BUFFER_LIMIT = 1024 * 1024; /* 所有通道积压超过 1MB 就等一等 */
+	var BUFFER_LIMIT = 256 * 1024;  /* 所有通道积压超过 256KB 就等(保对局消息优先) */
 	var KERNEL_NAME = "联机助手";
 
 	function bridgeApi() {
@@ -30,7 +36,7 @@
 		return typeof require === "function" ? require : null;
 	}
 
-	/* 定位游戏根目录:统一走 compat 的实现(分类与补包必须一致),本文件不再自持 */
+	/* 定位游戏根目录:统一走 compat 的实现(分类与补包必须一致) */
 	function gameRoot() {
 		return nnk.modules.compat ? nnk.modules.compat.gameRoot() : null;
 	}
@@ -51,22 +57,53 @@
 		return btoa(bin);
 	}
 
-	/* ---- 房主侧:发起补传 ---- */
+	/* ---- 房主侧:补传队列(自动补传 = 一次入队全部缺失,逐个传) ---- */
 	var txSeq = 0;
+	var txQueue = [];
+	var txBusy = false;
 
 	function startTransfer(name) {
+		var list = Array.isArray(name) ? name : [name];
+		for (var i = 0; i < list.length; i++) {
+			if (txQueue.indexOf(list[i]) < 0) {
+				txQueue.push(list[i]);
+			}
+		}
+		pumpQueue();
+	}
+
+	function pumpQueue() {
+		if (txBusy) {
+			return;
+		}
+		var next = txQueue.shift();
+		if (!next) {
+			return;
+		}
+		txBusy = true;
+		startOne(next, function() {
+			txBusy = false;
+			pumpQueue();
+		});
+	}
+
+	function startOne(name, done) {
 		var hostState = nnk.state.host;
 		if (!hostState || !hostState.bridges || !hostState.bridges.length) {
-			bridgeApi().emit("error", { message: "没有已连接的客人,无法补传" });
+			bridgeApi().emit("error", { message: "没有已连接的客人,补传中止" });
+			txQueue = [];
+			done(false);
 			return;
 		}
 		if (!safeName(name)) {
 			bridgeApi().emit("error", { message: "扩展名不合法:" + name });
+			done(false);
 			return;
 		}
 		var req = nodeRequire();
 		if (!req) {
 			bridgeApi().emit("error", { message: "本游戏环境没有 Node 文件能力,补包不可用" });
+			done(false);
 			return;
 		}
 		var fs = req("fs");
@@ -74,35 +111,44 @@
 		var root = gameRoot();
 		if (!root) {
 			bridgeApi().emit("error", { message: "定位游戏根目录失败,补包不可用(需要 extension/" + KERNEL_NAME + " 存在)" });
+			done(false);
 			return;
 		}
 		var dir = path.join(root, "extension", name);
 		if (!fs.existsSync(dir)) {
 			bridgeApi().emit("error", { message: "本地没有这个扩展:" + name });
+			done(false);
 			return;
 		}
 		/* 收集文件清单与总体积 */
 		var files = [];
 		var total = 0;
 		var limit = (nnk.modules.config.get("transferLimitMB") || 300) * 1024 * 1024;
-		(function walk(dir, rel) {
-			fs.readdirSync(dir, { withFileTypes: true }).forEach(function(entry) {
-				var r = rel ? rel + "/" + entry.name : entry.name;
-				var full = path.join(dir, entry.name);
-				if (entry.isDirectory()) {
-					walk(full, r);
-				} else if (entry.isFile()) {
-					var size = fs.statSync(full).size;
-					total += size;
-					if (total > limit) {
-						throw new Error("体积超过上限(" + Math.round(limit / 1048576) + "MB),取消补传");
+		try {
+			(function walk(dir, rel) {
+				fs.readdirSync(dir, { withFileTypes: true }).forEach(function(entry) {
+					var r = rel ? rel + "/" + entry.name : entry.name;
+					var full = path.join(dir, entry.name);
+					if (entry.isDirectory()) {
+						walk(full, r);
+					} else if (entry.isFile()) {
+						var size = fs.statSync(full).size;
+						total += size;
+						if (total > limit) {
+							throw new Error("体积超过上限(" + Math.round(limit / 1048576) + "MB),取消补传");
+						}
+						files.push({ rel: r, size: size, full: full });
 					}
-					files.push({ rel: r, size: size, full: full });
-				}
-			});
-		})(dir, "");
+				});
+			})(dir, "");
+		} catch (err) {
+			bridgeApi().emit("transfer_failed", { name: name, message: (err && err.message) || String(err) });
+			done(false);
+			return;
+		}
 		if (!files.length) {
 			bridgeApi().emit("error", { message: "这个扩展目录是空的:" + name });
+			done(false);
 			return;
 		}
 		var id = ++txSeq;
@@ -116,25 +162,13 @@
 				files: files.map(function(f) { return { rel: f.rel, size: f.size }; })
 			});
 		} catch (e) { /* 忽略 */ }
-		sendFiles(id, name, files, 0);
-	}
 
-	/* 逐文件逐块发送;通道积压超限就等等(保对局消息优先) */
-	function sendFiles(id, name, files, index) {
-		var hostState = nnk.state.host;
-		if (!hostState || !hostState.bridges.length) {
-			bridgeApi().emit("transfer_failed", { name: name, message: "客人已全部断开,补传中止" });
-			return;
-		}
-		if (index >= files.length) {
-			nnk.env.game.broadcast("nnk_tx_done", { id: id, name: name });
-			bridgeApi().emit("transfer_done", { name: name });
-			console.log("[联机助手] 补传完成:「" + name + "」(客人重启游戏后生效)");
-			return;
-		}
-		var file = files[index];
+		/* 逐块发送状态机:每块都检查通道积压,超限就暂停等待(保对局消息优先) */
+		var fi = 0;
+		var off = 0;
+		var fileData = null;
 		var waiting = false;
-		var gates = function() {
+		var gatesBlocked = function() {
 			var bridges = nnk.state.host.bridges || [];
 			for (var i = 0; i < bridges.length; i++) {
 				try {
@@ -145,32 +179,52 @@
 			}
 			return false;
 		};
-		var sendCurrent = function() {
+		var step = function() {
 			if (waiting) {
 				return;
 			}
-			if (gates()) {
+			if (!nnk.state.host.bridges || !nnk.state.host.bridges.length) {
+				bridgeApi().emit("transfer_failed", { name: name, message: "客人已全部断开,补传中止" });
+				done(false);
+				return;
+			}
+			if (gatesBlocked()) {
 				waiting = true;
 				setTimeout(function() {
 					waiting = false;
-					sendCurrent();
-				}, 25);
+					step();
+				}, 40);
 				return;
 			}
 			try {
-				var req = nodeRequire();
-				var data = req("fs").readFileSync(file.full);
-				nnk.env.game.broadcast("nnk_tx_file", { id: id, name: name, rel: file.rel, size: file.size });
-				for (var off = 0; off < data.length; off += CHUNK) {
-					nnk.env.game.broadcast("nnk_tx_data", { id: id, rel: file.rel, b64: bytesToB64(data.subarray(off, off + CHUNK)) });
+				var file = files[fi];
+				if (!fileData) {
+					nnk.env.game.broadcast("nnk_tx_file", { id: id, name: name, rel: file.rel, size: file.size });
+					fileData = fs.readFileSync(file.full);
 				}
-				sendFiles(id, name, files, index + 1);
+				var end = Math.min(off + CHUNK, fileData.length);
+				nnk.env.game.broadcast("nnk_tx_data", { id: id, rel: file.rel, b64: bytesToB64(fileData.subarray(off, end)) });
+				off = end;
+				if (off >= fileData.length) {
+					fi++;
+					off = 0;
+					fileData = null;
+					if (fi >= files.length) {
+						nnk.env.game.broadcast("nnk_tx_done", { id: id, name: name });
+						bridgeApi().emit("transfer_done", { name: name });
+						console.log("[联机助手] 补传完成:「" + name + "」(客人重启游戏后重新加入)");
+						done(true);
+						return;
+					}
+				}
+				step();
 			} catch (err) {
 				bridgeApi().emit("transfer_failed", { name: name, message: (err && err.message) || String(err) });
 				console.error("[联机助手] 补传失败:", err);
+				done(false);
 			}
 		};
-		sendCurrent();
+		step();
 	}
 
 	/* ---- 客人侧:接收落盘 ---- */
@@ -217,7 +271,7 @@
 				}
 				flushFile();
 				bridgeApi().emit("transfer_done", { name: rx.name, side: "guest" });
-				console.log("[联机助手] 补包接收完成:「" + rx.name + "」,重启游戏后生效");
+				console.log("[联机助手] 补包接收完成:「" + rx.name + "」,重启游戏后重新加入");
 				rx = null;
 			}
 		};
@@ -306,7 +360,7 @@
 				lib.message.server.__nnkTxProgress = true;
 			}
 		},
-		/* 工坊命令:补传指定扩展(房主侧) */
+		/* 工坊命令:补传指定扩展(传单个名字或名字数组,自动排队) */
 		start: startTransfer,
 		/* 客人侧开始一次接收会话(收到 tx_begin 前,房主先广播会话头) */
 		begin: function(msg) {

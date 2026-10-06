@@ -1034,7 +1034,10 @@ window.__ModuleLoader__.load({
         case 'info': return 'ℹ️ ' + ((ev.data && ev.data.message) || '');
         case 'transfer_begin': return '📦 开始补传「' + ((ev.data && ev.data.name) || '') + '」';
         case 'transfer_progress': return '⏳ 补传中「' + ((ev.data && ev.data.name) || '') + '」' + ((ev.data && ev.data.pct) || 0) + '%';
-        case 'transfer_done': return '📦 补传完成「' + ((ev.data && ev.data.name) || '') + '」(客人重启游戏生效)';
+        case 'transfer_done':
+          return (ev.data && ev.data.side === 'guest')
+            ? '📦 补传完成「' + ((ev.data && ev.data.name) || '') + '」——请重启游戏,重启后重新输房号加入'
+            : '📦 补传完成「' + ((ev.data && ev.data.name) || '') + '」';
         case 'transfer_failed': return '❌ 补传失败「' + ((ev.data && ev.data.name) || '') + '」:' + ((ev.data && ev.data.message) || '');
         default: return ev.type;
       }

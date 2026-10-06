@@ -89,6 +89,12 @@
 			nnk.env.game.broadcast("nnk_manifest_diff", result);
 		} catch (e) { /* 广播失败不影响工坊展示 */ }
 		console.log("[联机助手] 包体检完成:客人缺扩展 " + result.exts.missing.length + " 个、缺武将包 " + result.packs.missing.length + " 个");
+		/* 自动补传:缺什么传什么(排队逐个),传完客人重启游戏重新加入 */
+		var missing = result.exts.missing || [];
+		if (missing.length && nnk.modules.transfer) {
+			bridgeApi().emit("info", { message: "客人缺 " + missing.length + " 个扩展,自动补传开始(传完请客人重启游戏后重新加入)" });
+			nnk.modules.transfer.start(missing);
+		}
 	}
 
 	nnk.modules.manifest = {
