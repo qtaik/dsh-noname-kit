@@ -64,8 +64,9 @@
 		} catch (e) { /* 个别版本无此键也不影响建房 */ }
 		uiE.create.roomInfo();
 		uiE.create.chat();
-		/* 打完一把重载重组:接力上局房号,客人凭同一房号自动重进 */
-		hostState.roomCode = hostState.reuseCode || genRoomCode();
+		/* 打完一把重载重组:接力上局房号,客人凭同一房号自动重进;
+		 * 原地载入路径:保留大厅已经在用的房号(roomCode 已有) */
+		hostState.roomCode = hostState.roomCode || hostState.reuseCode || genRoomCode();
 		hostState.reuseCode = null;
 		hostState.stage = "loaded";
 		game.ip = "nnk://" + hostState.roomCode;
@@ -75,7 +76,121 @@
 		}
 		bridgeApi().setPhase("hosting", { roomCode: hostState.roomCode, signaling: hostState.signaling });
 		emitRoomMembers();   /* 房间一建好就报成员表,工坊弹窗从一开始就有准确容量 */
-		startHosting();
+		/* 信令已在大厅跑着就不重挂(原地载入路径);重载路径 mqttSession 为空照常起 */
+		if (!hostState.mqttSession) {
+			startHosting();
+		}
+		/* 原地载入:大厅停泊的客人不断开——等引擎就绪后直接用现有通道交给引擎 */
+		admitParkedWhenReady();
+	}
+
+	/* 原地载入收编:等引擎就绪标志(waitingForPlayer 置真=等待房座位已建好,
+	 * 此时客人 init 不会被引擎的"未就绪拒客"分支拦下),再把停泊客人按容量
+	 * 逐个用现有通道交给引擎——零断开、零重连;超容量的继续排队 */
+	function admitParkedWhenReady() {
+		var env = nnk.env;
+		if (!hostState.bridges.some(function(b) { return !b._entered; })) {
+			return;   /* 没有停泊客人,不用等 */
+		}
+		var waited = 0;
+		var timer = setInterval(function() {
+			waited += 200;
+			if (env._status.waitingForPlayer) {
+				clearInterval(timer);
+				admitAllParked();
+			} else if (waited > 10000) {
+				clearInterval(timer);   /* 引擎久久未就绪:不硬塞,客人留在队列 */
+			}
+		}, 200);
+	}
+
+	/* 把停泊客人按容量收进引擎(原地载入用;重载路径 bridges 为空,天然无操作) */
+	function admitAllParked() {
+		var env = nnk.env;
+		var capacity = roomCapacity();
+		var enteredGuests = hostState.bridges.filter(function(b) { return b._entered; }).length;
+		var admitted = 0;
+		hostState.bridges.forEach(function(b) {
+			if (b._entered || enteredGuests >= capacity - 1) {
+				return;
+			}
+			b._queued = false;
+			b.send(JSON.stringify({ nnk_stage: "loaded" }));
+			env.lib.init.connection(b);
+			b._entered = true;
+			enteredGuests += 1;
+			admitted += 1;
+		});
+		emitRoomMembers();
+		if (admitted > 0) {
+			bridgeApi().setPhase("room_open", { roomCode: hostState.roomCode, signaling: hostState.signaling });
+			bridgeApi().emit("guest_connected", { guests: enteredGuests });
+		}
+	}
+
+	/* 原地进房:调引擎原生的"菜单→建房"(switchMode → waitForPlayer → createServer)。
+	 * 12 秒看门狗:迟迟等不到引擎就绪(waitingForPlayer)就放弃原地、退回重载。
+	 * 返回 false=switchMode 都没调起来,调用方立即落回重载 */
+	function startInPlace(mode) {
+		var env = nnk.env;
+		var done = false;
+		var timer = setInterval(function() {
+			if (env._status.waitingForPlayer) {
+				done = true;
+				clearInterval(timer);
+			}
+		}, 200);
+		setTimeout(function() {
+			clearInterval(timer);
+			if (!done && hostState.active && hostState.stage === "loaded" && !env._status.waitingForPlayer) {
+				done = true;
+				bridgeApi().emit("info", { message: "原地进入未成功,改用重载方式…" });
+				reloadIntoGame(mode);
+			}
+		}, 12000);
+		try {
+			env.game.switchMode(mode);
+			return true;
+		} catch (e) {
+			done = true;
+			clearInterval(timer);
+			return false;
+		}
+	}
+
+	/* 重载进房(老路径):接力标记 + 通知客人载入 + 等写库回调落地再重载 */
+	function reloadIntoGame(mode) {
+		var env = nnk.env;
+		try {
+			localStorage.setItem(env.lib.configprefix + "nnk_host_pending", JSON.stringify({ mode: mode, signaling: "mqtt", stage: "loaded" }));
+			localStorage.setItem(env.lib.configprefix + "nnk_host_roomcode", hostState.roomCode);
+			localStorage.setItem(env.lib.configprefix + "directstart", "true");
+		} catch (e) { /* 忽略 */ }
+		hostState.stage = "loaded";
+		hostState.roomMode = mode;
+		/* 通知客人「主机要载入重载了」:客人端据此把自动重回的话术切成
+		 * 「载入跟随」;顺带清掉 retained 心跳——重载窗口里新来的/重试的
+		 * 客人会立刻看到「没找到在线主机」快速重试,而不是对着旧心跳
+		 * 白等 30 秒(主机重启后 startMqtt 会重新挂上心跳) */
+		try {
+			if (hostState.mqttSession) {
+				hostState.mqttSession.publish(signaling.roomTopic(hostState.roomCode, "host"), { nnk_loading: true });
+				hostState.mqttSession.publishRaw(signaling.roomTopic(hostState.roomCode, "host"), "", true);
+			}
+		} catch (eN) { /* 通知失败不影响重载 */ }
+		bridgeApi().emit("info", { message: "正在按「" + (env.lib.translate[mode] || mode) + "」重开房间(原房号 " + hostState.roomCode + ",客人自动重回)…" });
+		var gone = false;
+		var go = function() {
+			if (gone) {
+				return;
+			}
+			gone = true;
+			hostState.origReload.apply(env.game);
+		};
+		/* 与「重新开始」同款:配置写库回调落地后再重载(1.5 秒兜底) */
+		env.game.saveConfig("directstartmode", mode, null, go);
+		env.game.saveConfig("mode", "connect", null, go);
+		setTimeout(go, 1500);
 	}
 
 	/* 按建房时选定的信令方式挂"互联网接入器" */
@@ -249,6 +364,17 @@
 		var env = nnk.env;
 		var pc = new RTCPeerConnection(rtc.pcConfig());
 		pc.ondatachannel = function(e) {
+			if (e.channel.label === "nnk-ping") {
+				/* 专用心跳线:只保温+判死,不进 bridges;判死=关整条 pc,
+				 * 主通道随之关闭,走既有 onDown 清理(摘客/成员表/队列补位) */
+				e.channel.onopen = function() {
+					pc._nnkPingCh = e.channel;
+					pc._nnkPing = rtc.startPing(e.channel, function() {
+						try { pc.close(); } catch (eD) { /* 忽略 */ }
+					});
+				};
+				return;
+			}
 			var channel = e.channel;
 			channel.onopen = function() {
 				var conn = new rtc.HostBridge(channel);
@@ -258,6 +384,12 @@
 					var i = hostState.bridges.indexOf(conn);
 					if (i >= 0) {
 						hostState.bridges.splice(i, 1);
+					}
+					if (pc._nnkPing) {
+						try { pc._nnkPing.stop(); } catch (eP) { /* 忽略 */ }
+					}
+					if (pc._nnkPingCh) {
+						try { pc._nnkPingCh.close(); } catch (eP2) { /* 忽略 */ }
 					}
 					emitRoomMembers();
 					promoteNextQueued();
@@ -381,6 +513,14 @@
 		var pc = new RTCPeerConnection(rtc.pcConfig());
 		var settled = false;
 		var channel = pc.createDataChannel("nnk-link", { ordered: true });
+		/* 专用心跳线(主机侧建两条,客人按 label 分流):保温+秒级判死 */
+		var pingChannel = pc.createDataChannel("nnk-ping", { ordered: true });
+		pingChannel.onopen = function() {
+			pc._nnkPingCh = pingChannel;
+			pc._nnkPing = rtc.startPing(pingChannel, function() {
+				try { pc.close(); } catch (eD) { /* 忽略 */ }
+			});
+		};
 		channel.onopen = function() {
 			if (settled) {
 				return;
@@ -758,7 +898,9 @@
 		},
 
 		/* 工坊大厅:按所选模式重开一局(原房号不变,客人自动重回)。
-		 * 等待房/结算屏都可以点;对局进行中拒绝。 */
+		 * 等待房/结算屏都可以点;对局进行中拒绝。
+		 * 两条路:主机引擎正停在联机菜单 → 原地进房(不重载,成员不断线);
+		 * 否则 → 重载进房(老路径,客人自动跟随)。 */
 		restartRoom: function(mode) {
 			var env = nnk.env;
 			if (!hostState.active || !hostState.roomCode || hostState.signaling !== "mqtt") {
@@ -774,36 +916,22 @@
 				bridgeApi().emit("error", { message: "对局还没打完,结束后再重开" });
 				return;
 			}
-			try {
-				localStorage.setItem(env.lib.configprefix + "nnk_host_pending", JSON.stringify({ mode: mode, signaling: "mqtt", stage: "loaded" }));
-				localStorage.setItem(env.lib.configprefix + "nnk_host_roomcode", hostState.roomCode);
-				localStorage.setItem(env.lib.configprefix + "directstart", "true");
-			} catch (e) { /* 忽略 */ }
-			hostState.stage = "loaded";
-			hostState.roomMode = mode;
-			/* 通知客人「主机要载入重载了」:客人端据此把自动重回的话术切成
-			 * 「载入跟随」;顺带清掉 retained 心跳——重载窗口里新来的/重试的
-			 * 客人会立刻看到「没找到在线主机」快速重试,而不是对着旧心跳
-			 * 白等 30 秒(主机重启后 startMqtt 会重新挂上心跳) */
-			try {
-				if (hostState.mqttSession) {
-					hostState.mqttSession.publish(signaling.roomTopic(hostState.roomCode, "host"), { nnk_loading: true });
-					hostState.mqttSession.publishRaw(signaling.roomTopic(hostState.roomCode, "host"), "", true);
+			/* 原地快路径:引擎正停在联机菜单(connect 模式、无房无局)——复刻
+			 * 原生联机菜单的"选择模式→开始"(startMenu.js):switchMode 之后
+			 * 模式启动流程会自己走到 waitForPlayer → createServer(软服务器),
+			 * 全程不重载、通道不断,停泊客人原地收编进房 */
+			var atConnectMenu = env._status.connectMode && !env.game.online && !env.game.onlineroom
+				&& !env._status.waitingForPlayer && (!env.game.players || !env.game.players.length);
+			if (atConnectMenu) {
+				hostState.stage = "loaded";
+				hostState.roomMode = mode;
+				bridgeApi().emit("info", { message: "正在原地进入游戏(不重载,成员不断线)…" });
+				if (startInPlace(mode)) {
+					return;   /* 原地路径已启动(带 12 秒兜底看门狗) */
 				}
-			} catch (eN) { /* 通知失败不影响重载 */ }
-			bridgeApi().emit("info", { message: "正在按「" + (env.lib.translate[mode] || mode) + "」重开房间(原房号 " + hostState.roomCode + ",客人自动重回)…" });
-			var gone = false;
-			var go = function() {
-				if (gone) {
-					return;
-				}
-				gone = true;
-				hostState.origReload.apply(env.game);
-			};
-			/* 与「重新开始」同款:配置写库回调落地后再重载(1.5 秒兜底) */
-			env.game.saveConfig("directstartmode", mode, null, go);
-			env.game.saveConfig("mode", "connect", null, go);
-			setTimeout(go, 1500);
+				bridgeApi().emit("info", { message: "原地进入未成功,改用重载方式…" });
+			}
+			reloadIntoGame(mode);
 		},
 
 		cancelAll: function() {

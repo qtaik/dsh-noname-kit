@@ -1505,8 +1505,8 @@ window.__ModuleLoader__.load({
                         h('input', { type: 'radio', name: 'nnk-room-mode', checked: roomMode === m.id, onChange: function () { setRoomMode(m.id); sendCmd('set_mode', { mode: m.id }); } }),
                         m.name + '(最多 ' + capFor(m.id) + ' 人)');
                     })),
-                  h('button', { className: 'nnk-submit', onClick: function () { sendCmd('restart_room', { mode: roomMode }); setNote('🚀 载入中——主机游戏重载一次,成员自动跟随进入'); } }, '🚀 载入到游戏(按所选模式)'),
-                  e('div', 'nnk-hint', '载入时主机游戏重载一次,成员自动进入;开局/禁将在游戏内点。'))
+                  h('button', { className: 'nnk-submit', onClick: function () { sendCmd('restart_room', { mode: roomMode }); setNote('🚀 载入中——成员会自动进入(原地进房不断线;需重载时自动跟随)'); } }, '🚀 载入到游戏(按所选模式)'),
+                  e('div', 'nnk-hint', '载入时主机尽量原地进房(成员不断线);需要重载时成员自动跟随进入。开局/禁将在游戏内点。'))
                 : e('div', 'nnk-hint', '模式与载入由房主操作——他点「载入到游戏」后,你会自动跟着进房。')),
             h('div', { className: 'nnk-modal-actions' },
               h('button', { className: 'nnk-copy nnk-danger', onClick: function () { leaveRoom(isRoomHost) } }, isRoomHost ? '🗑 解散房间' : '🚪 退出房间'),

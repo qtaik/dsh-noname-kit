@@ -61,6 +61,49 @@
 		return { iceServers: stun.map(function(u) { return { urls: u }; }) };
 	}
 
+	/* 专用心跳("nnk-ping" 通道,与游戏数据线完全分开、不经过引擎):
+	 * 每 2.5 秒发一拍,收到任意来包算活;约 8 秒(3 拍)没有来包就判死并回调
+	 * onDead——秒级判死,不用干等 ICE consent 超时(~25 秒)才发现断线;
+	 * 持续的微量流量还能防止空闲 P2P 链路被 NAT/UDP 映射超时悄悄回收。
+	 * 返回 { stop() }:主动关闭通道前先 stop(),避免把自己的关闭当成对端掉线。 */
+	function startPing(channel, onDead) {
+		var stopped = false;
+		var lastSeen = Date.now();
+		var timer = null;
+		function stop(dead) {
+			if (stopped) {
+				return;
+			}
+			stopped = true;
+			if (timer) {
+				clearInterval(timer);
+			}
+			if (dead && onDead) {
+				try { onDead(); } catch (e) { /* 回调自行处理 */ }
+			}
+		}
+		timer = setInterval(function() {
+			if (stopped) {
+				return;
+			}
+			if (channel.readyState === "closed") {
+				stop(true);   /* 通道被关/协商失败=死 */
+				return;
+			}
+			if (channel.readyState !== "open") {
+				return;   /* 还没打开,下一拍再看 */
+			}
+			if (Date.now() - lastSeen > 8000) {
+				stop(true);   /* 3 拍没来包=静默 */
+				return;
+			}
+			try { channel.send("p"); } catch (e2) { /* 下一拍再判 */ }
+		}, 2500);
+		channel.onmessage = function() { lastSeen = Date.now(); };
+		channel.onclose = function() { stop(true); };
+		return { stop: function() { stop(false); } };
+	}
+
 	/* 非 trickle:等候选收齐(超时兜底,用已收集的候选直接走) */
 	function waitGather(pc) {
 		return new Promise(function(resolve) {
@@ -195,6 +238,7 @@
 		decodeCode: decodeCode,
 		pcConfig: pcConfig,
 		waitGather: waitGather,
+		startPing: startPing,
 		FakeWebSocket: FakeWebSocket,
 		HostBridge: HostBridge
 	};

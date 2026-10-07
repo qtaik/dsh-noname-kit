@@ -68,6 +68,9 @@
 	}
 
 	function resetSession() {
+		if (guestState.session && guestState.session.ping) {
+			try { guestState.session.ping.stop(); } catch (eP) { /* 忽略 */ }
+		}
 		if (guestState.session && guestState.session.pc) {
 			try { guestState.session.pc.close(); } catch (e) { /* 忽略 */ }
 		}
@@ -269,6 +272,19 @@
 				return;
 			}
 			pc.ondatachannel = function(e) {
+				if (e.channel.label === "nnk-ping") {
+					/* 专用心跳线(主机侧建的):只保温+判死,不进引擎 */
+					e.channel.onopen = function() {
+						session.ping = rtc.startPing(e.channel, function() {
+							if (guestState.session !== session) {
+								return;
+							}
+							bridgeApi().emit("info", { message: "与主机的连接静默了,自动重连…" });
+							try { session.fake.channel.close(); } catch (eD) { /* 忽略 */ }
+						});
+					};
+					return;
+				}
 				var fake = new rtc.FakeWebSocket(e.channel);
 				session.fake = fake;
 				/* 内核协议 tap(与房号模式同款):收到放行(loaded/引擎消息直达)才接
@@ -301,6 +317,7 @@
 				fake.onDown(function() {
 					if (guestState.session === session) {
 						guestState.session = null;
+						try { if (session.ping) session.ping.stop(); } catch (eP) { /* 忽略 */ }
 						bridgeApi().setPhase("idle");
 						bridgeApi().emit("room_closed", { side: "guest" });
 					}
@@ -379,6 +396,19 @@
 			var channel = pc.createDataChannel("nnk-link", { ordered: true });
 			var fake = new rtc.FakeWebSocket(channel);
 			session.fake = fake;
+			/* 专用心跳线:与游戏数据线分开(不经过引擎)——保温空闲链路 + 秒级
+			 * 判死。判死就关主通道,交给既有机制(停泊中=autoRejoin;已进房=
+			 * 引擎重载 + 「任何来源重载都自动重回」)立刻接管 */
+			var pingChannel = pc.createDataChannel("nnk-ping", { ordered: true });
+			pingChannel.onopen = function() {
+				session.ping = rtc.startPing(pingChannel, function() {
+					if (guestState.session !== session) {
+						return;
+					}
+					bridgeApi().emit("info", { message: "与主机的连接静默了,自动重连…" });
+					try { channel.close(); } catch (eD) { /* 忽略 */ }
+				});
+			};
 			fake.onUp(function() {
 				session.wasIn = true;
 				/* 大厅停车:先不接引擎,等主机的 stage 指令——loaded=进引擎,
@@ -428,6 +458,7 @@
 			fake.onDown(function() {
 				if (guestState.session === session) {
 					guestState.session = null;
+					try { if (session.ping) session.ping.stop(); } catch (eP) { /* 忽略 */ }
 					/* 房号房间的通道断开(主机重组/换模式重载/掉线)一律自动重回:
 					 * 主机真退了的话重试穷尽后会给明确提示 */
 					if (session.wasIn && session.code && nnk.env._status.connectMode) {
