@@ -1438,7 +1438,10 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'nnk-phaseline' },
                   bridgeOnline
                     ? e('span', 'nnk-ok', '🟢 内核在线(游戏运行中)')
-                    : e('span', 'nnk-hint', '⚪ 内核离线,启动游戏后自动在线。一直离线:查「扩展」菜单「联机助手」是否点「启」(列表里没有它?先开 设置→通用→自动导入扩展)')),
+                    : e('span', 'nnk-hint', '⚪ 内核离线,启动游戏后自动在线。一直离线:查「扩展」菜单「联机助手」是否点「启」(列表里没有它?先开 设置→通用→自动导入扩展)'
+                      + (kernel && kernel.boundApi && kernel.boundApi !== location.origin
+                        ? '。另:内核心跳绑定在另一个 dsh(' + kernel.boundApi + ')——在本页点「升级内核」并重启游戏即切回本页'
+                        : ''))),
                 phase !== 'idle'
                   ? e('div', 'nnk-hint', '当前状态:' + phaseText + (bridge.state && bridge.state.roomCode ? '(房号 ' + bridge.state.roomCode + ')' : ''))
                   : null)),

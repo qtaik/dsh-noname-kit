@@ -118,14 +118,21 @@ export function kernelStatus({ nonameDir }) {
   }
   const target = kernelDirOf(nonameDir)
   if (!existsSync(target)) {
-    return { state: 'missing', bundledHash, installedHash: null, installedAt: null }
+    return { state: 'missing', bundledHash, installedHash: null, installedAt: null, boundApi: null }
   }
   const installedHash = hashKernelDir(target)
+  /* 内核心跳绑定在哪个 dsh(装它时写入的 baseUrl)——双 dsh 共管一个游戏目录时,
+   * 心跳只发绑定方,另一方会显示离线,这个字段让绑定关系可见 */
+  let boundApi = null
+  try {
+    boundApi = JSON.parse(readFileSync(join(target, 'nnk-bridge.json'), 'utf8')).baseUrl || null
+  } catch { /* 没装桥配置(未安装/老版本) */ }
   return {
     state: installedHash === bundledHash ? 'ok' : 'stale',
     bundledHash,
     installedHash,
     installedAt: readManifest(target)?.installedAt ?? null,
+    boundApi,
   }
 }
 
