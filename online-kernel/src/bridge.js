@@ -43,6 +43,9 @@
 			case "restart_room":
 				host.restartRoom(args.mode);
 				break;
+			case "set_mode":
+				host.setRoomMode(args.mode);
+				break;
 			case "join_room":
 				guest.joinByRoomCode(args.code);
 				break;

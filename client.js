@@ -1111,6 +1111,9 @@ window.__ModuleLoader__.load({
       var avFilter = avFilterState[0], setAvFilter = avFilterState[1];
       var idCfgKeyState = React.useState(null);
       var idCfgKey = idCfgKeyState[0], setIdCfgKey = idCfgKeyState[1];
+      /* 房间模式单选与内核的回同步指纹(同上:变化才同步,防轮询覆盖手点) */
+      var rmSyncState = React.useState(null);
+      var rmSyncKey = rmSyncState[0], setRmSyncKey = rmSyncState[1];
       var sigUrlState = React.useState('');
       var sigUrl = sigUrlState[0], setSigUrl = sigUrlState[1];
       /* 码交接弹窗的关闭标记:同一张码关了不再弹,换新码(重试/重生成)才再弹 */
@@ -1158,6 +1161,16 @@ window.__ModuleLoader__.load({
           setIdAvatar(cfg.onlineAvatar || '');
           setSigUrl(cfg.mqttUrl || '');
         }
+      });
+      /* 主机模式单选跟随内核(刷新页面后本机状态重置为「身份」,若不回同步,
+       * F5 一次就会把房间模式看错、点载入还会把模式切回去)。按「变化才同步」
+       * 键控:刚点的选项在命令回显前不会被旧事件弹回 */
+      React.useEffect(function () {
+        var ev0 = onlinePickEvent((status && status.bridge && status.bridge.events) || [], 'room_members');
+        var m = ev0 && ev0.data && ev0.data.mode;
+        if (!m || m === rmSyncKey) return;
+        setRmSyncKey(m);
+        setRoomMode(m);
       });
       var sendCmd = function (action, args) {
         return fetch('/noname-kit-api/online/command', {
@@ -1424,7 +1437,7 @@ window.__ModuleLoader__.load({
          * 当前模式且内核报了真容量(如房间设置改了人数)时用真值;客人=房间真值 */
         var sel = isRoomHost ? roomMode : (d.mode || roomMode);
         var cap = (d.mode === sel && d.capacity) ? d.capacity : (caps[sel] || MODE_MAX[sel] || 8);
-        return { data: d, list: list, caps: caps, cap: cap };
+        return { data: d, list: list, caps: caps, cap: cap, has: !!ev0 };
       }
 
       /* P2P 房间大厅弹窗:房号牌 → 座位网格 → 操作区。客人=只读视角。
@@ -1470,14 +1483,17 @@ window.__ModuleLoader__.load({
           h('div', { className: 'nnk-modal' },
             h('div', { className: 'nnk-rm-head' },
               e('div', 'nnk-modal-title', '🏛 房间大厅'),
-              e('span', 'nnk-badge', hostEntered ? '✅ 游戏房间已建好' : seated.length + '/' + cap + ' 人在房')),
+              e('span', 'nnk-badge', !brief.has ? '同步中…' : (hostEntered ? '✅ 游戏房间已建好' : seated.length + '/' + cap + ' 人在房'))),
             /* 房号牌:大号等宽 + 一键复制 */
             h('div', { className: 'nnk-rm-code' },
               e('span', 'nnk-rm-codelabel', '房号'),
               e('span', 'nnk-rm-codeval', roomCode || '…'),
               h('button', { className: 'nnk-copy', onClick: function () { copyText(roomCode || '') } }, '📋 复制')),
-            /* 座位网格:成员 → 排队 → 空位 */
-            h('div', { className: 'nnk-rm-seats' }, seats),
+            /* 座位网格:成员 → 排队 → 空位;成员表还没到就显示同步中,
+             * 不摆一排空位让人误以为房间是空的 */
+            brief.has
+              ? h('div', { className: 'nnk-rm-seats' }, seats)
+              : e('div', 'nnk-hint', '正在同步房间信息…一秒内就位。'),
             /* 操作区:主机换模式+载入;客人只读 */
             h('div', { className: 'nnk-rm-ops' },
               isRoomHost
@@ -1486,7 +1502,7 @@ window.__ModuleLoader__.load({
                   h('div', { className: 'nnk-radios' },
                     ONLINE_MODES.map(function (m) {
                       return h('label', { key: m.id, className: 'nnk-radio' + (roomMode === m.id ? ' nnk-radio-on' : '') },
-                        h('input', { type: 'radio', name: 'nnk-room-mode', checked: roomMode === m.id, onChange: function () { setRoomMode(m.id) } }),
+                        h('input', { type: 'radio', name: 'nnk-room-mode', checked: roomMode === m.id, onChange: function () { setRoomMode(m.id); sendCmd('set_mode', { mode: m.id }); } }),
                         m.name + '(最多 ' + capFor(m.id) + ' 人)');
                     })),
                   h('button', { className: 'nnk-submit', onClick: function () { sendCmd('restart_room', { mode: roomMode }); setNote('🚀 载入中——主机游戏重载一次,成员自动跟随进入'); } }, '🚀 载入到游戏(按所选模式)'),

@@ -279,6 +279,9 @@
 							}
 						} catch (e3) { /* 非内核协议消息忽略 */ }
 					};
+					/* 新人一进来就推一份成员表:客人开弹窗不再先看到 0 人
+					 * (hello 只在他那侧发出后才会到,这中间有空窗) */
+					emitRoomMembers();
 					return;
 				}
 				/* 等待队列门禁:房主占 1 席,客人按模式容量进入,超员排队等空位 */
@@ -674,6 +677,23 @@
 			bridgeApi().setPhase("mqtt_waiting", { roomCode: hostState.roomCode, stage: "lobby" });
 			startMqtt();
 			emitRoomMembers();   /* 新房立刻报一张成员表(工坊弹窗不等第一位客人) */
+		},
+
+		/* 工坊弹窗换模式:只更新"下一局模式"并广播(不碰引擎、不重载)。
+		 * 客人端的模式标签/座位数随 room_members 实时刷新——此前 radio 只改
+		 * 主机本机状态不上报,客人永远看到旧模式(实测反馈) */
+		setRoomMode: function(mode) {
+			mode = String(mode || "");
+			if (["identity", "guozhan", "versus", "doudizhu", "single"].indexOf(mode) < 0) {
+				bridgeApi().emit("error", { message: "不支持的模式: " + mode });
+				return;
+			}
+			if (!hostState.active || !hostState.roomCode) {
+				bridgeApi().emit("error", { message: "还没有房间,先创建 P2P 房间" });
+				return;
+			}
+			hostState.roomMode = mode;
+			emitRoomMembers();
 		},
 
 		refreshInvite: function() {

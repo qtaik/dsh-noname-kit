@@ -911,7 +911,7 @@ export function apply(ctx, config) {
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/online/command') {
           const body = await readBody()
-          const actions = new Set(['create_room', 'join_room', 'invite_refresh', 'accept_answer', 'join_invite', 'transfer_pack', 'clear_quarantine', 'set_config', 'set_identity', 'restart_room', 'cancel'])
+          const actions = new Set(['create_room', 'join_room', 'invite_refresh', 'accept_answer', 'join_invite', 'transfer_pack', 'clear_quarantine', 'set_config', 'set_identity', 'restart_room', 'set_mode', 'cancel'])
           if (!actions.has(body.action)) return json(400, { ok: false, error: `未知命令: ${body.action}` })
           if (body.action === 'set_config' && body.args?.key === 'mqttUrl') {
             // 自定义信令服务器:ws(s):// 开头才收;存 noname-kit.json 跨游戏目录
