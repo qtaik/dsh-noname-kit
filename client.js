@@ -1140,7 +1140,7 @@ window.__ModuleLoader__.load({
         fetch('/noname-kit-api/online/kernel/install', { method: 'POST' })
           .then(function (r) { return r.json() })
           .then(function (d) {
-            if (d.ok) setNote('✅ 内核已安装' + (d.backup ? '(旧版已备份)' : '') + ':重启游戏;官方版若「扩展」菜单里没有「联机助手」,先到 设置 → 通用 打开「自动导入扩展」再重启一次,它才会出现 → 给「联机助手」点「启」开启 → 按游戏提示重载,本页就会显示在线');
+            if (d.ok) setNote('✅ 已安装:重启游戏 → 扩展菜单给「联机助手」点「启」→ 重载。列表里没有它?先开 设置→通用→自动导入扩展 再重启。');
             else setNote('❌ 安装失败: ' + (d.error || '未知错误'));
           }, function () { setNote('❌ 插件服务不可达'); });
       };
@@ -1247,9 +1247,9 @@ window.__ModuleLoader__.load({
       function renderSignalingCard() {
         var effective = (bridge.cfg && bridge.cfg.mqttUrl) || '';
         return h('div', {},
-          e('div', 'nnk-hint', '房号方式的牵线中转(只过加密后的连接信息,游戏数据仍是点对点直连)。双方必须用同一个信令服务器才能互相看到——都不填即用同一个默认公共服务器;默认服务器连不上时可换成自建或其它公共 MQTT 的 ws 地址。改完下次建房生效。'),
+          e('div', 'nnk-hint', '双方要用同一个信令服务器(都不填=用默认)。默认连不上才需要改;填 ws:// 或 wss:// 地址,下次建房生效。'),
           h('div', { style: { marginTop: '8px' } },
-            e('div', 'nnk-label', 'MQTT over WebSocket 地址(ws:// 或 wss:// 开头,留空用默认)'),
+            e('div', 'nnk-label', '信令地址(留空用默认)'),
             h('input', { className: 'nnk-input', value: sigUrl, placeholder: '默认 wss://broker.emqx.io:8084/mqtt', onChange: function (ev) { setSigUrl(ev.target.value) } })),
           effective ? e('div', 'nnk-hint', '当前生效:' + effective) : null,
           h('div', { className: 'nnk-row', style: { marginTop: '8px' } },
@@ -1270,18 +1270,17 @@ window.__ModuleLoader__.load({
         }) : avatars;
         var known = avatars.some(function (a) { return a.id === idAvatar; });
         return h('div', {},
-          e('div', 'nnk-hint', '用户名 = 朋友看到的名字,也是游戏内联机昵称;头像下拉选一个武将形象(列表直接读游戏目录,不用开游戏)。保存后游戏内即时生效(对方屏幕上的头像下一局生效)。'),
+          e('div', 'nnk-hint', '用户名和头像就是朋友看到的样子。保存后自己立即生效,对方下一局生效。'),
           h('div', { style: { marginTop: '8px' } },
-            e('div', 'nnk-label', '用户名(最长 12 字,留空用游戏内设置)'),
+            e('div', 'nnk-label', '用户名(留空用游戏内设置)'),
             h('input', { className: 'nnk-input', value: idName, maxLength: 12, placeholder: '例: 大将军', onChange: function (ev) { setIdName(ev.target.value) } })),
           h('div', { style: { marginTop: '8px' } },
-            e('div', 'nnk-label', '头像(选武将,留「不设置」用游戏内默认)'),
+            e('div', 'nnk-label', '头像(留「不设置」用游戏内默认)'),
             avatarList === null
-              ? e('div', 'nnk-hint', '正在扫描游戏目录里的武将…(首次约一两秒)')
-              : !Array.isArray(avatarList)
+              ? e('div', 'nnk-hint', '正在扫描游戏目录里的武将…(首次约一两秒)')              : !Array.isArray(avatarList)
                 ? e('div', 'nnk-err', '❌ 头像列表加载失败: ' + avatarList)
                 : avatars.length === 0
-                  ? e('div', 'nnk-hint', '没扫到武将——确认「⚙ 设置」里的游戏目录指向游戏本体(下面要有 character 文件夹和 extension 文件夹)。')
+                  ? e('div', 'nnk-hint', '没扫到武将——检查「⚙ 设置」里的游戏目录是否指向游戏本体。')
                   : h('div', {},
                     h('input', { className: 'nnk-input', value: avFilter, placeholder: '打字过滤,如: 曹 / 吕 / sp', onChange: function (ev) { setAvFilter(ev.target.value) } }),
                     h('select', {
@@ -1292,7 +1291,7 @@ window.__ModuleLoader__.load({
                       h('option', { key: '', value: '' }, '不设置(用游戏内默认)'),
                       !known && idAvatar ? h('option', { key: '__nnk_keep', value: '__nnk_keep' }, idAvatar + '(当前,列表里没有)') : null,
                       filtered.map(function (a) { return h('option', { key: a.id, value: a.id }, a.name || a.id); }))),
-            !known && idAvatar && avatarList !== null && Array.isArray(avatarList) && avatars.length ? e('div', 'nnk-hint', '当前保存的头像「' + idAvatar + '」不在本机列表里(可能扩展已删),保存别的武将会覆盖它。') : null),
+            !known && idAvatar && avatarList !== null && Array.isArray(avatarList) && avatars.length ? e('div', 'nnk-hint', '保存的头像「' + idAvatar + '」不在列表里(扩展可能删了),选别的会覆盖它。') : null),
           h('div', { className: 'nnk-row', style: { marginTop: '8px' } },
             h('button', { className: 'nnk-submit', style: { marginTop: '0' }, onClick: function () {
               setNote(bridgeOnline ? '已发送,游戏内即时生效' : '已保存到本机,内核上线后自动补发');
@@ -1342,21 +1341,21 @@ window.__ModuleLoader__.load({
           e('div', null, h('b', null, '📦 包体检')),
           e('div', 'nnk-hint', (bridge.cfg && bridge.cfg.root === false)
             ? '⚠️ 本机无法定位游戏目录,扩展分类已跳过(全部扩展会参与联机加载)。'
-            : '联机默认只加载带武将/卡牌包的内容扩展,美化类不参与。'),
+            : '联机只加载带武将/卡牌的扩展。'),
           peer && peer.name ? e('div', 'nnk-ok', '👤 对方(' + (hostFlow ? '客人' : '房主') + '):「' + peer.name + '」' + (peer.avatar ? '(头像:' + peer.avatar + ')' : '')) : null,
           stillMissing.length
             ? h('div', {},
               e('div', 'nnk-hint', hostFlow
-                ? '客人缺少以下已启用扩展,点「补传」把本机文件传过去(只补传已启用的;传完客人在游戏里重开一次生效):'
-                : '你这边缺少以下扩展,请房主点「补传」传给你(传完重开游戏生效):'),
+                ? '客人缺以下扩展,点「补传」传给他(传完客人重开游戏):'
+                : '你缺以下扩展,请房主点「补传」传给你(传完重开游戏):'),
               stillMissing.map(function (name) {
                 return h('div', { key: name, style: { marginTop: '6px' } },
                   h('span', null, name + ' '),
                   hostFlow ? h('button', { className: 'nnk-copy', onClick: function () { sendCmd('transfer_pack', { name: name }) } }, '📦 补传') : null);
               }))
-            : e('div', 'nnk-ok', '✅ 双方扩展一致,不需要补传。'),
-          doneList.length ? e('div', 'nnk-ok', '✅ 已补传完成(客人重启游戏后自动生效,届时列表自动清零):' + doneList.join('、')) : null,
-          missPacks.length ? e('div', 'nnk-hint', '客人少的武将包(都在上面的扩展里,补传扩展即可):' + missPacks.join('、')) : null,
+            : e('div', 'nnk-ok', '✅ 双方扩展一致。'),
+          doneList.length ? e('div', 'nnk-ok', '✅ 已补传,客人重启游戏后生效:' + doneList.join('、')) : null,
+          missPacks.length ? e('div', 'nnk-hint', '少的武将包随扩展一起补:' + missPacks.join('、')) : null,
           extra.length ? e('div', 'nnk-hint', '对方多出的扩展(不影响联机):' + extra.join('、')) : null,
           e('label', { style: { display: 'block', marginTop: '8px' } },
             h('input', { type: 'checkbox', checked: !!(bridge.cfg && bridge.cfg.unlockUIExtensions), onChange: function (ev2) { setNote('开关已发送,下次建房重载后生效'); sendCmd('set_config', { key: 'unlockUIExtensions', value: ev2.target.checked }); } }),
@@ -1371,13 +1370,13 @@ window.__ModuleLoader__.load({
           e('div', null, h('b', null, '🌐 联机助手')),
           !status.active
             ? e('div', 'nnk-hint', status.savedDir
-                ? '⚠️ 游戏目录已保存过(' + status.savedDir + '),但本 dsh 实例是在保存之前启动的——重启 dsh 生效;或就在本实例「⚙ 设置」里重新点一次保存(立即生效)。'
-                : '还没配置游戏目录——先到「⚙ 设置」页完成配置,再回来安装联机内核。')
+                ? '游戏目录已保存过,但本实例启动在先——重启 dsh 生效,或在「⚙ 设置」重新保存(立即生效)。'
+                : '还没配置游戏目录——先到「⚙ 设置」页配好,再回来装内核。')
             : kernelBad
               ? e('div', 'nnk-err', '❌ ' + ((kernel && kernel.error) || '内核状态未知'))
               : h('div', {},
-                kernel.state === 'missing' ? e('div', 'nnk-hint', '联机内核未安装(装到游戏 extension/联机助手/,随插件版本升级)。')
-                  : kernel.state === 'stale' ? e('div', 'nnk-hint', '内核与插件自带版本不一致(插件更新过),建议升级。')
+                kernel.state === 'missing' ? e('div', 'nnk-hint', '内核未安装,点下面按钮安装。')
+                  : kernel.state === 'stale' ? e('div', 'nnk-hint', '插件更新过,内核也该升级了。')
                     : e('div', 'nnk-ok', '✅ 内核已安装' + (bridge.kernelVersion ? '(v' + bridge.kernelVersion + ')' : '')),
                 h('div', { className: 'nnk-row' },
                   kernel.state !== 'ok'
@@ -1386,8 +1385,8 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'nnk-phaseline' },
                   bridgeOnline
                     ? e('span', 'nnk-ok', '🟢 内核在线(游戏运行中)')
-                    : e('span', 'nnk-hint', '⚪ 内核离线 —— 启动游戏后在线;游戏开着却始终离线时,检查游戏「扩展」菜单里「联机助手」是否已点「启」开启(列表里没有它?官方版先开 设置→通用→自动导入扩展 再重启游戏)'
-                      + (bridge.bootStage && bridge.lastSeen ? '(最后心跳:启动阶段 ' + bridge.bootStage + ',' + new Date(bridge.lastSeen).toLocaleTimeString() + '——几十秒内自己变回在线是加载卡顿,一直不回来是游戏页真的死了,按这个判断)' : ''))),
+                    : e('span', 'nnk-hint', '⚪ 内核离线,启动游戏后自动在线。一直离线:查「扩展」菜单「联机助手」是否点「启」(列表里没有它?先开 设置→通用→自动导入扩展)'
+                      + (bridge.bootStage && bridge.lastSeen ? '(最后心跳:阶段 ' + bridge.bootStage + ',' + new Date(bridge.lastSeen).toLocaleTimeString() + '——自己回来=卡顿,不回=页面死)' : ''))),
                 phase !== 'idle'
                   ? e('div', 'nnk-hint', '当前状态:' + phaseText + (bridge.state && bridge.state.roomCode ? '(房号 ' + bridge.state.roomCode + ')' : ''))
                   : null)),
@@ -1399,7 +1398,7 @@ window.__ModuleLoader__.load({
             h('div', { key: 'col-host', className: 'nnk-col' },
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '🏠 我要当主机')),
-              e('div', 'nnk-hint', '选玩法 → 创建房间 → 把 6 位房号发给朋友,朋友在「我要加入」输房号即可。开局(开始游戏/选将)在游戏里点。建房会自动关闭「禁止不同版本玩家进房」,不同游戏版本的朋友也能进。'),
+              e('div', 'nnk-hint', '选玩法 → 创建房间 → 房号发给朋友。开局在游戏里点「开始游戏」。'),
               h('div', { className: 'nnk-radios', style: { marginTop: '8px' } },
                 ONLINE_MODES.map(function (m) {
                   return h('label', { key: m.id, className: 'nnk-radio' + (mode === m.id ? ' nnk-radio-on' : '') },
@@ -1435,7 +1434,7 @@ window.__ModuleLoader__.load({
                 : null),
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '🔗 我要加入')),
-              e('div', 'nnk-hint', '输入房主发给你的 6 位房号,点「加入」;房主应答后自动进房。'),
+              e('div', 'nnk-hint', '输入 6 位房号,点「加入」,房主同意后自动进房。'),
               h('input', { className: 'nnk-input', value: roomText, maxLength: 6, onChange: function (ev) { setRoomText(ev.target.value.toUpperCase()) }, placeholder: '输入 6 位房号,如 AB2C9X', style: { textTransform: 'uppercase', letterSpacing: '4px', fontSize: '16px' } }),
               h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow || guestFlow, onClick: function () { sendCmd('join_room', { code: roomText }) } }, '🚪 加入房间'),
               showInviteFallback
@@ -1451,8 +1450,10 @@ window.__ModuleLoader__.load({
                       h('button', { className: 'nnk-copy', onClick: function () { copyText((answerEv.data && answerEv.data.code) || '') } }, '📋 复制回执码'))
                     : null)
                 : h('button', { className: 'nnk-copy', onClick: function () { setShowInviteFallback(true) } }, '房号连不上?换邀请码方式(备用)…')),
-            /* 左栏(主机+加入)收口 */
-            ),
+            /* 左栏收口(主机+加入+两块折叠配置):折叠卡进栏内,跟着本栏紧凑
+             * 堆叠,不再被网格行高顶出大空隙 */
+            renderFoldCard('identity', '👤 人物标识', function () { return renderIdentityCard() }),
+            renderFoldCard('signaling', '📡 信令服务器', function () { return renderSignalingCard() })),
             h('div', { key: 'col-info', className: 'nnk-col' },
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '📡 动态')),
@@ -1460,18 +1461,16 @@ window.__ModuleLoader__.load({
                 ? evs.slice(-20).reverse().map(function (ev, i) {
                   return e('div', { key: i, className: 'nnk-break' }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
                 })
-                : e('div', { className: 'nnk-hint' }, '暂无动态——建房/加入/扩展报错都会显示在这里。'))),
-            renderManifestCard(evs, hostFlow))]
+                : e('div', { className: 'nnk-hint' }, '暂无动态。'))),
+            renderManifestCard(evs, hostFlow),
+            renderFoldCard('help', '📖 怎么用', function () { return h('div', {},
+              e('div', 'nnk-hint',
+                '0.【官方版一次性】设置→通用→打开「自动导入扩展」→重载,否则扩展列表里没有「联机助手」。\n' +
+                '1. 两边都装插件、配好目录;本页点「📦 安装内核」→ 游戏扩展菜单给「联机助手」点「启」→ 重载。\n' +
+                '2. 主机:创建房间发房号;客人输房号加入。房号不通换邀请码方式。打完一把「重新开始」自动用原房号重开。\n' +
+                '3. 主机在游戏里点「开始游戏」。禁将/包/人数在等待房间右上角「房间设置」改,点「启」广播全房。'),
+              e('div', 'nnk-hint', '连接信息经加密信令交换,游戏数据点对点直连。个别网络连不上就换邀请码方式。')) }))]
           : null,
-        status.active && kernel && kernel.state === 'ok' ? renderFoldCard('identity', '👤 人物标识(联机昵称+头像)', function () { return renderIdentityCard() }) : null,
-        status.active && kernel && kernel.state === 'ok' ? renderFoldCard('signaling', '📡 信令服务器(可选)', function () { return renderSignalingCard() }) : null,
-        renderFoldCard('help', '📖 怎么用(四步)', function () { return h('div', {},          e('div', 'nnk-hint',
-            '0.【官方版一次性】进游戏:设置 → 通用(部分版本在「不常用选项」)→ 打开「自动导入扩展」→ 按提示重载。不开它,「扩展」菜单里根本不会出现「联机助手」;装完内核的游戏都要过这一步。\n' +
-            '1. 双方或多方都装本插件(dsh plugin --profile web add dsh-noname-kit,桌面版用 --profile desktop)并配好各自的游戏目录;然后各自在本页点「📦 安装内核」→ 进游戏在主菜单「扩展」里给「联机助手」点「启」开启(新扩展默认不启用;列表里没有它就回第 0 步)→ 按游戏提示重载生效。内核没有操作界面,联机操作都在本页,所以每个人都要装插件。\n' +
-            '2. 主机:创建房间 → 把 6 位房号发给朋友;朋友:输入房号加入。房号走不通时,主机可改用「邀请码方式建房」(备用)。打完一把点「重新开始」会自动用原房号重开,不用重新发码。\n' +
-            '3. 游戏里出现等待房间(房主座位已就位),朋友进房后主机在游戏里点「开始游戏」。\n' +
-            '禁将/武将包/卡牌包/人数:游戏内等待房间右上角点「房间设置」打开模式菜单,改完点「启」自动广播到全房。'),
-          e('div', 'nnk-hint', '房号模式经国内可达的公共信令服务器交换连接信息(载荷按房号加密,点对点直连、无需公网 IP);个别网络(如手机热点)打不通时换个网络再试,或改用邀请码兜底。无人大厅在后续版本。')) }, true),
         note ? e('div', { className: 'nnk-dash-full ' + (note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err') }, note) : null,
         phase === 'invite_ready' && inviteEv && (inviteEv.data && inviteEv.data.code) && invitePopupDismissed !== inviteEv.data.code
           ? renderInviteModal(inviteEv) : null,
