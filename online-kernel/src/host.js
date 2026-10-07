@@ -312,6 +312,36 @@
 					localStorage.removeItem(env.lib.configprefix + "nnk_host_roomcode");
 					hostState.active = true;
 					console.log("[联机助手] 检测到待建房间标记,重载后继续互联网建房" + (hostState.reuseCode ? "(沿用原房号 " + hostState.reuseCode + ")" : ""));
+					/* 自愈看门狗:重载后 20 秒房间还没建起来(开机竞速/接力配置写入
+					 * 丢失,实测卡纯背景页),带原模式原房号自动再重载一次(只救一次) */
+					var watchdogMode = (pendingTask && typeof pendingTask === "object" && pendingTask.mode) || "identity";
+					setTimeout(function() {
+						if (!hostState.active || hostState.roomCode || env._status.waitingForPlayer || env._status.over) {
+							return;   /* 房间已就绪/已取消/已在局中,不用救 */
+						}
+						try {
+							localStorage.setItem(env.lib.configprefix + "nnk_host_pending", JSON.stringify({ mode: watchdogMode, signaling: hostState.signaling }));
+							if (hostState.reuseCode) {
+								localStorage.setItem(env.lib.configprefix + "nnk_host_roomcode", hostState.reuseCode);
+							}
+							localStorage.setItem(env.lib.configprefix + "directstart", "true");
+							console.warn("[联机助手] 重载后房间未就绪,自动带原房号再重载一次");
+							bridgeApi().emit("info", { message: "重载后房间没建起来,正在自动重试(带原房号)…" });
+							var waits = 2;
+							var gone = false;
+							var go2 = function() {
+								if (!gone) {
+									gone = true;
+									env.game.reload();
+								}
+							};
+							env.game.saveConfig("directstartmode", watchdogMode, null, go2);
+							env.game.saveConfig("mode", "connect", null, go2);
+							setTimeout(go2, 1500);
+							return;
+						} catch (e) { /* 忽略 */ }
+						env.game.reload();
+					}, 20000);
 				} else if (env.lib.config.directstartmode || localStorage.getItem(env.lib.configprefix + "directstart")) {
 					env.game.saveConfig("directstartmode");
 					localStorage.removeItem(env.lib.configprefix + "directstart");
@@ -322,6 +352,9 @@
 			 * 和「重新开始」按钮都走它),软服务器随页面消失,房间即散。包装 reload:
 			 * 对局刚结束(over)且房号模式房间还在时,把同一房号接力过去再重载——
 			 * 重载后沿用原房号续建,客人凭断线感知自动重进,谁都不用再输码。
+			 * ★ saveConfig 是异步写库,直接重载会把 directstartmode/mode 的写入丢掉
+			 *   (实测:重载后引擎拿不到直启标记,卡在纯背景页)——必须等两个写入
+			 *   的回调落地再重载,1.5 秒兜底防写库挂死。
 			 * 邀请码模式的 SDP 一次性无法复用,仍是重载即散(备用方式不变) */
 			if (!env.game.__nnkReloadPatched) {
 				env.game.__nnkReloadPatched = true;
@@ -334,9 +367,20 @@
 							localStorage.setItem(env.lib.configprefix + "nnk_host_pending", JSON.stringify({ mode: overMode, signaling: "mqtt" }));
 							localStorage.setItem(env.lib.configprefix + "nnk_host_roomcode", hostState.roomCode);
 							localStorage.setItem(env.lib.configprefix + "directstart", "true");
-							env.game.saveConfig("directstartmode", overMode);
-							env.game.saveConfig("mode", "connect");
 							bridgeApi().emit("info", { message: "对局结束,正在用原房号 " + hostState.roomCode + " 重组房间(几秒后自动就绪,客人会自动重回)" });
+							var waits = 2;
+							var gone = false;
+							var go = function() {
+								if (gone) {
+									return;
+								}
+								gone = true;
+								origReload.apply(env.game);
+							};
+							env.game.saveConfig("directstartmode", overMode, null, go);
+							env.game.saveConfig("mode", "connect", null, go);
+							setTimeout(go, 1500);
+							return;
 						}
 					} catch (e) { /* 接力失败则按老行为散房 */ }
 					return origReload.apply(this, arguments);
@@ -412,9 +456,20 @@
 				localStorage.setItem(env.lib.configprefix + "nnk_host_pending", JSON.stringify({ mode: mode, signaling: hostState.signaling }));
 				localStorage.setItem(env.lib.configprefix + "directstart", "true");
 			} catch (e) { /* 忽略 */ }
-			env.game.saveConfig("directstartmode", mode);
-			env.game.saveConfig("mode", "connect");
-			env.game.reload();
+			/* saveConfig 异步写库,直接重载会丢 directstartmode/mode(与重新开始
+			 * 卡背景同根):等写入回调落地再重载,1.5 秒兜底 */
+			var createWaits = 2;
+			var createGone = false;
+			var createGo = function() {
+				if (createGone) {
+					return;
+				}
+				createGone = true;
+				env.game.reload();
+			};
+			env.game.saveConfig("directstartmode", mode, null, createGo);
+			env.game.saveConfig("mode", "connect", null, createGo);
+			setTimeout(createGo, 1500);
 		},
 
 		refreshInvite: function() {
