@@ -1367,6 +1367,9 @@ window.__ModuleLoader__.load({
       function renderOnlinePanel() {
         return h('div', { className: 'nnk-dash' },
         h('div', { className: 'nnk-card nnk-dash-full' },
+          h('b', { style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, '⚠️ 联机功能仅适配官方版无名杀(无 UI 美化),第三方套壳尽力而为:'),
+          h('a', { href: 'https://github.com/libnoname/noname', target: '_blank', rel: 'noopener', style: { color: 'var(--dsw-alias-brand-primary)', marginLeft: '6px' } }, 'github.com/libnoname/noname')),
+        h('div', { className: 'nnk-card nnk-dash-full' },
           e('div', null, h('b', null, '🌐 联机助手')),
           !status.active
             ? e('div', 'nnk-hint', status.savedDir
@@ -1385,8 +1388,7 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'nnk-phaseline' },
                   bridgeOnline
                     ? e('span', 'nnk-ok', '🟢 内核在线(游戏运行中)')
-                    : e('span', 'nnk-hint', '⚪ 内核离线,启动游戏后自动在线。一直离线:查「扩展」菜单「联机助手」是否点「启」(列表里没有它?先开 设置→通用→自动导入扩展)'
-                      + (bridge.bootStage && bridge.lastSeen ? '(最后心跳:阶段 ' + bridge.bootStage + ',' + new Date(bridge.lastSeen).toLocaleTimeString() + '——自己回来=卡顿,不回=页面死)' : ''))),
+                    : e('span', 'nnk-hint', '⚪ 内核离线,启动游戏后自动在线。一直离线:查「扩展」菜单「联机助手」是否点「启」(列表里没有它?先开 设置→通用→自动导入扩展)')),
                 phase !== 'idle'
                   ? e('div', 'nnk-hint', '当前状态:' + phaseText + (bridge.state && bridge.state.roomCode ? '(房号 ' + bridge.state.roomCode + ')' : ''))
                   : null)),
