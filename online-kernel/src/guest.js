@@ -238,11 +238,33 @@
 			pc.ondatachannel = function(e) {
 				var fake = new rtc.FakeWebSocket(e.channel);
 				session.fake = fake;
-				fake.onUp(function() {
-					if (session.autoConnect) {
-						connectNow();
+				/* 内核协议 tap(与房号模式同款):收到放行(loaded/引擎消息直达)才接
+				 * 引擎——full=房满被拒、closed=房主解散,都给人话收场,不对着断线发懵 */
+				fake.onmessage = function(ev) {
+					try {
+						var msg = JSON.parse(ev.data);
+						if (msg && msg.nnk_stage === "full") {
+							session.autoConnect = false;
+							resetSession();
+							bridgeApi().setPhase("idle");
+							bridgeApi().emit("error", { message: "房间人数已满,主机没能让你进——等有人退出,让房主发一张新邀请码再来" });
+						} else if (msg && msg.nnk_stage === "closed") {
+							session.autoConnect = false;
+							resetSession();
+							bridgeApi().setPhase("idle");
+							bridgeApi().emit("info", { message: "房主已解散房间" });
+						} else if (session.autoConnect && (msg.nnk_stage === "loaded" || Array.isArray(msg))) {
+							/* loaded=新内核放行指令;引擎消息(数组)直达=对端还没发
+							 * 放行指令的旧内核——都当作放行,缓冲后交引擎(混装不吊死) */
+							fake._buffer.push(ev.data);
+							connectNow();
+						}
+						/* 其余(无 nnk_stage 的非数组消息)忽略 */
+					} catch (e2) {
+						/* 非 JSON 消息:暂存回放,防丢 */
+						fake._buffer.push(ev.data);
 					}
-				});
+				};
 				fake.onDown(function() {
 					if (guestState.session === session) {
 						guestState.session = null;
@@ -345,6 +367,10 @@
 							resetSession();
 							bridgeApi().setPhase("idle");
 							bridgeApi().emit("info", { message: "房主已解散房间" });
+						} else if (msg && msg.nnk_members) {
+							/* 主机转发的成员表:客人弹窗的等待队列数据源(与主机同款
+							 * room_members 事件,动态流里会被过滤不刷屏) */
+							bridgeApi().emit("room_members", msg.nnk_members);
 						}
 						/* 引擎消息是 JSON 数组:parse 成功但没有 nnk_stage 字段,走到这里
 						 * 被静默忽略——大厅/排队阶段主机引擎不发包,无实际丢失路径;

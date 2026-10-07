@@ -138,8 +138,28 @@
 		return fallback[mode] || 8;
 	}
 
-	/* 成员表上报(弹窗②③数据源):房主始终在等待队列首位(带人物标识名字),
-	 * capacity=当前模式人数上限(工坊据此画空座位) */
+	/* 房间真实容量:载入后读引擎房间配置(configOL.player_number——switchMode
+	 * 从模式 connect 配置填入,游戏里房间设置改人数后引擎改的也是它)。
+	 * 比模式上限准:5 人局不该按身份上限 8 放人。大厅阶段房间还没建,
+	 * configOL 可能是上一局的残值,不可信,退回模式上限 */
+	function roomCapacity() {
+		var env = nnk.env;
+		var mode = hostState.roomMode || "identity";
+		if (hostState.stage === "loaded") {
+			try {
+				var n = parseInt(env.lib.configOL && env.lib.configOL.player_number, 10);
+				if (n > 0 && env.lib.configOL.mode === mode) {
+					return n;
+				}
+			} catch (e) { /* 读不到退回模式上限 */ }
+		}
+		return modeMaxPlayers(mode);
+	}
+
+	/* 成员表上报(弹窗②数据源):房主始终在等待队列首位(带人物标识名字),
+	 * capacity=房间真实容量(roomCapacity,工坊据此画空座位)。
+	 * 同时转发给停泊中的客人(nnk_members):客人弹窗的等待队列不再是空的,
+	 * 排队的人也能看到自己排第几、前面还有几个空位 */
 	function emitRoomMembers() {
 		var list = [];
 		try {
@@ -159,19 +179,28 @@
 				queued: !!b._queued
 			});
 		});
+		var cap = roomCapacity();
 		bridgeApi().emit("room_members", {
 			list: list,
-			capacity: modeMaxPlayers(hostState.roomMode || "identity")
+			capacity: cap
+		});
+		hostState.bridges.forEach(function(b) {
+			if (!b._entered) {
+				try { b.send(JSON.stringify({ nnk_members: { list: list, capacity: cap } })); } catch (e2) { /* 通道可能已半死 */ }
+			}
 		});
 	}
 
-	/* 空位补进:已进入的客人腾出位置后,把排队里的第一个提升进引擎 */
+	/* 空位补进:等待房里有人退出后,把排队里的第一个提升进引擎。
+	 * 只在等待房阶段补位(stage=loaded 且引擎在等客):对局中有人掉线,
+	 * 空位交给引擎原生机制(断线重连/掉线转 AI),不把排队客人硬塞进
+	 * 进行中的对局——下一局载入时所有客人重新过门禁,按容量进门 */
 	function promoteNextQueued() {
 		var env = nnk.env;
-		if (hostState.stage !== "loaded") {
+		if (hostState.stage !== "loaded" || !env._status.waitingForPlayer) {
 			return;
 		}
-		var capacity = modeMaxPlayers(hostState.roomMode || "identity");
+		var capacity = roomCapacity();
 		var enteredGuests = hostState.bridges.filter(function(b) {
 			return b._entered;
 		}).length;
@@ -231,7 +260,7 @@
 					return;
 				}
 				/* 等待队列门禁:房主占 1 席,客人按模式容量进入,超员排队等空位 */
-				var queueCapacity = modeMaxPlayers(hostState.roomMode || "identity");
+				var queueCapacity = roomCapacity();
 				var enteredGuests = hostState.bridges.filter(function(b) {
 					return b._entered;
 				}).length;
@@ -335,6 +364,18 @@
 			/* 这张 pc 已经转为在座客人的承载连接,必须从"待应答"位上摘掉:
 			 * 否则下一次 refreshInvite 会把它 close 掉,等于踢掉已坐下的客人 */
 			hostState.invitePc = null;
+			/* 队列门禁与房号模式同款:房满就拒(先发 full 再关,客人端内核 tap
+			 * 认得它,给人话提示),邀请码通道不再绕过人数限制 */
+			var capacity = roomCapacity();
+			var enteredGuests = hostState.bridges.filter(function(b) {
+				return b._entered;
+			}).length;
+			if (enteredGuests >= capacity - 1) {
+				try { channel.send(JSON.stringify({ nnk_stage: "full" })); } catch (e2) { /* 忽略 */ }
+				try { pc.close(); } catch (e3) { /* 忽略 */ }
+				bridgeApi().emit("error", { message: "房间人数已满(" + capacity + " 人),这位客人没能进入——等有人退出,再发一张新邀请码让他重连" });
+				return;
+			}
 			var conn = new rtc.HostBridge(channel);
 			conn._pc = pc;
 			hostState.bridges.push(conn);
@@ -344,9 +385,13 @@
 					hostState.bridges.splice(i, 1);
 				}
 			});
+			/* 与房号模式同款:先发内核放行指令再交给引擎——客人端 tap 收到
+			 * loaded 才接引擎,full/closed 这类内核消息也才有人接 */
+			conn.send(JSON.stringify({ nnk_stage: "loaded" }));
 			env.lib.init.connection(conn);
+			conn._entered = true;
 			bridgeApi().setPhase("room_open", { roomCode: hostState.roomCode, signaling: hostState.signaling });
-			bridgeApi().emit("guest_connected", { guests: hostState.bridges.length });
+			bridgeApi().emit("guest_connected", { guests: hostState.bridges.filter(function(b2) { return b2._entered; }).length });
 		};
 		pc.createOffer().then(function(offer) {
 			return pc.setLocalDescription(offer);
@@ -573,6 +618,7 @@
 				/* 邀请码备用路径(旧流程):重载直启建引擎房间 */
 				hostState.stage = "loaded";
 				hostState.active = true;
+				hostState.roomMode = mode;   /* 容量门禁按这次选的模式算 */
 				bridgeApi().setPhase("host_booting", { mode: mode });
 				try {
 					localStorage.setItem(env.lib.configprefix + "nnk_host_pending", JSON.stringify({ mode: mode, signaling: "invite", stage: "loaded" }));
