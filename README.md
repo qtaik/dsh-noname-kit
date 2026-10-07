@@ -149,12 +149,14 @@ GitHub tag 取,查不通只显示一行「检查失败」,不影响使用;「启
 ## 测试
 
 ```sh
-node scripts/test-tasks.mjs    # 任务状态机(含配音门禁),79 项
-node scripts/test-audio.mjs    # 配音复制与目标校验,13 项
-node scripts/test-detect.mjs   # 游戏目录自动探测与遍历,9 项
-node scripts/test-blocks.mjs   # 区块读写,85 项
-node scripts/test-update.mjs   # 版本比较与更新检查,107 项
-node scripts/test-preset.mjs   # preset 自检与安装,59 项
+node scripts/test-tasks.mjs      # 任务状态机(含配音门禁),85 项
+node scripts/test-audio.mjs      # 配音复制与目标校验,13 项
+node scripts/test-detect.mjs     # 游戏目录自动探测与遍历,9 项
+node scripts/test-blocks.mjs     # 区块读写,85 项
+node scripts/test-update.mjs     # 版本比较与更新检查,116 项
+node scripts/test-preset.mjs     # preset 自检与安装,88 项
+node scripts/test-online.mjs     # 联机助手(内核状态/桥/头像扫描),39 项
+node scripts/test-ui-calls.mjs   # 界面代码调用形态静态扫描(e()/h() 误用防护),6 项
 ```
 
 ## 反馈

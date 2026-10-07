@@ -1363,7 +1363,7 @@ window.__ModuleLoader__.load({
           onClose: function () { setAnswerPopupDismissed(code) },
           body: h('div', {},
             e('div', 'nnk-hint', '把回执码整段发给房主,房主粘贴后点「连接」,直连打通后自动进房。房主没回音时在工坊动态看进度。'),
-            codeAgeText(ev.ts) ? e('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(ev.ts)) : null,
+            codeAgeText(ev.ts) ? h('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(ev.ts)) : null,
             e('div', 'nnk-label', '回执码(整段复制)'),
             h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: code }),
             h('button', { className: 'nnk-copy', onClick: function () { copyText(code) } }, '📋 复制回执码'))
@@ -1494,11 +1494,11 @@ window.__ModuleLoader__.load({
           doneList.length ? e('div', 'nnk-ok', '✅ 已补传,客人重启游戏后生效:' + doneList.join('、')) : null,
           missPacks.length ? e('div', 'nnk-hint', '少的武将包随扩展一起补:' + missPacks.join('、')) : null,
           extra.length ? e('div', 'nnk-hint', '对方多出的扩展(不影响联机):' + extra.join('、')) : null,
-          e('label', { style: { display: 'block', marginTop: '8px' } },
+          h('label', { style: { display: 'block', marginTop: '8px' } },
             h('input', { type: 'checkbox', checked: !!(bridge.cfg && bridge.cfg.unlockUIExtensions), onChange: function (ev2) { setNote('开关已发送,下次建房重载后生效'); sendCmd('set_config', { key: 'unlockUIExtensions', value: ev2.target.checked }); } }),
             ' 联机时也加载美化类扩展(皮肤/动效,可能不稳,默认只加载武将/卡牌扩展)'),
           resetBtn,
-          txEv ? e('div', { className: 'nnk-break', style: { marginTop: '6px' } }, onlineEventText(txEv)) : null);
+          txEv ? h('div', { className: 'nnk-break', style: { marginTop: '6px' } }, onlineEventText(txEv)) : null);
       }
 
       /* 解散/退出房间(内核 cancel:主机=停信令+通知停泊客人散场,客人=中止
@@ -1826,9 +1826,9 @@ window.__ModuleLoader__.load({
               e('div', null, h('b', null, '📡 动态')),
               h('div', { className: 'nnk-log' }, evs.length
                 ? evs.filter(function (ev2) { return ev2 && ev2.type !== 'room_members'; }).slice(-20).reverse().map(function (ev, i) {
-                  return e('div', { key: i, className: 'nnk-break' }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
+                  return h('div', { key: i, className: 'nnk-break' }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
                 })
-                : e('div', { className: 'nnk-hint' }, '暂无动态。'))),
+                : h('div', { className: 'nnk-hint' }, '暂无动态。'))),
             renderManifestCard(evs, hostFlow),
             renderFoldCard('help', '📖 怎么用', function () { return h('div', {},
               e('div', 'nnk-hint',
@@ -1838,7 +1838,7 @@ window.__ModuleLoader__.load({
                 '3. 主机在游戏里点「开始游戏」。禁将/包/人数在等待房间右上角「房间设置」改,点「启」广播全房。'),
               e('div', 'nnk-hint', '连接信息经加密信令交换,游戏数据点对点直连。个别网络连不上房号门,就用邀请码从另一道门进(同一个房间)。')) }))]
           : null,
-        note ? e('div', { className: 'nnk-dash-full ' + (note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err') }, note) : null,
+        note ? h('div', { className: 'nnk-dash-full ' + (note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err') }, note) : null,
         roomPopupOpen && roomCode ? renderRoomModal() : null,
         /* 新码弹窗(按行号):生成后自动弹一次;误触收起不影响——列表里随时能复制,
          * 那行的「🔎 再看」也能重开 */
@@ -1973,7 +1973,7 @@ window.__ModuleLoader__.load({
       var ok = text.indexOf('已标记') === 0;
       return h('div', {},
         e('div', {}, h('b', null, ok ? '🏁 技能已写入,待游戏测试' : '⚠️ 收口未完成')),
-        e('div', { className: ok ? 'nnk-ok' : 'nnk-err' }, text),
+        h('div', { className: ok ? 'nnk-ok' : 'nnk-err' }, text),
         ok ? null : e('div', 'nnk-hint', '若任务列表状态未更新,可让 AI 重试收口;或直接在「📋 任务列表」里操作。')
       );
     }
