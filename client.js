@@ -986,7 +986,7 @@ window.__ModuleLoader__.load({
     var MODE_MAX = { identity: 8, guozhan: 8, versus: 8, doudizhu: 3, single: 2 };
     /* 流程互斥:同一游戏实例要么在主机流程要么在客人流程,进行中时另一侧禁用 */
     var HOST_PHASES = ['host_booting', 'hosting', 'invite_ready', 'connecting', 'room_open'];
-    var GUEST_PHASES = ['guest_booting', 'joining', 'answer_ready', 'entering', 'connected', 'queued'];
+    var GUEST_PHASES = ['guest_booting', 'joining', 'answer_ready', 'entering', 'connected', 'queued', 'lobby_waiting'];
     var ONLINE_PHASE_TEXT = {
       idle: '待机',
       host_booting: '正在进入建房流程(游戏将自动重载,约几秒)…',
@@ -1001,7 +1001,8 @@ window.__ModuleLoader__.load({
       answer_ready: '回执码已生成,发给房主等他粘贴…',
       entering: '直连已建立,正在进入房间…',
       connected: '✅ 已进入房间!',
-      queued: '⏳ 房间人数已满,排队等待空位(有人退出会自动进入)'
+      queued: '⏳ 房间人数已满,排队等待空位(有人退出会自动进入)',
+      lobby_waiting: '✅ 已进入房间大厅,等待房主点「载入到游戏」…'
     };
     function onlinePickEvent(evs, type) {
       for (var i = evs.length - 1; i >= 0; i--) {

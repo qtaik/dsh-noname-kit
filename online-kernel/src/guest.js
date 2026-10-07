@@ -356,6 +356,9 @@
 						} else if (msg && msg.nnk_stage === "queued") {
 							bridgeApi().setPhase("queued");
 						} else if (msg && msg.nnk_stage === "lobby") {
+							/* 停车在大厅:必须报阶段——此前只发 hello 不报阶段,
+							 * 客人工坊一直停在「等房主应答」,看着像没进房(实测反馈) */
+							bridgeApi().setPhase("lobby_waiting", { code: code });
 							fake.send(JSON.stringify({ nnk_hello: {
 								name: nnk.env.get.connectNickname(),
 								avatar: nnk.env.lib.config.connect_avatar || ""
@@ -371,10 +374,12 @@
 							/* 主机转发的成员表:客人弹窗的等待队列数据源(与主机同款
 							 * room_members 事件,动态流里会被过滤不刷屏) */
 							bridgeApi().emit("room_members", msg.nnk_members);
+						} else if (session.autoConnect && Array.isArray(msg)) {
+							/* 引擎消息(数组)直达=对端旧内核没发放行指令——当作
+							 * 放行(混装不吊死);大厅停车期主机引擎不发包,无此路径 */
+							fake._buffer.push(ev.data);
+							connectNow();
 						}
-						/* 引擎消息是 JSON 数组:parse 成功但没有 nnk_stage 字段,走到这里
-						 * 被静默忽略——大厅/排队阶段主机引擎不发包,无实际丢失路径;
-						 * 进引擎由 connectNow 把 onmessage 换成引擎 handler */
 					} catch (e2) {
 						/* 非 JSON 消息:暂存回放,防丢 */
 						fake._buffer.push(ev.data);
