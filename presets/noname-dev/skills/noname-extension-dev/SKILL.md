@@ -129,6 +129,22 @@ export default function () {
 - content 里异步动作(draw/useCard/damage/chooseToUse)必须 await。
 - 改 lib/_status 全局状态要考虑联机(game.broadcastAll)。
 
+## 联机兼容写法(扩展要在联机房间里正常,必须知道这四条)
+引擎联机模式对扩展有额外规则(源码实证);违反时单机正常、一进联机房就出怪现象:
+1. **包要声明 connect**:`package.character.connect` / `package.card.connect`(包对象级)。
+   不写的包不进联机池,别人房间里看不到(工坊内核会自动补齐,但自己写是明确契约)。
+2. **技能默认只在主机加载**:联机模式下,技能定义没写 `connect` 的会被替换成"影子"
+   (只留 nopop/derivation)——客人发动时由**主机执行效果、广播结果**。这是设计而非 bug。
+   **`forceLoad: true` 的技能例外**:客人本机也完整加载,跨机同步要自己负责,默认别用。
+3. **卡牌的 `derivation` / `derivationpack` 是"条件卡"标记**(卡牌独有,武将没有):
+   引擎会维护 mode_derivation 清单,并在开局前过滤——
+   `derivation` 指向的武将不在本机(客人没装该武将包)、或 `derivationpack` 指向的卡牌包
+   本局没启用时,**那张卡会被剔除**。表现=同一张派生的牌"有时候能用有时候消失"。
+   写派生卡前先明确:这张牌依赖哪个武将/包?若依赖方可能缺席,就不要用 derivation 机制。
+4. **牌堆在联机走另一条路**:联机模式不组装 `lib.cardPile`,牌堆走 `cardPackList`——
+   单机的"禁牌堆/加牌堆"设置**不会带进联机房间**;`package.card.list` 的牌堆条目
+   在联机下是"包自带牌堆",进不进房间由包启用与否决定。
+
 ## 武将结构
 ```js
 character: { zhaoyun: { sex: "male", group: "qun", hp: 3, skills: ["skillId"] } }
