@@ -133,12 +133,22 @@
 		if (!cfg) {
 			return;
 		}
-		fetch(cfg.baseUrl + "/online/bridge", {
-			method: "POST",
-			headers: { "content-type": "application/json" },
+			fetch(cfg.baseUrl + "/online/bridge", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
 					token: cfg.token,
-					kernel: { version: nnk.version, stage: nnk.state.bootStage || "booting" },
+					kernel: (function() {
+						var role = "";
+						try {
+							if (nnk.state.guest && nnk.state.guest.session) {
+								role = "guest";
+							} else if (nnk.state.host && nnk.state.host.active) {
+								role = "host";
+							}
+						} catch (e2) { /* 忽略 */ }
+						return { version: nnk.version, stage: nnk.state.bootStage || "booting", role: role };
+					})(),
 					state: state,
 				cfg: {
 					unlockUIExtensions: !!nnk.modules.config.get("unlockUIExtensions"),

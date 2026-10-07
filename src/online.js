@@ -199,6 +199,7 @@ export function createBridgeSession({ token, syncSource }) {
     lastSeen: 0,
     kernelVersion: null,
     bootStage: null,
+    role: '',
     state: null,
     events: [],
     commands: [],
@@ -211,6 +212,7 @@ export function createBridgeSession({ token, syncSource }) {
       session.lastSeen = Date.now()
       session.kernelVersion = payload?.kernel?.version ?? session.kernelVersion
       session.bootStage = payload?.kernel?.stage ?? session.bootStage
+      session.role = payload?.kernel?.role || session.role
       session.state = payload?.state ?? session.state
       session.cfg = payload?.cfg ?? session.cfg
       /* 配置离线补发:同一个值只补一次,内核应用后 cfg 追平即不再发 */
@@ -259,6 +261,7 @@ export function createBridgeSession({ token, syncSource }) {
         lastSeen: session.lastSeen || null,
         kernelVersion: session.kernelVersion,
         bootStage: session.bootStage,
+        role: session.role,
         state: session.state,
         cfg: session.cfg,
         events: session.events.slice(-50),
