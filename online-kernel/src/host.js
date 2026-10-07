@@ -664,6 +664,7 @@
 							startMqtt();
 							bridgeApi().setPhase("mqtt_waiting", { roomCode: hostState.roomCode });
 						}
+						emitRoomMembers();   /* 恢复后立刻报一份成员表:否则工坊弹窗一直停在「同步中…」(等客人进来才补上) */
 						console.log("[联机助手] 大厅已恢复(房号 " + hostState.roomCode + "),等待载入到游戏");
 					} else {
 						hostState.stage = "loaded";
