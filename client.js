@@ -358,7 +358,10 @@ window.__ModuleLoader__.load({
         } else {
           if (!filledSkills.length) { errSet('请至少填写一个技能(技能名和效果至少填一处)'); return }
           if (!form.folder.trim()) { errSet('目标扩展文件夹不能为空'); return }
-          if (type === 'card' && form.pileJoin && !form.pileRows.some(function (r) { return r.point !== '' })) { errSet('选了「加入牌堆」但没填任何牌的花色点数——至少填一行,或改选「不加入牌堆」'); return }
+          /* 用 form.type 而不是下面 var 提升的 type:此前 var 提升让这里恒读 undefined,
+           * 整条校验是死代码——选了「加入牌堆」却不填点数照样提交,任务消息还被写成
+           * 「不加入牌堆」,两个模块语义相反(实测) */
+          if (form.type === 'card' && form.pileJoin && !form.pileRows.some(function (r) { return r.point !== '' })) { errSet('选了「加入牌堆」但没填任何牌的花色点数——至少填一行,或改选「不加入牌堆」'); return }
         }
         var dupUsed = isEdit && form.taskId.trim() && (form.usedIds || []).some(function (u) { return u.id === form.taskId.trim() });
         if (dupUsed) { errSet('任务ID「' + form.taskId.trim() + '」此包已用过,请换一个'); return }
@@ -802,7 +805,7 @@ window.__ModuleLoader__.load({
                 h('span', { className: 'nnk-badge' }, '累计 ' + ext.totalRounds + ' 轮'),
                 ext.backupCount ? h('span', { className: 'nnk-badge' }, ext.backupCount + ' 备份') : null
               ),
-              ext.lastTask ? e('div', 'nnk-taskmeta', '最近: [' + (ext.lastTask.kind === 'card' ? '卡牌' : '武将') + '] ' + ext.lastTask.summary + ' · ' + fmt(ext.lastTask.at)) : null,
+              ext.lastTask ? e('div', 'nnk-taskmeta', '最近: [' + (ext.lastTask.kind === 'card' ? '卡牌' : ext.lastTask.kind === 'mode' ? '模式' : '武将') + '] ' + ext.lastTask.summary + ' · ' + fmt(ext.lastTask.at)) : null,
               h('button', { className: 'nnk-copy', onClick: function () { openDetail(ext.folder) } }, '📦 备份/注意点')
             );
           })
@@ -2125,13 +2128,15 @@ window.__ModuleLoader__.load({
         var skills = Array.isArray(task.skills) ? task.skills : [];
         var confirmed = skills.filter(function (s) { return s.status === 'confirmed' }).length;
         var warn = [];
-        if (!task.image && task.type !== 'mode') warn.push('未登记图片');
+        if (!task.image && task.type !== 'mode' && !task.target) warn.push('未登记图片');   /* 编辑任务不涉及图片(与浮窗展示逻辑同口径) */
         if (skills.length && confirmed < skills.length) warn.push('技能确认 ' + confirmed + '/' + skills.length);
         if (audioNeed(task)) warn.push('有已登记未交付的配音');
         if (warn.length && !window.confirm('「' + task.id + '」' + warn.join('、') + '。\n确定仍要标记完成并归档吗?')) return;
         fetch('/noname-kit-api/tasks/complete', {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ taskId: task.id, summary: task.summary || '手动标记完成' + (skills.length ? '(确认 ' + confirmed + '/' + skills.length + ')' : '') }),
+          /* notes 一起带上:AI 用 noname_skills_written 攒的引擎级结论要进历史归档,
+           * 此前手动完成只发 taskId/summary,这些结论永远进不了 history.notes(实测) */
+          body: JSON.stringify({ taskId: task.id, notes: task.notes || [], summary: task.summary || '手动标记完成' + (skills.length ? '(确认 ' + confirmed + '/' + skills.length + ')' : '') }),
         }).then(function (r) { return r.json() }).then(function (body) {
           if (!body.ok) { setD({ err: body.error || '完成失败' }); return }
           load();

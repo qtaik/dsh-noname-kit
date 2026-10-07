@@ -64,7 +64,7 @@ export async function listPackageJsFiles(nonameDir, folder) {
         await walk(join(dir, e.name), childRel)
       } else if (e.isFile() && /\.js$/i.test(e.name)) {
         // 历史备份文件(1.5.0 曾误写到包根):extension.<时间戳>.js 命名,不是源码,排除
-        if (/^extension\.(pre-rollback\.)?\d{8}-\d{6}\.js$/i.test(e.name)) continue
+        if (/^[\w.-]+\.(?:pre-rollback\.)?\d{8}-\d{6}(?:-\d{6})?\.js$/i.test(e.name)) continue
         out.push(childRel)
       }
     }
@@ -412,7 +412,9 @@ export async function listBackups(nonameDir, folder) {
         if (e.name === 'backup') {
           try {
             for (const n of (await readdir(abs)).filter((x) => x.endsWith('.js')).sort().reverse()) {
-              out.push(prefix ? prefix + '/' + n : n)
+              /* 必须带 backup/ 段:回滚接口按「…/backup/文件名」定位,漏了这段
+               * 它就会说"非法的备份路径"——列表与回滚互相不认(实测) */
+              out.push((prefix ? prefix + '/' : '') + 'backup/' + n)
             }
           } catch { /* 忽略 */ }
         } else if (e.name !== 'image' && e.name !== 'audio' && e.name !== 'node_modules' && !e.name.startsWith('.')) {
@@ -442,7 +444,10 @@ export async function rollbackExtension(nonameDir, folder, backupName) {
   if (segs.length === 1) {
     if (!/^[\w.-]+\.js$/.test(segs[0])) throw new Error('非法的备份文件名。')
     backupPath = join(full, 'backup', segs[0])
-    target = join(full, 'extension.js')
+    /* 备份名带源文件基名(extension.<ts>.js / index.<ts>.js):
+     * 按基名还原目标,别再一律往 extension.js 里灌(包根有非入口模块时写错文件) */
+    const m = /^(.*?)\.(?:pre-rollback\.)?\d{8}-\d{6}(?:-\d{6})?\.js$/i.exec(segs[0])
+    target = join(full, (m ? m[1] : 'extension') + '.js')
   } else {
     const backupIdx = segs.lastIndexOf('backup')
     if (backupIdx <= 0 || backupIdx === segs.length - 1) throw new Error('非法的备份路径。')
@@ -454,7 +459,14 @@ export async function rollbackExtension(nonameDir, folder, backupName) {
       throw new Error('非法的备份路径。')
     }
     backupPath = join(full, ...dirSegs, 'backup', ...nameSegs)
-    target = join(full, ...dirSegs, ...nameSegs)
+    /* 备份名形如 character.20261008-002610-285001.js / extension.pre-rollback.<ts>.js
+     * ——目标是**源文件**,必须把时间戳段剥掉还原(否则旧内容被写成一个新垃圾文件、
+     * 真源文件纹丝不动,还返回"回滚成功":实测踩过) */
+    const restoredNames = nameSegs.map((n) => {
+      const m = /^(.*?)\.(?:pre-rollback\.)?\d{8}-\d{6}(?:-\d{6})?\.js$/i.exec(n)
+      return m ? m[1] + '.js' : n
+    })
+    target = join(full, ...dirSegs, ...restoredNames)
   }
   await readFile(backupPath, 'utf8') // 存在性检查
   // 回滚前把当前版本也备份一份,保证不丢

@@ -13,7 +13,7 @@
  *     把"丢了什么"留在盘上可查,再按空处理——绝不静默覆盖用户数据。
  */
 
-import { existsSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -53,7 +53,7 @@ export function readJsonSafeSync(file, fallback) {
   }
   try {
     const parsed = JSON.parse(raw)
-    if (parsed === null || typeof parsed !== 'object') {
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
       const dest = stashCorrupt(file)
       warnOnce(file, `状态文件形状异常(不是对象),已留档为 ${dest || '(留档失败)'}:${file}`)
       return fallback
@@ -78,7 +78,7 @@ export async function readJsonSafe(file, fallback) {
   }
   try {
     const parsed = JSON.parse(raw)
-    if (parsed === null || typeof parsed !== 'object') {
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
       const dest = stashCorrupt(file)
       warnOnce(file, `状态文件形状异常(不是对象),已留档为 ${dest || '(留档失败)'}:${file}`)
       return fallback
@@ -94,14 +94,24 @@ export async function readJsonSafe(file, fallback) {
 /** 原子写:临时文件 + rename。失败时抛错,由调用方决定是否吞。 */
 export function writeJsonAtomicSync(file, value) {
   const tmp = join(dirname(file), `.${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.tmp`)
-  writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8')
-  renameSync(tmp, file)
+  try {
+    writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8')
+    renameSync(tmp, file)
+  } catch (error) {
+    try { unlinkSync(tmp) } catch { /* 清理失败不影响报错 */ }
+    throw error
+  }
 }
 
 /** 异步版原子写:写临时文件后 rename。 */
 export async function writeJsonAtomic(file, value) {
   const { writeFile, rename } = await import('node:fs/promises')
   const tmp = join(dirname(file), `.${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.tmp`)
-  await writeFile(tmp, JSON.stringify(value, null, 2), 'utf8')
-  await rename(tmp, file)
+  try {
+    await writeFile(tmp, JSON.stringify(value, null, 2), 'utf8')
+    await rename(tmp, file)
+  } catch (error) {
+    try { await (await import('node:fs/promises')).unlink(tmp) } catch { /* 忽略 */ }
+    throw error
+  }
 }

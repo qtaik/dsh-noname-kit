@@ -59,11 +59,14 @@ export const Config = z.object({
 })
 
 /** 这些通用工具对 extension 目录的写入会被守卫拒绝——必须走 noname_write_extension。 */
-const GUARDED_TOOLS = new Set(['write', 'tool:write', 'edit', 'tool:edit', 'bash'])
+const GUARDED_TOOLS = new Set(['write', 'tool:write', 'edit', 'tool:edit', 'bash', 'tool:bash', 'str_replace_editor', 'tool:str_replace_editor'])
 
+/** 取工具参数里的目标路径:不同写工具叫法不同(file_path / path)。 */
 function pathArgOf(exec) {
   const args = exec.arguments ?? {}
-  return typeof args.file_path === 'string' ? args.file_path : null
+  if (typeof args.file_path === 'string') return args.file_path
+  if (typeof args.path === 'string') return args.path
+  return null
 }
 
 /** /detect 的短缓存(60 秒),避免用户连续点击时反复扫盘。 */
@@ -644,8 +647,14 @@ export function apply(ctx, config) {
       const sessionCwd = exec.agent?.session?.header?.cwd
       if (typeof sessionCwd === 'string' && sessionCwd) baseDirs.push(sessionCwd)
     } catch { /* 非 agent 调用没有 agent 字段 */ }
+    try {
+      /* custom-bash 的 workdir 参数优先于会话 cwd——不推进来就是个现成旁路
+       * (`bash{command:"cat > extension.js", workdir:"…/extension/pk"}`) */
+      const workdir = exec.arguments?.workdir
+      if (typeof workdir === 'string' && workdir) baseDirs.unshift(workdir)
+    } catch { /* 无该参数 */ }
     baseDirs.push(process.cwd(), nonameDir)
-    if (exec.name === 'bash') {
+    if (exec.name === 'bash' || exec.name === 'tool:bash') {
       const reason = bashGuardReason(String(exec.arguments?.command ?? ''), protectRoot, baseDirs)
       return reason ? guardMessage(reason) : undefined
     }
@@ -664,6 +673,13 @@ export function apply(ctx, config) {
     path: '/noname-kit-api',
     handler: async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://x')
+      /* json 必须是函数声明(或用前定义):下面的 CSRF 分支要用它,而 `const json = …`
+       * 会让同步先执行的分支撞 TDZ → ReferenceError,403 根本发不出去(实测) */
+      function json(status, body) {
+        const bodyText = JSON.stringify(body)
+        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(bodyText)
+      }
       /* 同源防护(CSRF / DNS rebinding):本接口能改游戏目录、删任务、回滚文件、
        * 往游戏内核下发命令,却只监听回环——浏览器里打开的任何恶意页面都能用
        * 简单请求(表单/text-plain)打到 127.0.0.1:<端口>。这里对**所有非 GET**
@@ -688,11 +704,6 @@ export function apply(ctx, config) {
         if (ctype && !ctype.includes('application/json')) {
           return json(415, { ok: false, error: '请求必须是 application/json' })
         }
-      }
-      const json = (status, body) => {
-        const bodyText = JSON.stringify(body)
-        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
-        res.end(bodyText)
       }
       const readBody = async () => {
         const chunks = []
@@ -787,7 +798,9 @@ export function apply(ctx, config) {
           if (result.autoCompleted) {
             archived = await archiveTask(nonameDir, {
               folder: result.task.folder, taskId: result.task.id, kind: result.task.type,
-              summary: '全部技能确认无误' + (result.task.image ? '' : '(注意:缺图片)'),
+              /* 缺图提示只对「需要图的任务」成立:mode 任务与编辑任务(isCompletable 已豁免)
+               * 不该在历史摘要里被标「注意:缺图片」(实测:这两类全被误标) */
+              summary: '全部技能确认无误' + ((result.task.image || result.task.type === 'mode' || result.task.target) ? '' : '(注意:缺图片)'),
               notes: result.task.notes, rounds: result.task.rounds,
             }).catch(() => ({ totalTasks: 0 }))
           }
@@ -865,7 +878,7 @@ export function apply(ctx, config) {
           const archived = await archiveTask(nonameDir, {
             folder: done.task.folder, taskId: done.task.id, kind: done.task.type,
             summary: body.summary || done.task.summary || '手动标记完成',
-            notes: body.notes, rounds: Math.max(body.rounds || 1, done.task.rounds || 1),
+            notes: (body.notes && body.notes.length ? body.notes : done.task.notes), rounds: Math.max(body.rounds || 1, done.task.rounds || 1),
           }).catch(() => ({ totalTasks: 0 }))
           return json(200, { ok: true, task: done.task, totalTasks: archived.totalTasks })
         }

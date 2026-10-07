@@ -40,6 +40,19 @@ const mustBlock = [
   ['sed -i 就地改', 'sed -i "s/a/b/" /d/games/noname/resources/app/extension/pk/extension.js'],
   ['cp 进扩展目录', 'cp /tmp/x.js "D:\\games\\noname\\resources\\app\\extension\\pk\\x.js"'],
   ['相对写(基准=游戏目录)', 'echo x > extension/pk/extension.js'],
+  ['无空格重定向', 'echo x>D:/games/noname/resources/app/extension/pk/extension.js'],
+  ['sudo 前缀', 'sudo rm -rf D:/games/noname/resources/app/extension/pk'],
+  ['xargs 管道', 'ls /tmp | xargs rm -rf D:/games/noname/resources/app/extension/pk'],
+  ['子壳 sh -c', 'sh -c "rm -rf D:/games/noname/resources/app/extension/pk"'],
+  ['子壳里 cd 后相对写', 'bash -c "cd D:/games/noname/resources/app/extension/pk && echo x > extension.js"'],
+  ['find -delete', 'find D:/games/noname/resources/app/extension -name "*.js" -delete'],
+  ['node -e 写文件', `node -e "require('fs').writeFileSync('D:/games/noname/resources/app/extension/pk/x.js','x')"`],
+  ['python -c 写文件', `python -c "open(r'D:/games/noname/resources/app/extension/pk/x.js','w').write('x')"`],
+  ['perl -i 就地改', 'perl -pi -e "s/a/b/" D:/games/noname/resources/app/extension/pk/extension.js'],
+  ['git checkout 还原', 'cd D:/games/noname/resources/app/extension/pk && git checkout -- extension.js'],
+  ['touch 新建', 'touch D:/games/noname/resources/app/extension/pk/new.js'],
+  ['mkdir 建目录', 'mkdir -p D:/games/noname/resources/app/extension/pk/sub'],
+  ['无空格重定向(cd 后)', 'cd D:/games/noname/resources/app/extension/pk && echo x>extension.js'],
 ]
 for (const [name, cmd] of mustBlock) {
   const reason = bashGuardReason(cmd, ROOT, bases)
@@ -47,6 +60,10 @@ for (const [name, cmd] of mustBlock) {
   if (reason) check('  ↳ 提示含出路', guardMessage(reason).includes('noname_write_extension'))
 }
 
+/* 已知取舍:守卫对「改文件命令」只看命令里有没有保护路径,不看源/目标方向——
+ * `cp -r <扩展包> /tmp/bak`(拷出去)也会被拦。刻意如此:守卫是安全边界,
+ * 多拦一次用户确认即可,漏拦一次就是无备份直改扩展。取证式读取用不带写动作的
+ * 纯读命令(见下),不受影响。 */
 console.log('\nbash:必须放行')
 const mustAllow = [
   ['纯读 grep', 'grep -n "foo" /d/games/noname/resources/app/extension/pk/extension.js'],
@@ -56,6 +73,7 @@ const mustAllow = [
   ['写临时目录', 'echo x > /tmp/t.js'],
   ['写用户目录', 'echo x > ~/.dsh/noname-kit.json'],
   ['写扩展备份目录', 'echo x > D:/games/noname/resources/app/extension-backup/x.js'],
+  ['cd 进扩展目录后把输出写去 /tmp(取证式读取,应放行)', 'cd D:/games/noname/resources/app/extension/pk && grep -n "audio" extension.js > /tmp/audio.txt'],
 ]
 for (const [name, cmd] of mustAllow) {
   const reason = bashGuardReason(cmd, ROOT, bases)

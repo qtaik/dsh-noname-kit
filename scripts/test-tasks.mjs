@@ -310,6 +310,29 @@ try {
   const reg15 = await tasks.createTask(home, { id: '测试包-15', folder: '测试包', type: 'character', title: '普通', skills: [{ name: '普通技', desc: '' }] })
   const mMiss2 = await tasks.markSkillsWritten(home, { taskId: '测试包-15', skills: ['不存在的技能'] })
   ok(!mMiss2.ok && mMiss2.missing.length === 1 && mMiss2.task.skills.length === 1, '非 mode 任务:回传未知技能仍报 missing(不动态登记,无回归)')
+  // ── 备份往返(多文件包):写模块 → listBackups → 用列表输出回滚 ──
+  // 两个函数各自都测过,却没有"往返"用例——结果是新写的子目录支持互相不认
+  // (列表缺 backup/ 段 → 回滚报"非法的备份路径";按文档形态调又把旧内容写成
+  // 时间戳垃圾文件、真源文件没动,还返回"回滚成功")。
+  {
+    const w = await import('../src/write.js')
+    const fsSync = await import('node:fs')
+    const pkgDir = join(home, 'extension', '往返包')
+    fsSync.mkdirSync(join(pkgDir, 'character'), { recursive: true })
+    fsSync.writeFileSync(join(pkgDir, 'extension.js'), "game.import('extension', { name: '往返包', content(){} });")
+    fsSync.writeFileSync(join(pkgDir, 'character', 'character.js'), 'const character = { v: 1 };\nexport { character };')
+    const w1 = await w.writeExtension(home, { folder: '往返包', file: 'character/character.js', code: 'const character = { v: 2 };\nexport { character };' })
+    ok(w1.ok && Boolean(w1.backup), '多文件包:模块文件写入成功且有备份登记')
+    const list = await w.listBackups(home, '往返包')
+    ok(list.length >= 1 && list[0].includes('/backup/'), 'listBackups 输出带 backup/ 段(回滚能认):' + list[0])
+    const r = await w.rollbackExtension(home, '往返包', list[0])
+    ok(r.ok !== false && r.restored === list[0], 'rollback 接受 listBackups 的输出(往返闭合)')
+    const restored = fsSync.readFileSync(join(pkgDir, 'character', 'character.js'), 'utf8')
+    ok(restored.includes('v: 1'), '回滚后模块文件内容 = 写入前(v: 1)')
+    const junk = fsSync.readdirSync(join(pkgDir, 'character')).filter((n) => /\d{8}-\d{6}/.test(n))
+    ok(junk.length === 0, '回滚不在源码目录留时间戳垃圾文件:' + JSON.stringify(junk))
+  }
+
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })

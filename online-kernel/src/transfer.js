@@ -95,7 +95,7 @@
 	/* 定向广播:message 里带 sendTo(本次传输的目标通道 label 列表)时,
 	 * 只发给名单内的通道自己 send;名单为空(旧对端/拿不到 label)退回引擎广播。 */
 	function sendToBridges(func, payload) {
-		var bridges = currentBridges();
+		var bridges = enteredBridges();
 		if (!payload.sendTo || !payload.sendTo.length) {
 			try {
 				nnk.env.game.broadcast(func, payload);
@@ -145,8 +145,15 @@
 		}
 	}
 
+	/* 只对"已交给引擎"的客人等回执:停泊/排队的客人通道没被 lib.init.connection
+	 * 接管,他们的 nnk_tx_ack 根本到不了本内核——把他们算进必答名单,
+	 * 每次补传都会 3 秒后报"客人没响应"(真正缺包的人反而拿不到包)。 */
+	function enteredBridges() {
+		return currentBridges().filter(function(b) { return b._entered === true; });
+	}
+
 	function waitAcks(id, func, timeoutMs) {
-		var need = currentBridges().map(bridgeId).filter(function(x) { return x !== null; });
+		var need = enteredBridges().map(bridgeId).filter(function(x) { return x !== null; });
 		if (!need.length) {
 			return Promise.resolve(false);
 		}
@@ -163,21 +170,32 @@
 
 	function startTransfer(name) {
 		var list = Array.isArray(name) ? name : [name];
+		var queued = 0;
+		var targets = enteredBridges();
 		for (var i = 0; i < list.length; i++) {
 			/* 正在传的同名扩展不再排队(手动按钮连点/自动+手动撞车防重复传);
-			 * 本会话已传过的也不再排队(客人没重启时的重连会重新上报清单) */
-			var doneAt = txDone[list[i]];
-			var stillDone = typeof doneAt === "number" && (Date.now() - doneAt) < TX_DONE_TTL;
-			if (list[i] !== txCurrent && !stillDone && txQueue.indexOf(list[i]) < 0) {
+			 * 对"所有在场客人"都已传过的也不再排队(客人没重启时的重连会重新上报
+			 * 清单)——按客人区分,换人加入时照常传 */
+			var allDone = targets.length > 0 && targets.every(function(b) {
+				var at = txDone[doneKey(b, list[i])];
+				return typeof at === "number" && (Date.now() - at) < TX_DONE_TTL;
+			});
+			if (list[i] !== txCurrent && !allDone && txQueue.indexOf(list[i]) < 0) {
 				txQueue.push(list[i]);
+				queued++;
 			}
 		}
 		pumpQueue();
+		return queued;
 	}
 
-	var txDone = {};   /* 扩展名 -> 成功补传时间:防重连重复传,但 30 分钟后失效
-	                    * (客人中途清了包/换了盘上内容时还能再补) */
+	var txDone = {};   /* "bridgeId|扩展名" -> 成功补传时间:防同一客人重连重复传,
+	                    * 但 30 分钟后失效;按客人区分——否则第二位客人 30 分钟内
+	                    * 加入时会被静默跳过(他真缺包却什么都收不到) */
 	var TX_DONE_TTL = 30 * 60 * 1000;
+	function doneKey(bridge, name) {
+		return String(bridgeId(bridge)) + "|" + name;
+	}
 
 	function pumpQueue() {
 		if (txBusy) {
@@ -189,9 +207,13 @@
 		}
 		txBusy = true;
 		txCurrent = next;
+		var served = enteredBridges().map(bridgeId);
 		startOne(next, function(ok) {
 			if (ok) {
-				txDone[next] = Date.now();
+				/* 记到"当时在场的每位客人"名下:同一位客人重连不重传,新客人照传 */
+				served.forEach(function(bid) {
+					txDone[bid + "|" + next] = Date.now();
+				});
 			}
 			txBusy = false;
 			txCurrent = null;
@@ -518,13 +540,17 @@
 		try {
 			var fs = nodeRequire()("fs");
 			resetRx();   /* 关临时文件句柄 */
-			if (!rx.skip) {
-				if (rx.got !== rx.size) {
-					bridgeApi().emit("transfer_failed", { name: rx.name, message: "文件「" + rx.rel + "」收齐 " + rx.got + " / " + rx.size + " 字节,不完整,已丢弃" });
+			/* 字节校验对"跳过写入(盘上已有同尺寸)"同样适用:不校验的话,
+			 * 主机少发/截断时旧文件会被当新文件、还报成功(实测) */
+			if (rx.got !== rx.size) {
+				bridgeApi().emit("transfer_failed", { name: rx.name, message: "文件「" + rx.rel + "」收齐 " + rx.got + " / " + rx.size + " 字节,不完整,已丢弃" });
+				if (rx.tmp) {
 					try { fs.unlinkSync(rx.tmp); } catch (e2) { /* 忽略 */ }
-					rx = null;
-					return false;
 				}
+				rx = null;
+				return false;
+			}
+			if (!rx.skip) {
 				fs.renameSync(rx.tmp, rx.target);
 			}
 		} catch (err) {

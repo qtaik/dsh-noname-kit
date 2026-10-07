@@ -3,9 +3,10 @@
  * 记录:任务列表(类型/摘要/返工轮次/时间)、注意点(踩坑记录)、备份事件。
  * 历史面板(Web 界面)与 AI 的 noname_skills_written 都读写这份文件。
  */
-import { readdir, readFile, writeFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { extRootOf, safeFolderPath } from './write.js'
+import { writeJsonAtomicSync } from './store.js'
 
 const HISTORY_FILE = 'noname-kit.history.json'
 
@@ -26,6 +27,9 @@ export async function readHistory(nonameDir, folder) {
     // 形状容错:字段被手改坏(如 tasks:null)时回退默认,别让历史面板整页 500
     if (!Array.isArray(history.tasks)) history.tasks = []
     if (!Array.isArray(history.notes)) history.notes = []
+    /* backups 也要兜:被手改坏(如 {})时 recordBackup 的 .push 会抛,
+     * 异常会冒到写入工具层,把"已写入"报成"写入失败"(工具层 catch 在写入之后) */
+    if (!Array.isArray(history.backups)) history.backups = []
     return history
   } catch {
     return emptyHistory()
@@ -36,7 +40,7 @@ async function updateHistory(nonameDir, folder, mutate) {
   const full = folderPath(nonameDir, folder)
   const history = await readHistory(nonameDir, folder)
   mutate(history)
-  await writeFile(join(full, HISTORY_FILE), JSON.stringify(history, null, 2), 'utf8')
+  writeJsonAtomicSync(join(full, HISTORY_FILE), history)
   return history
 }
 
@@ -76,7 +80,7 @@ export async function archiveTask(nonameDir, { folder, taskId, kind, summary, no
     if (entry.notes.length > 20) entry.notes = entry.notes.slice(-20)
   }
   entry.updatedAt = Date.now()
-  await writeFile(join(full, HISTORY_FILE), JSON.stringify(history, null, 2), 'utf8')
+  writeJsonAtomicSync(join(full, HISTORY_FILE), history)
   return { ok: true, task: entry, totalTasks: history.tasks.length }
 }
 
@@ -120,7 +124,7 @@ export async function deleteNote(nonameDir, folder, index) {
     return { ok: false, error: '注意点不存在' }
   }
   history.notes.splice(index, 1)
-  await writeFile(join(full, HISTORY_FILE), JSON.stringify(history, null, 2), 'utf8')
+  writeJsonAtomicSync(join(full, HISTORY_FILE), history)
   return { ok: true, noteCount: history.notes.length }
 }
 
