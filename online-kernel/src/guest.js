@@ -51,7 +51,15 @@
 		env.game.ws = fake;
 		fake.onopen = env.lib.element.ws.onopen;
 		fake.onmessage = env.lib.element.ws.onmessage;
-		fake.onerror = env.lib.element.ws.onerror;
+		/* 会话期内连接出错:内核自己会接管恢复(自动重回 / 引擎重载+自动重回),
+		 * 引擎原生的 alert(「连接失败」)是阻塞弹窗——不点它页面就冻着,会拖住
+		 * 恢复流程,也和工坊动态里的自助提示重复。房间会话里统一吞掉,其余照旧 */
+		fake.onerror = function(e) {
+			if (session.wasIn && session.code && nnk.env._status.connectMode) {
+				return;
+			}
+			return env.lib.element.ws.onerror.call(this, e);
+		};
 		fake.onclose = env.lib.element.ws.onclose;
 		env._status.ip = "nnk://p2p";
 		session.parked = true;   /* 已交给引擎:自动重回循环到此算落点,不再重试 */
