@@ -37,7 +37,7 @@
 				session.entered = true;   /* 自动重回循环据此区分「真进了」和「还在握手」 */
 				guestState.hostLoadingAt = 0;   /* 已进来,载入跟随之类的话术复位 */
 				try { localStorage.removeItem(env.lib.configprefix + "nnk_guest_reentry"); } catch (eR) { /* 忽略 */ }
-				bridgeApi().setPhase("connected");
+				bridgeApi().setPhase("connected", session.code ? { code: session.code } : undefined);
 				bridgeApi().emit("session_established");
 			}
 		};
@@ -54,13 +54,17 @@
 		fake.onerror = env.lib.element.ws.onerror;
 		fake.onclose = env.lib.element.ws.onclose;
 		env._status.ip = "nnk://p2p";
+		session.parked = true;   /* 已交给引擎:自动重回循环到此算落点,不再重试 */
+		/* 顺序要紧:先报「进房中」再 onopen——引擎的 ws.onopen 会立刻回调
+		 * connectCallback(true) 把状态推进到「已进入房间」;顺序反了会被
+		 * entering 覆盖回去,状态就永远卡在「正在进入房间」(实测 bug)。
+		 * 房号带上,别让 setPhase 把房间信息冲没(大厅入口要在整局里都可查) */
+		bridgeApi().setPhase("entering", session.code ? { code: session.code } : undefined);
+		bridgeApi().emit("entering_room");
 		fake.replay();
 		if (fake.isOpen()) {
 			fake.onopen();
 		}
-		session.parked = true;   /* 已交给引擎:自动重回循环到此算落点,不再重试 */
-		bridgeApi().setPhase("entering");
-		bridgeApi().emit("entering_room");
 		/* 包清单上报房主体检(消息走对局连接,房主内核已登记处理器) */
 		if (nnk.modules.manifest) {
 			nnk.modules.manifest.sendManifest();
@@ -419,10 +423,10 @@
 							var msg = JSON.parse(ev.data);
 							if (msg && msg.nnk_stage === "loaded" && session.autoConnect) {
 								connectNow(session.rejoin);
-							} else if (msg && msg.nnk_stage === "queued") {
-								session.parked = true;   /* 排队也是落点,重试循环到此收 */
-								bridgeApi().setPhase("queued");
-							} else if (msg && msg.nnk_stage === "lobby") {
+						} else if (msg && msg.nnk_stage === "queued") {
+							session.parked = true;   /* 排队也是落点,重试循环到此收 */
+							bridgeApi().setPhase("queued", { code: code });
+						} else if (msg && msg.nnk_stage === "lobby") {
 								/* 停车在大厅:必须报阶段——此前只发 hello 不报阶段,
 								 * 客人工坊一直停在「等房主应答」,看着像没进房(实测反馈) */
 								session.parked = true;   /* 落点:自动重回循环不必再重试 */
@@ -526,7 +530,7 @@
 						sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
 					});
 				}).then(function() {
-					bridgeApi().setPhase("waiting_host", {});
+					bridgeApi().setPhase("waiting_host", { code: code });
 					setTimeout(function() {
 						if (!answered && guestState.session === session) {
 							bridgeApi().emit("error", { message: "30 秒未收到房主应答(可能已掉线)——重新输入房号再试,或换用邀请码方式" });
