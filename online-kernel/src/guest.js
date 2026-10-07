@@ -314,6 +314,8 @@
 						var msg = JSON.parse(ev.data);
 						if (msg && msg.nnk_stage === "loaded" && session.autoConnect) {
 							connectNow();
+						} else if (msg && msg.nnk_stage === "queued") {
+							bridgeApi().setPhase("queued");
 						} else if (msg && msg.nnk_stage === "lobby") {
 							fake.send(JSON.stringify({ nnk_hello: {
 								name: nnk.env.get.connectNickname(),

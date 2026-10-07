@@ -134,6 +134,77 @@
 			bridgeApi().emit("room_members", { list: list });
 		}
 
+		/* 模式人数上限:优先读引擎的模式配置(lib.mode[模式].config.player_number),
+		 * 读不到用常见上限兜底(与工坊弹窗显示同一张表) */
+		function modeMaxPlayers(mode) {
+			var fallback = { identity: 8, guozhan: 8, versus: 8, doudizhu: 4, single: 2 };
+			try {
+				var pn = nnk.env.lib.mode[mode] && nnk.env.lib.mode[mode].config && nnk.env.lib.mode[mode].config.player_number;
+				var nums = (pn && pn.item ? Object.keys(pn.item) : []).map(function(k) {
+					return parseInt(k, 10);
+				}).filter(function(n) {
+					return !isNaN(n);
+				});
+				if (nums.length) {
+					return Math.max.apply(null, nums);
+				}
+			} catch (e) { /* 忽略 */ }
+			return fallback[mode] || 8;
+		}
+
+		/* 成员表上报(弹窗②③数据源):房主始终在等待队列首位(带人物标识名字),
+		 * capacity=当前模式人数上限(工坊据此画空座位) */
+		function emitRoomMembers() {
+			var list = [];
+			try {
+				var av = nnk.env.lib.config.connect_avatar || "";
+				list.push({
+					name: nnk.env.get.connectNickname(),
+					avatar: nnk.env.lib.translate[av] || av,
+					role: "host",
+					entered: hostState.stage === "loaded"
+				});
+			} catch (e) { /* env 未就绪则只报客人 */ }
+			hostState.bridges.forEach(function(b) {
+				list.push({
+					name: (b._member && b._member.name) || "已连接客人",
+					avatar: (b._member && b._member.avatar) || "",
+					entered: !!b._entered
+				});
+			});
+			bridgeApi().emit("room_members", {
+				list: list,
+				capacity: modeMaxPlayers(hostState.roomMode || "identity")
+			});
+		}
+
+		/* 空位补进:已进入的客人腾出位置后,把排队里的第一个提升进引擎 */
+		function promoteNextQueued() {
+			if (hostState.stage !== "loaded") {
+				return;
+			}
+			var capacity = modeMaxPlayers(hostState.roomMode || "identity");
+			var enteredGuests = hostState.bridges.filter(function(b) {
+				return b._entered;
+			}).length;
+			if (enteredGuests >= capacity - 1) {
+				return;   /* 房主占 1 席,客人上限 = 上限-1 */
+			}
+			for (var i = 0; i < hostState.bridges.length; i++) {
+				var b = hostState.bridges[i];
+				if (b._queued) {
+					b._queued = false;
+					b.send(JSON.stringify({ nnk_stage: "loaded" }));
+					env.lib.init.connection(b);
+					b._entered = true;
+					emitRoomMembers();
+					bridgeApi().setPhase("room_open", { roomCode: hostState.roomCode, signaling: hostState.signaling });
+					bridgeApi().emit("guest_connected", { guests: enteredGuests + 1 });
+					return;
+				}
+			}
+		}
+
 		function answerMqttOffer(code, msg) {
 			var env = nnk.env;
 			var pc = new RTCPeerConnection(rtc.pcConfig());
@@ -149,9 +220,10 @@
 							hostState.bridges.splice(i, 1);
 						}
 						emitRoomMembers();
+						promoteNextQueued();
 					});
 					if (hostState.stage === "lobby") {
-						/* 大厅停车:引擎不接管连接,内核级 hello/成员表先跑;
+						/* 大厅停车:引擎不接管,内核级 hello/成员表先跑;
 						 * 载入后 lib.init.connection 的 on("message") 会自然接管本槽 */
 						conn.send(JSON.stringify({ nnk_stage: "lobby" }));
 						conn.onmessage = function(data) {
@@ -169,6 +241,17 @@
 						};
 						return;
 					}
+					/* 等待队列门禁:房主占 1 席,客人按模式容量进入,超员排队等空位 */
+					var queueCapacity = modeMaxPlayers(hostState.roomMode || "identity");
+					var enteredGuests = hostState.bridges.filter(function(b) {
+						return b._entered;
+					}).length;
+					if (enteredGuests >= queueCapacity - 1) {
+						conn.send(JSON.stringify({ nnk_stage: "queued" }));
+						conn._queued = true;
+						emitRoomMembers();
+						return;
+					}
 					conn.send(JSON.stringify({ nnk_stage: "loaded" }));
 					env.lib.init.connection(conn);
 					conn._entered = true;
@@ -176,7 +259,7 @@
 					/* 上报 room_open:工坊据此把「房号就绪…等朋友加入」换成
 					 * 「客人已连接,游戏里点开始游戏」(此前无阶段承载,文案是死的) */
 					bridgeApi().setPhase("room_open", { roomCode: code, signaling: hostState.signaling });
-					bridgeApi().emit("guest_connected", { guests: hostState.bridges.length });
+					bridgeApi().emit("guest_connected", { guests: enteredGuests + 1 });
 				};
 		};
 		pc.onconnectionstatechange = function() {
@@ -343,6 +426,9 @@
 							if (pendingTask.stage === "lobby") {
 								pendingStage = "lobby";
 							}
+							if (pendingTask.mode) {
+								hostState.roomMode = pendingTask.mode;
+							}
 						}
 					} catch (e) { /* 旧格式,按 loaded 处理 */ }
 					/* 打完一把重组的接力房号(普通建房没有这个键,照常生成新号) */
@@ -497,6 +583,7 @@
 			}
 			hostState.stage = "lobby";
 			hostState.active = true;
+			hostState.roomMode = mode;
 			hostState.roomCode = genRoomCode();
 			env.game.ip = "nnk://" + hostState.roomCode;
 			bridgeApi().setPhase("mqtt_waiting", { roomCode: hostState.roomCode, stage: "lobby" });
@@ -580,6 +667,7 @@
 				localStorage.setItem(env.lib.configprefix + "directstart", "true");
 			} catch (e) { /* 忽略 */ }
 			hostState.stage = "loaded";
+			hostState.roomMode = mode;
 			bridgeApi().emit("info", { message: "正在按「" + (env.lib.translate[mode] || mode) + "」重开房间(原房号 " + hostState.roomCode + ",客人自动重回)…" });
 			var waits = 2;
 			var gone = false;

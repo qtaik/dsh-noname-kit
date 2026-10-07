@@ -979,7 +979,7 @@ window.__ModuleLoader__.load({
     ];
     /* 流程互斥:同一游戏实例要么在主机流程要么在客人流程,进行中时另一侧禁用 */
     var HOST_PHASES = ['host_booting', 'hosting', 'invite_ready', 'connecting', 'room_open'];
-    var GUEST_PHASES = ['guest_booting', 'joining', 'answer_ready', 'entering', 'connected'];
+    var GUEST_PHASES = ['guest_booting', 'joining', 'answer_ready', 'entering', 'connected', 'queued'];
     var ONLINE_PHASE_TEXT = {
       idle: '待机',
       host_booting: '正在进入建房流程(游戏将自动重载,约几秒)…',
@@ -993,7 +993,8 @@ window.__ModuleLoader__.load({
       waiting_host: '加入请求已发出,等待房主应答…(最长约 30 秒)',
       answer_ready: '回执码已生成,发给房主等他粘贴…',
       entering: '直连已建立,正在进入房间…',
-      connected: '✅ 已进入房间!'
+      connected: '✅ 已进入房间!',
+      queued: '⏳ 房间人数已满,排队等待空位(有人退出会自动进入)'
     };
     function onlinePickEvent(evs, type) {
       for (var i = evs.length - 1; i >= 0; i--) {
@@ -1369,7 +1370,10 @@ window.__ModuleLoader__.load({
           txEv ? e('div', { className: 'nnk-break', style: { marginTop: '6px' } }, onlineEventText(txEv)) : null);
       }
 
-      /* P2P 房间大厅弹窗:①模式+载入 ②成员 ③进入状态。客人=只读视角 */
+      /* 模式人数上限(与内核兜底表一致;载入后内核会读引擎真实上限并随
+       * room_members 事件的 capacity 字段下发) */
+      var MODE_MAX = { identity: 8, guozhan: 8, versus: 8, doudizhu: 4, single: 2 };
+      /* P2P 房间大厅弹窗:①模式+载入 ②等待队列。客人=只读视角 */
       function renderRoomModal() {
         var membersEv = onlinePickEvent(evs, 'room_members');
         var members = (membersEv && membersEv.data && membersEv.data.list) || [];
@@ -1390,26 +1394,22 @@ window.__ModuleLoader__.load({
                 h('button', { className: 'nnk-submit', style: { marginTop: '10px' }, onClick: function () { sendCmd('restart_room', { mode: roomMode }); setNote('🚀 载入中——主机游戏重载一次,成员自动跟随进入'); } }, '🚀 载入到游戏(按所选模式)'))
               : e('div', 'nnk-hint', '① 模式选择与载入由主机操作,你会在下方看到进入状态。'),
             e('div', 'nnk-hint', '载入时主机的游戏会重载一次,成员自动重连进入,无需任何操作。开局/禁将在游戏内进行。'),
-            /* 块 2:成员 */
-            e('div', 'nnk-label', '② 房间成员'),
-            isRoomHost
-              ? h('div', {},
-                e('div', 'nnk-hint', '👑 房主(你)'),
-                members.length
-                  ? members.map(function (mm, i) {
-                    return e('div', { key: i, className: 'nnk-hint' }, '👤 ' + mm.name + (mm.avatar ? '(' + mm.avatar + ')' : ''));
-                  })
-                  : e('div', 'nnk-hint', '暂无客人加入——把房号发给朋友。'))
-              : e('div', 'nnk-hint', '👤 你(客人)——已加入该房间。'),
-            /* 块 3:进入状态 */
-            e('div', 'nnk-label', '③ 进入状态'),
-            isRoomHost
-              ? (members.length
-                ? members.map(function (mm, i) {
-                  return e('div', { key: i, className: 'nnk-hint' }, (mm.entered ? '✅ 已进入游戏房间:' : '⏳ 等待载入:') + mm.name);
-                })
-                : e('div', 'nnk-hint', '还没有成员,谈不上进入。'))
-              : e('div', 'nnk-hint', phase === 'connected' || phase === 'entering' ? '✅ 已进入游戏房间' : '⏳ 等待主机载入到游戏…'),
+            /* 块 2:等待队列(房主在首位,空座位=模式可容纳人数,超员排队) */
+            e('div', 'nnk-label', '② 等待队列(只有队列里的人会进入游戏,空座位=还能进几人)'),
+            (function () {
+              var membersEv = onlinePickEvent(evs, 'room_members');
+              var mData = (membersEv && membersEv.data) || {};
+              var mList = (mData.list || []).slice(0, MODE_MAX[roomMode] || 8);
+              var cap = mData.capacity || MODE_MAX[roomMode] || 8;
+              var rows = mList.map(function (mm, i) {
+                var st = mm.entered ? '✅ 已进入游戏房间' : '⏳ 等待载入';
+                return e('div', { key: i, className: 'nnk-hint' }, '👤 ' + mm.name + (mm.role === 'host' ? '(房主)' : '') + ' · ' + st);
+              });
+              for (var s = mList.length; s < cap; s++) {
+                rows.push(e('div', { key: 'seat' + s, className: 'nnk-hint' }, '🪑 空座位'));
+              }
+              return rows;
+            })(),
             h('div', { className: 'nnk-modal-actions' },
               h('button', { className: 'nnk-copy', onClick: function () { setRoomPopupOpen(false) } }, '收起(连接继续保持,可随时再打开)'))));
       }
