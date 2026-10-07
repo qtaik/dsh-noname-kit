@@ -550,7 +550,6 @@
 								localStorage.setItem(env.lib.configprefix + "directstart", "true");
 								console.warn("[联机助手] 重载后房间未就绪,自动带原房号再重载一次");
 								bridgeApi().emit("info", { message: "重载后房间没建起来,正在自动重试(带原房号)…" });
-								var waits = 2;
 								var gone = false;
 								var go2 = function() {
 									if (!gone) {
@@ -595,7 +594,6 @@
 						localStorage.setItem(env.lib.configprefix + "nnk_host_roomcode", hostState.roomCode);
 						localStorage.setItem(env.lib.configprefix + "directstart", "true");
 						bridgeApi().emit("info", { message: "对局结束,已回到房间大厅(原房号 " + hostState.roomCode + " 保留),选模式后点「载入到游戏」继续" });
-						var waits = 1;
 						var gone = false;
 						var go = function() {
 							if (gone) {
@@ -649,7 +647,6 @@
 					localStorage.setItem(env.lib.configprefix + "nnk_host_pending", JSON.stringify({ mode: mode, signaling: "invite", stage: "loaded" }));
 					localStorage.setItem(env.lib.configprefix + "directstart", "true");
 				} catch (e) { /* 忽略 */ }
-				var inviteWaits = 2;
 				var inviteGone = false;
 				var inviteGo = function() {
 					if (inviteGone) {
@@ -784,8 +781,17 @@
 			} catch (e) { /* 忽略 */ }
 			hostState.stage = "loaded";
 			hostState.roomMode = mode;
+			/* 通知客人「主机要载入重载了」:客人端据此把自动重回的话术切成
+			 * 「载入跟随」;顺带清掉 retained 心跳——重载窗口里新来的/重试的
+			 * 客人会立刻看到「没找到在线主机」快速重试,而不是对着旧心跳
+			 * 白等 30 秒(主机重启后 startMqtt 会重新挂上心跳) */
+			try {
+				if (hostState.mqttSession) {
+					hostState.mqttSession.publish(signaling.roomTopic(hostState.roomCode, "host"), { nnk_loading: true });
+					hostState.mqttSession.publishRaw(signaling.roomTopic(hostState.roomCode, "host"), "", true);
+				}
+			} catch (eN) { /* 通知失败不影响重载 */ }
 			bridgeApi().emit("info", { message: "正在按「" + (env.lib.translate[mode] || mode) + "」重开房间(原房号 " + hostState.roomCode + ",客人自动重回)…" });
-			var waits = 2;
 			var gone = false;
 			var go = function() {
 				if (gone) {

@@ -31,6 +31,7 @@
 		env._status.connectCallback = function(success) {
 			if (success) {
 				session.entered = true;   /* 自动重回循环据此区分「真进了」和「还在握手」 */
+				guestState.hostLoadingAt = 0;   /* 已进来,载入跟随之类的话术复位 */
 				bridgeApi().setPhase("connected");
 				bridgeApi().emit("session_established");
 			}
@@ -89,7 +90,10 @@
 			return;
 		}
 		if (!inFlight) {
-			bridgeApi().emit("info", { message: "房主正在重组房间,自动重回 " + code + "(第 " + (9 - attempts) + " 次尝试)…" });
+			/* 刚收到主机的「载入」通知(60 秒内):话术切成载入跟随,别让客人
+			 * 以为房主崩了;其他场景(打完一把重组/掉线)照旧 */
+			var hostLoading = Date.now() - (guestState.hostLoadingAt || 0) < 60000;
+			bridgeApi().emit("info", { message: (hostLoading ? "主机正在载入游戏,自动跟随重连 " : "房主正在重组房间,自动重回 ") + code + "(第 " + (9 - attempts) + " 次尝试)…" });
 			api.joinByRoomCode(code);
 		}
 		setTimeout(function() {
@@ -420,15 +424,13 @@
 						if (/\/host$/.test(topic)) {
 							session.hostSeen = Date.now();
 							if (msg && msg.nnk_loading && !session.loadingSeen) {
-								/* 主机点「载入到游戏」:进 connect 模式接力重载,
-								 * 回来后 autoRejoin 重连,按 stage 进引擎 */
+								/* 主机点「载入到游戏」:报个信就行,不整页重载——跟随靠
+								 * 通道断开后的 autoRejoin 重连(轻量;早先这里会重载,
+								 * 但主机侧从没发过这条消息,是死路,而且客人机多一次
+								 * 重载风险更大)。主机重启后按 stage 指令进引擎 */
 								session.loadingSeen = true;
-								try {
-									localStorage.setItem(env.lib.configprefix + "nnk_guest_pending", JSON.stringify({ kind: "room", code: code }));
-									env.game.saveConfig("mode", "connect");
-								} catch (e2) { /* 忽略 */ }
-								bridgeApi().emit("info", { message: "主机正在载入游戏,自动跟随…" });
-								env.game.reload();
+								guestState.hostLoadingAt = Date.now();
+								bridgeApi().emit("info", { message: "主机正在载入游戏,马上自动跟随…" });
 								return;
 							}
 							return;
