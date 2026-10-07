@@ -1165,12 +1165,12 @@ window.__ModuleLoader__.load({
         phaseText = '正在生成邀请码…';
       }
       var bridgeOnline = Boolean(bridge.online);
-      /* 房间角色:内核自己上报(最准),阶段启发式只作旧内核后备 */
-      var isRoomHost = hostFlow || bridge.role === 'host';
-      var isRoomGuest = (!isRoomHost && bridge.role === 'guest') || guestFlow;
-      var kernelBad = !kernel || kernel.state === 'unknown';
       var hostFlow = HOST_PHASES.indexOf(phase) >= 0;
       var guestFlow = GUEST_PHASES.indexOf(phase) >= 0;
+      /* 房间角色:内核自己上报(最准),阶段启发式只作旧内核后备
+       * (注意先后:先算 hostFlow/guestFlow,旧内核没有 role 时才有后备可用) */
+      var isRoomHost = hostFlow || bridge.role === 'host';
+      var kernelBad = !kernel || kernel.state === 'unknown';
       /* 码只在对应流程阶段展示:事件会长期留存,无条件展示会让人对着
        * 已作废的邀请码/回执码继续操作 */
       /* 邀请码只在邀请码流程的专属阶段展示:曾在全部主机阶段展示,导致
@@ -1375,8 +1375,6 @@ window.__ModuleLoader__.load({
       var MODE_MAX = { identity: 8, guozhan: 8, versus: 8, doudizhu: 4, single: 2 };
       /* P2P 房间大厅弹窗:①模式+载入 ②等待队列。客人=只读视角 */
       function renderRoomModal() {
-        var membersEv = onlinePickEvent(evs, 'room_members');
-        var members = (membersEv && membersEv.data && membersEv.data.list) || [];
         var MODE_COUNT = { identity: '2~8 人', guozhan: '2~8 人', versus: '2~8 人', doudizhu: '3~4 人', single: '2 人' };
         return h('div', { className: 'nnk-modal-mask', onClick: function (ev) { if (ev.target === ev.currentTarget) setRoomPopupOpen(false) } },
           h('div', { className: 'nnk-modal' },
@@ -1394,18 +1392,22 @@ window.__ModuleLoader__.load({
                 h('button', { className: 'nnk-submit', style: { marginTop: '10px' }, onClick: function () { sendCmd('restart_room', { mode: roomMode }); setNote('🚀 载入中——主机游戏重载一次,成员自动跟随进入'); } }, '🚀 载入到游戏(按所选模式)'))
               : e('div', 'nnk-hint', '① 模式选择与载入由主机操作,你会在下方看到进入状态。'),
             e('div', 'nnk-hint', '载入时主机的游戏会重载一次,成员自动重连进入,无需任何操作。开局/禁将在游戏内进行。'),
-            /* 块 2:等待队列(房主在首位,空座位=模式可容纳人数,超员排队) */
+            /* 块 2:等待队列(房主在首位;空座位=还能进几人,按「已进入」人数算,
+             * 排队/等待的人不占座——超员的会标「排队」,载入时不会跟进来) */
             e('div', 'nnk-label', '② 等待队列(只有队列里的人会进入游戏,空座位=还能进几人)'),
             (function () {
               var membersEv = onlinePickEvent(evs, 'room_members');
               var mData = (membersEv && membersEv.data) || {};
-              var mList = (mData.list || []).slice(0, MODE_MAX[roomMode] || 8);
+              var mList = mData.list || [];
               var cap = mData.capacity || MODE_MAX[roomMode] || 8;
+              var enteredCount = mList.filter(function (mm) { return mm.entered; }).length;
               var rows = mList.map(function (mm, i) {
-                var st = mm.entered ? '✅ 已进入游戏房间' : '⏳ 等待载入';
+                var st = mm.entered ? '✅ 已进入游戏房间'
+                  : mm.queued ? '🚏 排队等待空位(人满,有人退出自动进)'
+                    : '⏳ 等待载入';
                 return e('div', { key: i, className: 'nnk-hint' }, '👤 ' + mm.name + (mm.role === 'host' ? '(房主)' : '') + ' · ' + st);
               });
-              for (var s = mList.length; s < cap; s++) {
+              for (var s = enteredCount; s < cap; s++) {
                 rows.push(e('div', { key: 'seat' + s, className: 'nnk-hint' }, '🪑 空座位'));
               }
               return rows;
@@ -1439,9 +1441,14 @@ window.__ModuleLoader__.load({
                   bridgeOnline
                     ? e('span', 'nnk-ok', '🟢 内核在线(游戏运行中)')
                     : e('span', 'nnk-hint', '⚪ 内核离线,启动游戏后自动在线。一直离线:查「扩展」菜单「联机助手」是否点「启」(列表里没有它?先开 设置→通用→自动导入扩展)'
-                      + (kernel && kernel.boundApi && kernel.boundApi !== location.origin
-                        ? '。另:内核心跳绑定在另一个 dsh(' + kernel.boundApi + ')——在本页点「升级内核」并重启游戏即切回本页'
-                        : ''))),
+                      + (function () {
+                        /* 只比端口:baseUrl 恒写 127.0.0.1,用户用 localhost 开页面时
+                         * 整串比对恒不等,会误报「绑定在另一个 dsh」 */
+                        var m = kernel && kernel.boundApi ? /:(\d+)/.exec(kernel.boundApi) : null;
+                        return m && String(location.port || '') !== m[1]
+                          ? '。另:内核心跳绑定在另一个 dsh(端口 ' + m[1] + ')——在本页点「升级内核」并重启游戏即切回本页'
+                          : '';
+                      })())),
                 phase !== 'idle'
                   ? e('div', 'nnk-hint', '当前状态:' + phaseText + (bridge.state && bridge.state.roomCode ? '(房号 ' + bridge.state.roomCode + ')' : ''))
                   : null)),
@@ -1480,7 +1487,7 @@ window.__ModuleLoader__.load({
                 : null),
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '🔗 我要加入')),
-              e('div', 'nnk-hint', '输入 6 位房号,点「加入」,房主同意后自动进房。'),
+              e('div', 'nnk-hint', '输入 6 位房号,点「加入」,直连打通后自动进房;房间坐满会排队,有空位自动进。'),
               h('input', { className: 'nnk-input', value: roomText, maxLength: 6, onChange: function (ev) { setRoomText(ev.target.value.toUpperCase()) }, placeholder: '输入 6 位房号,如 AB2C9X', style: { textTransform: 'uppercase', letterSpacing: '4px', fontSize: '16px' } }),
               h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow || guestFlow, onClick: function () { sendCmd('join_room', { code: roomText }) } }, '🚪 加入房间'),
               (guestFlow || phase === 'connected') && roomCode
@@ -1516,7 +1523,7 @@ window.__ModuleLoader__.load({
               e('div', 'nnk-hint',
                 '0.【官方版一次性】设置→通用→打开「自动导入扩展」→重载,否则扩展列表里没有「联机助手」。\n' +
                 '1. 两边都装插件、配好目录;本页点「📦 安装内核」→ 游戏扩展菜单给「联机助手」点「启」→ 重载。\n' +
-                '2. 主机:创建房间发房号;客人输房号加入。房号不通换邀请码方式。打完一把「重新开始」自动用原房号重开。\n' +
+                '2. 主机:「创建 P2P 房间」→ 大厅选模式点「载入到游戏」;客人输房号加入,人满自动排队。房号不通换邀请码方式。打完一把自动回大厅,再点载入就行,房号不变。\n' +
                 '3. 主机在游戏里点「开始游戏」。禁将/包/人数在等待房间右上角「房间设置」改,点「启」广播全房。'),
               e('div', 'nnk-hint', '连接信息经加密信令交换,游戏数据点对点直连。个别网络连不上就换邀请码方式。')) }))]
           : null,

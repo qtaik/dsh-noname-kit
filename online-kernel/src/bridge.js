@@ -37,12 +37,12 @@
 		var guest = nnk.modules.guest;
 		var args = cmd.args || {};
 		switch (cmd.action) {
-				case "create_room":
-					host.createInternetRoom(args.mode, args.signaling);
-					break;
-				case "restart_room":
-					host.restartRoom(args.mode);
-					break;
+			case "create_room":
+				host.createInternetRoom(args.mode, args.signaling);
+				break;
+			case "restart_room":
+				host.restartRoom(args.mode);
+				break;
 			case "join_room":
 				guest.joinByRoomCode(args.code);
 				break;
@@ -52,59 +52,59 @@
 			case "accept_answer":
 				host.acceptAnswer(args.code);
 				break;
-				case "join_invite":
-					guest.joinByInvite(args.code);
-					break;
-				case "transfer_pack":
-					if (nnk.modules.transfer) {
-						nnk.modules.transfer.start(args.name);
-					}
-					break;
-				case "clear_quarantine":
-					if (nnk.modules.compat) {
-						nnk.modules.compat.clearQuarantine();
-					}
-					break;
-				case "set_config": {
-					/* 只放行允许工坊改的内核配置键,值按类型强转 */
-					var allowed = { unlockUIExtensions: "boolean", autoUnlockExtensions: "boolean", mqttUrl: "string" };
-					if (allowed.hasOwnProperty(args.key)) {
-						if (allowed[args.key] === "string") {
-							var strVal = String(args.value == null ? "" : args.value).slice(0, 200);
-							if (args.key === "mqttUrl" && strVal && !/^wss?:\/\//i.test(strVal)) {
-								emit("error", { message: "信令地址必须是 ws:// 或 wss:// 开头的 WebSocket 地址: " + strVal });
-								break;
-							}
-							/* 空值 = 恢复默认(空串存进去会让 config.get 绕过 DEFAULTS) */
-							nnk.modules.config.set(args.key, strVal || nnk.modules.config.defaults[args.key]);
-						} else {
-							nnk.modules.config.set(args.key, args.value === true);
+			case "join_invite":
+				guest.joinByInvite(args.code);
+				break;
+			case "transfer_pack":
+				if (nnk.modules.transfer) {
+					nnk.modules.transfer.start(args.name);
+				}
+				break;
+			case "clear_quarantine":
+				if (nnk.modules.compat) {
+					nnk.modules.compat.clearQuarantine();
+				}
+				break;
+			case "set_config": {
+				/* 只放行允许工坊改的内核配置键,值按类型强转 */
+				var allowed = { unlockUIExtensions: "boolean", autoUnlockExtensions: "boolean", mqttUrl: "string" };
+				if (allowed.hasOwnProperty(args.key)) {
+					if (allowed[args.key] === "string") {
+						var strVal = String(args.value == null ? "" : args.value).slice(0, 200);
+						if (args.key === "mqttUrl" && strVal && !/^wss?:\/\//i.test(strVal)) {
+							emit("error", { message: "信令地址必须是 ws:// 或 wss:// 开头的 WebSocket 地址: " + strVal });
+							break;
 						}
+						/* 空值 = 恢复默认(空串存进去会让 config.get 绕过 DEFAULTS) */
+						nnk.modules.config.set(args.key, strVal || nnk.modules.config.defaults[args.key]);
 					} else {
-						emit("error", { message: "不允许修改的配置: " + args.key });
+						nnk.modules.config.set(args.key, args.value === true);
 					}
+				} else {
+					emit("error", { message: "不允许修改的配置: " + args.key });
+				}
+				break;
+			}
+			case "set_identity": {
+				/* 人物标识:名字截 12 字(引擎同款),头像必须是本机存在的武将 id
+				 * (不存在的话引擎会渲染成默认灰头像,不如当场拦下告诉工坊) */
+				var compat = nnk.modules.compat;
+				var name2 = String(args.name || "").slice(0, 12);
+				var avatar2 = String(args.avatar || "").slice(0, 24);
+				if (avatar2 && !compat.hasCharacter(avatar2)) {
+					emit("error", { message: "头像武将「" + avatar2 + "」本机没有(扩展未装或未启用)——先选本机已有的武将,或在游戏里启用对应扩展" });
 					break;
 				}
-				case "set_identity": {
-					/* 人物标识:名字截 12 字(引擎同款),头像必须是本机存在的武将 id
-					 * (不存在的话引擎会渲染成默认灰头像,不如当场拦下告诉工坊) */
-					var compat = nnk.modules.compat;
-					var name2 = String(args.name || "").slice(0, 12);
-					var avatar2 = String(args.avatar || "").slice(0, 24);
-					if (avatar2 && !compat.hasCharacter(avatar2)) {
-						emit("error", { message: "头像武将「" + avatar2 + "」本机没有(扩展未装或未启用)——先选本机已有的武将,或在游戏里启用对应扩展" });
-						break;
-					}
-					nnk.modules.config.set("onlineName", name2);
-					nnk.modules.config.set("onlineAvatar", avatar2);
-					compat.applyIdentity();
-					emit("identity_applied", {
-						name: name2,
-						avatar: avatar2 && nnk.env.lib.translate[avatar2] ? nnk.env.lib.translate[avatar2] : avatar2
-					});
-					break;
-				}
-				case "cancel":
+				nnk.modules.config.set("onlineName", name2);
+				nnk.modules.config.set("onlineAvatar", avatar2);
+				compat.applyIdentity();
+				emit("identity_applied", {
+					name: name2,
+					avatar: avatar2 && nnk.env.lib.translate[avatar2] ? nnk.env.lib.translate[avatar2] : avatar2
+				});
+				break;
+			}
+			case "cancel":
 				host.cancelAll();
 				guest.cancelJoin();
 				setPhase("idle");

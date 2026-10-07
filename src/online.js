@@ -219,7 +219,10 @@ export function createBridgeSession({ token, syncSource }) {
       session.lastSeen = Date.now()
       session.kernelVersion = payload?.kernel?.version ?? session.kernelVersion
       session.bootStage = payload?.kernel?.stage ?? session.bootStage
-      session.role = payload?.kernel?.role || session.role
+      /* 按字段更新而非粘滞:新内核每拍都上报 role(空串=当前既非主机也非客人,
+       * 是真实状态,取消房间后要能落回空);旧内核(≤0.3.42)不发该字段,保持
+       * 原值,工坊靠阶段启发式兜底 */
+      if (typeof payload?.kernel?.role === 'string') session.role = payload.kernel.role
       session.state = payload?.state ?? session.state
       session.cfg = payload?.cfg ?? session.cfg
       /* 配置离线补发:同一个值只补一次,内核应用后 cfg 追平即不再发 */

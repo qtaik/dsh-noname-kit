@@ -30,6 +30,7 @@
 		}
 		env._status.connectCallback = function(success) {
 			if (success) {
+				session.entered = true;   /* 自动重回循环据此区分「真进了」和「还在握手」 */
 				bridgeApi().setPhase("connected");
 				bridgeApi().emit("session_established");
 			}
@@ -72,8 +73,11 @@
 	/* 同房号自动重进(打完一把主机端重组后):连接突然断开且对局已结束,
 	 * 说明房主正在重载重建同一房间——隔几秒用原房号再敲一次门,给主机
 	 * 重载重建留出时间;次数用完或用户已取消/离开就明说,引导手动重进。
-	 * rejoinCode 是会话令牌:cancelJoin 置空即可停掉整个循环。 */
-	function autoRejoin(code, attempts) {
+	 * rejoinCode 是会话令牌:cancelJoin 置空即可停掉整个循环。
+	 * inFlight=上一尝试还在握手(信令校验/等应答):不占尝试次数,只隔 4 秒
+	 * 复查——握手各阶段都有自己的超时(30 秒等应答会收掉会话),超时后这里
+	 * 自然续上下一试;看 session.entered 区分「真进了」和「还在连」。 */
+	function autoRejoin(code, attempts, inFlight) {
 		var env = nnk.env;
 		guestState.rejoinCode = code;
 		if (guestState.rejoinCode !== code || attempts <= 0 || !env._status.connectMode) {
@@ -84,17 +88,19 @@
 			}
 			return;
 		}
-		bridgeApi().emit("info", { message: "房主正在重组房间,自动重回 " + code + "(第 " + (9 - attempts) + " 次尝试)…" });
-		api.joinByRoomCode(code);
+		if (!inFlight) {
+			bridgeApi().emit("info", { message: "房主正在重组房间,自动重回 " + code + "(第 " + (9 - attempts) + " 次尝试)…" });
+			api.joinByRoomCode(code);
+		}
 		setTimeout(function() {
 			if (guestState.rejoinCode !== code) {
 				return;   /* 用户已取消 */
 			}
-			if (guestState.session && guestState.session.code === code) {
+			if (guestState.session && guestState.session.entered) {
 				guestState.rejoinCode = null;
-				return;   /* 这次尝试还在连接中或已连上,交给它自己走完 */
+				return;   /* 已进入房间,循环完成 */
 			}
-			autoRejoin(code, attempts - 1);
+			autoRejoin(code, attempts - (guestState.session ? 0 : 1), !!guestState.session);
 		}, 4000);
 	}
 
@@ -111,8 +117,19 @@
 			localStorage.setItem(env.lib.configprefix + "nnk_guest_pending", JSON.stringify(task));
 		} catch (e) { /* 忽略 */ }
 		bridgeApi().setPhase("guest_booting", task.kind === "room" ? { code: task.code } : {});
-		env.game.saveConfig("mode", "connect");
-		env.game.reload();
+		/* saveConfig 是异步写库,写丢=重载落回离线模式、续跑只能报错收场
+		 * (实测同款竞速,主机侧 6f0c934 已修)——等写库回调落地再重载,
+		 * 1.5 秒兜底防写库挂死。续跑标记是 localStorage 同步写,无此风险 */
+		var gone = false;
+		var go = function() {
+			if (gone) {
+				return;
+			}
+			gone = true;
+			env.game.reload();
+		};
+		env.game.saveConfig("mode", "connect", null, go);
+		setTimeout(go, 1500);
 	}
 
 	var api = {
@@ -321,9 +338,19 @@
 								name: nnk.env.get.connectNickname(),
 								avatar: nnk.env.lib.config.connect_avatar || ""
 							} }));
+						} else if (msg && msg.nnk_stage === "closed") {
+							/* 房主解散房间(工坊取消):立即散场,不自动重回。
+							 * resetSession 后随后的通道断开事件变成空操作(会话已不在) */
+							guestState.rejoinCode = null;
+							resetSession();
+							bridgeApi().setPhase("idle");
+							bridgeApi().emit("info", { message: "房主已解散房间" });
 						}
+						/* 引擎消息是 JSON 数组:parse 成功但没有 nnk_stage 字段,走到这里
+						 * 被静默忽略——大厅/排队阶段主机引擎不发包,无实际丢失路径;
+						 * 进引擎由 connectNow 把 onmessage 换成引擎 handler */
 					} catch (e2) {
-						/* 引擎消息(非内核协议):暂存回放,防丢 */
+						/* 非 JSON 消息:暂存回放,防丢 */
 						fake._buffer.push(ev.data);
 					}
 				};
@@ -405,6 +432,9 @@
 					setTimeout(function() {
 						if (!answered && guestState.session === session) {
 							bridgeApi().emit("error", { message: "30 秒未收到房主应答(可能已掉线)——重新输入房号再试,或换用邀请码方式" });
+							/* 收掉半死会话:自动重回循环据此续上下一试,状态不留悬空 */
+							bridgeApi().setPhase("idle");
+							resetSession();
 						}
 					}, 30000);
 				}).catch(function(err) {
