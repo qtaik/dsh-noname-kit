@@ -1019,7 +1019,10 @@ window.__ModuleLoader__.load({
      * mqtt_waiting=大厅里等朋友加入(主机侧,创建/加入按钮都要锁住,别让房主
      * 又去点「加入房间」把自己的房号当别人的房进) */
     var HOST_PHASES = ['host_booting', 'hosting', 'mqtt_waiting', 'invite_ready', 'connecting', 'room_open'];
-    var GUEST_PHASES = ['guest_booting', 'joining', 'answer_ready', 'entering', 'connected', 'queued', 'lobby_waiting'];
+    /* waiting_host(发完加入请求、等房主应答,最长 30 秒)必须在内:漏了它,这段窗口里
+     * 「创建房间 / 加入房间 / 生成回执码」三个按钮都不禁用,用户一多手就会把在途会话
+     * 顶掉(resetSession)——实测表现为「点了一下房间就乱套」 */
+    var GUEST_PHASES = ['guest_booting', 'joining', 'waiting_host', 'answer_ready', 'entering', 'connected', 'queued', 'lobby_waiting'];
     var ONLINE_PHASE_TEXT = {
       idle: '待机',
       host_booting: '正在进入建房流程(游戏将自动重载,约几秒)…',
@@ -1038,12 +1041,19 @@ window.__ModuleLoader__.load({
       lobby_waiting: '✅ 已进入房间大厅,等待房主点「载入到游戏」…'
     };
     function onlinePickEvent(evs, type) {
+      if (!Array.isArray(evs)) return null;
       for (var i = evs.length - 1; i >= 0; i--) {
-        if (evs[i].type === type) return evs[i];
+        /* 判 null:插件事件窗口是透传数组(内核→插件→前端),任何一环混进空项,
+         * 这里读 .type 就会炸整页(实测路径:const renderErr 兜底会显示红字,
+         * 但旧版本没有兜底=整页空白) */
+        if (evs[i] && evs[i].type === type) return evs[i];
       }
       return null;
     }
     function onlineEventText(ev) {
+      /* 空项防护:动态流是 events.map(onlineEventText),任何一环混进 null/非对象,
+       * 这里读 .type 就炸整页(与 onlinePickEvent 同款防线) */
+      if (!ev || typeof ev !== 'object') return String(ev || '(空事件)');
       switch (ev.type) {
         case 'invite_ready': return '📨 邀请码已生成';
         case 'answer_ready': return '📨 回执码已生成';
@@ -1064,23 +1074,31 @@ window.__ModuleLoader__.load({
         case 'ext_error': return '🧩 扩展报错(已拦截' + ((ev.data && ev.data.ext) ? ':' + ev.data.ext : '') + ')';
         case 'ext_quarantined': return '🚫 扩展「' + ((ev.data && ev.data.ext) || '?') + '」联机下爆栈,已自动隔离';
         case 'ext_dump': {
+          /* 包池字段一律按数组取值:这份数据是内核上报的透传 JSON,任何一环给出
+           * 非数组(旧事件 + 新代码、手工改坏的数据)时,`.join/.length` 会炸整页
+           * ——实测过 pk.connect.join is not a function */
           var dd = ev.data || {};
-          var loaded = dd.loaded || [];
-          var skipped = dd.skipped || [];
-          var configured = dd.configured || [];
+          var asArr = function (v) { return Array.isArray(v) ? v : [] };
+          var loaded = asArr(dd.loaded);
+          var skipped = asArr(dd.skipped);
+          var configured = asArr(dd.configured);
           var pk = dd.packs || {};
+          var pkConnect = asArr(pk.connect);
+          var pkAll = asArr(pk.all);
+          var pkExcluded = asArr(pk.excluded);
+          var pkCardsConnect = asArr(pk.cardsConnect);
           var line = '🧩 联机加载扩展(' + loaded.length + '):' + (loaded.join('、') || '无') + (skipped.length ? ' | 跳过:' + skipped.join('、') : '') + (configured.length ? ' | 游戏登记:' + configured.join('、') : '');
-          if (pk.connect) {
-            line += ' || 连接武将包池(' + pk.connect.length + '):' + (pk.connect.join('、') || '空');
+          if (pkConnect.length) {
+            line += ' || 连接武将包池(' + pkConnect.length + '):' + (pkConnect.join('、') || '空');
           }
-          if (pk.excluded && pk.excluded.length) {
-            line += ' | ⚠️ 被排除的武将包:' + pk.excluded.join('、');
+          if (pkExcluded.length) {
+            line += ' | ⚠️ 被排除的武将包:' + pkExcluded.join('、');
           }
-          if (pk.cardsConnect) {
-            line += ' || 连接卡牌包池(' + pk.cardsConnect.length + '):' + (pk.cardsConnect.join('、') || '空');
+          if (pkCardsConnect.length) {
+            line += ' || 连接卡牌包池(' + pkCardsConnect.length + '):' + (pkCardsConnect.join('、') || '空');
           }
-          if (pk.all && pk.connect && pk.all.length !== pk.connect.length) {
-            line += ' | 全部包(' + pk.all.length + '):' + pk.all.join('、');
+          if (pkAll.length && pkAll.length !== pkConnect.length) {
+            line += ' | 全部包(' + pkAll.length + '):' + pkAll.join('、');
           }
           return line;
         }
@@ -1125,6 +1143,12 @@ window.__ModuleLoader__.load({
       var rmSyncKey = rmSyncState[0], setRmSyncKey = rmSyncState[1];
       var sigUrlState = React.useState('');
       var sigUrl = sigUrlState[0], setSigUrl = sigUrlState[1];
+      /* 本次会话见过的房号(前端兜底):内核 setPhase 是整体替换 state,0.3.66 之前
+       * 的版本在 answer_ready 那一拍不带房号,工坊的「房间大厅 / 退出房间」会跟着
+       * 房号一起闪没(客人刚拿到回执码,反而找不到自己的房间)。房号一旦见过就不再
+       * 丢,直到阶段落回 idle(散场)才清 */
+      var lastCodeState = React.useState(null);
+      var lastRoomCode = lastCodeState[0], setLastRoomCode = lastCodeState[1];
       /* 码交接弹窗的关闭标记:同一张码关了不再弹,换新码(重试/重生成)才再弹。
        * 邀请码改成"列表"后按行号记:popped=上次弹过的行,dismissed=被收起的那行 */
       var invPopState = React.useState({ popped: null, dismissed: null });
@@ -1194,11 +1218,12 @@ window.__ModuleLoader__.load({
       var codeCache = codeCacheState[0], setCodeCache = codeCacheState[1];
       React.useEffect(function () {
         var evs0 = (status && status.bridge && status.bridge.events) || [];
+        if (!Array.isArray(evs0)) return;   /* 形状防守:非数组直接跳过,不让 effect 抛错 */
         var add = null;
         var newest = null;
         for (var i = 0; i < evs0.length; i++) {
           var ev = evs0[i];
-          if (ev.type !== 'invite_ready' || !ev.data || !ev.data.id) continue;
+          if (!ev || ev.type !== 'invite_ready' || !ev.data || !ev.data.id) continue;
           if (ev.data.code && !codeCache[ev.data.id]) {
             add = add || {};
             add[ev.data.id] = ev.data.code;
@@ -1257,8 +1282,16 @@ window.__ModuleLoader__.load({
       /* 回执码只在客人侧的对应阶段展示:事件会长期留存,无条件展示会让人对着
        * 已作废的码继续操作(邀请码那侧已改成"列表常驻 + 按行取用") */
       var answerEv = (phase === 'joining' || phase === 'answer_ready' || phase === 'entering') ? onlinePickEvent(evs, 'answer_ready') : null;
-      /* bridge.state 在内核首次心跳前是 null——房号一律走安全局部变量 */
+      /* bridge.state 在内核首次心跳前是 null——房号一律走安全局部变量。
+       * 内核这一拍没报房号(老内核 answer_ready 不带 code)时用「本次会话见过的
+       * 最后一个房号」兜住,让大厅入口不闪没;阶段落回 idle 视为散场,清掉记忆 */
       var roomCode = (bridge.state && (bridge.state.roomCode || bridge.state.code)) || null;
+      if (roomCode) {
+        if (lastRoomCode !== roomCode) setLastRoomCode(roomCode);
+      } else if (lastRoomCode) {
+        if (phase === 'idle') setLastRoomCode(null);   /* 散场:记忆作废 */
+        else roomCode = lastRoomCode;                  /* 只是这一拍没报:用记忆兜住 */
+      }
       return renderOnlinePanel();
       } catch (renderErr) {
         /* 渲染层任何异常都会被 slot 系统吞成空白(记忆坑):一律把错误亮出来,
@@ -1415,7 +1448,7 @@ window.__ModuleLoader__.load({
          * 不摘的话传完了还挂着「补传」按钮,看着像白传(实测反馈) */
         var transferred = {};
         evs.forEach(function (ev) {
-          if (ev.type === 'transfer_done' && ev.data && ev.data.name) {
+          if (ev && ev.type === 'transfer_done' && ev.data && ev.data.name) {
             transferred[ev.data.name] = true;
           }
         });
@@ -1423,7 +1456,7 @@ window.__ModuleLoader__.load({
         var doneList = missing.filter(function (n) { return transferred[n]; });
         var txEv = null;
         for (var i = evs.length - 1; i >= 0; i--) {
-          if (evs[i].type === 'transfer_begin' || evs[i].type === 'transfer_progress' || evs[i].type === 'transfer_done' || evs[i].type === 'transfer_failed') {
+          if (evs[i] && (evs[i].type === 'transfer_begin' || evs[i].type === 'transfer_progress' || evs[i].type === 'transfer_done' || evs[i].type === 'transfer_failed')) {
             txEv = evs[i];
             break;
           }
@@ -1473,10 +1506,13 @@ window.__ModuleLoader__.load({
        * 过期),码正文走事件流(invite_ready 带 id+code,不塞进 0.7 秒一轮的心跳)。
        * 注意:这是函数声明——组件体在 return 之后不再执行,var 赋值会变死语句 */
       function inviteRows() {
-        var list = (bridge.state && bridge.state.invites) || [];
+        /* 类型防护:invites 来自内核心跳,理论上恒为数组;一旦不是(混装版本/
+         * 数据被改坏),直接 .map 会炸整页(实测过:list.map is not a function) */
+        var raw = bridge.state && bridge.state.invites;
+        var list = Array.isArray(raw) ? raw : [];
         var codes = {};
         evs.forEach(function (ev) {
-          if (ev.type === 'invite_ready' && ev.data && ev.data.id) { codes[ev.data.id] = ev.data.code; }
+          if (ev && ev.type === 'invite_ready' && ev.data && ev.data.id) { codes[ev.data.id] = ev.data.code; }
         });
         return list.map(function (it) {
           return { id: it.id, status: it.status, at: it.at, guest: it.guest || '', note: it.note || '', code: codeCache[it.id] || codes[it.id] || '' };
@@ -1556,7 +1592,8 @@ window.__ModuleLoader__.load({
       function roomBrief() {
         var ev0 = onlinePickEvent(evs, 'room_members');
         var d = (ev0 && ev0.data) || {};
-        var list = d.list || [];
+        /* list 恒为数组:主卡与弹窗都直接 .filter,形状坏了不该炸整页 */
+        var list = Array.isArray(d.list) ? d.list : [];
         var caps = (d.caps && typeof d.caps === 'object') ? d.caps : MODE_MAX;
         /* 座位数:主机=当前选中模式的上限(点别的模式立刻变),选中的就是房间
          * 当前模式且内核报了真容量(如房间设置改了人数)时用真值;客人=房间真值 */
@@ -1570,8 +1607,9 @@ window.__ModuleLoader__.load({
        * 注意:这两个必须是函数声明——组件体在 return 之后不再执行,var 赋值
        * 会静默变成 undefined(MODE_MAX 同款坑,已踩过) */
       function seatColor(name) {
+        var s = String(name || '?');
         var h2 = 0;
-        for (var i = 0; i < name.length; i++) { h2 = (h2 * 31 + name.charCodeAt(i)) >>> 0; }
+        for (var i = 0; i < s.length; i++) { h2 = (h2 * 31 + s.charCodeAt(i)) >>> 0; }
         return SEAT_COLORS[h2 % SEAT_COLORS.length];
       }
       function seatAvatar(name) {
@@ -1582,22 +1620,24 @@ window.__ModuleLoader__.load({
         var mData = brief.data;
         var cap = brief.cap;
         var capFor = function (m) { return brief.caps[m] || MODE_MAX[m] || 8; };
-        /* 成员分席:排队的人不占容量席位,排在成员后面;空位=容量-已占席人数 */
-        var mList = mData.list || [];
-        var seated = mList.filter(function (mm) { return !mm.queued; });
-        var queuedList = mList.filter(function (mm) { return mm.queued; });
+        /* 成员分席:排队的人不占容量席位,排在成员后面;空位=容量-已占席人数
+         * (成员表走心跳透传,list 的形状防护在 roomBrief 里统一做) */
+        var mList = brief.list;
+        var sName = function (mm) { return (mm && mm.name) || '客人'; };
+        var seated = mList.filter(function (mm) { return mm && !mm.queued; });
+        var queuedList = mList.filter(function (mm) { return mm && mm.queued; });
         var empties = Math.max(0, cap - seated.length);
-        var hostEntered = mList.some(function (mm) { return mm.role === 'host' && mm.entered; });
+        var hostEntered = mList.some(function (mm) { return mm && mm.role === 'host' && mm.entered; });
         var seats = seated.map(function (mm, i) {
           var isHost = mm.role === 'host';
           return h('div', { key: 'm' + i, className: 'nnk-seat' + (isHost ? ' nnk-seat-host' : '') },
-            seatAvatar(mm.name),
-            h('div', { className: 'nnk-seat-name', title: mm.name }, (isHost ? '👑 ' : '') + mm.name),
+            seatAvatar(sName(mm)),
+            h('div', { className: 'nnk-seat-name', title: sName(mm) }, (isHost ? '👑 ' : '') + sName(mm)),
             e('div', 'nnk-seat-state', mm.entered ? '✅ 已进入' : '⏳ 等待载入'));
         }).concat(queuedList.map(function (mm, i) {
           return h('div', { key: 'q' + i, className: 'nnk-seat nnk-seat-queued' },
-            seatAvatar(mm.name),
-            h('div', { className: 'nnk-seat-name', title: mm.name }, mm.name),
+            seatAvatar(sName(mm)),
+            h('div', { className: 'nnk-seat-name', title: sName(mm) }, sName(mm)),
             e('div', 'nnk-seat-state', '🚏 排队中'));
         })).concat(Array.apply(null, Array(empties)).map(function (_, i) {
           return h('div', { key: 'e' + i, className: 'nnk-seat nnk-seat-empty' },
@@ -1701,7 +1741,7 @@ window.__ModuleLoader__.load({
                 ? h('div', { className: 'nnk-row', style: { marginTop: '8px' } },
                   h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { setRoomPopupOpen(true) } }, (function () {
                     var b = roomBrief();
-                    var seatedN = b.list.filter(function (mm) { return !mm.queued; }).length;
+                    var seatedN = b.list.filter(function (mm) { return mm && !mm.queued; }).length;
                     return '🏛 房间大厅(房号 ' + roomCode + ' · ' + seatedN + '/' + b.cap + ' 人)';
                   })()),
                   h('button', { className: 'nnk-copy nnk-danger', style: { marginTop: '0' }, onClick: function () { leaveRoom(true) } }, '🗑 解散'))
@@ -1727,7 +1767,7 @@ window.__ModuleLoader__.load({
                 ? h('div', { className: 'nnk-row', style: { marginTop: '8px' } },
                   h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { setRoomPopupOpen(true) } }, (function () {
                     var b = roomBrief();
-                    var seatedN = b.list.filter(function (mm) { return !mm.queued; }).length;
+                    var seatedN = b.list.filter(function (mm) { return mm && !mm.queued; }).length;
                     return '🏛 房间大厅(房号 ' + roomCode + ' · ' + seatedN + '/' + b.cap + ' 人)';
                   })()),
                   h('button', { className: 'nnk-copy nnk-danger', style: { marginTop: '0' }, onClick: function () { leaveRoom(false) } }, '🚪 退出'))
@@ -1771,7 +1811,7 @@ window.__ModuleLoader__.load({
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '📡 动态')),
               h('div', { className: 'nnk-log' }, evs.length
-                ? evs.filter(function (ev2) { return ev2.type !== 'room_members'; }).slice(-20).reverse().map(function (ev, i) {
+                ? evs.filter(function (ev2) { return ev2 && ev2.type !== 'room_members'; }).slice(-20).reverse().map(function (ev, i) {
                   return e('div', { key: i, className: 'nnk-break' }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
                 })
                 : e('div', { className: 'nnk-hint' }, '暂无动态。'))),

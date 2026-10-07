@@ -353,6 +353,14 @@
 			if (pc._nnkPingCh) {
 				try { pc._nnkPingCh.close(); } catch (eP2) { /* 忽略 */ }
 			}
+			/* 走邀请码门进来的客人走了:这条 pc 已无人使用,收掉它——不收的话
+			 * used 行会一直攥着一条死连接,列表(和 0.7 秒一轮的心跳)随进房人数
+			 * 单调增长,行数上限也压不住。used 行本身保留作"谁来过"的痕迹,
+			 * 由 pruneInvites 按数量回收 */
+			if (conn._invite && pc._nnkClosed !== true) {
+				pc._nnkClosed = true;
+				try { pc.close(); } catch (eC) { /* 忽略 */ }
+			}
 			emitRoomMembers();
 			promoteNextQueued();
 		});
@@ -411,6 +419,10 @@
 			conn.send(stageMsg("queued"));
 			conn._queued = true;
 			emitRoomMembers();
+			/* 阶段也要收口:这位客人如果正是拿某张邀请码来的(那张已转 used),
+			 * 此处不收口的话主机工坊会永远停在「正在建立点对点直连…」——要等
+			 * 下一次有人退出/下一次生成邀请码才被纠正 */
+			settleInvitePhase();
 			return;
 		}
 		conn.send(stageMsg("loaded"));
@@ -658,16 +670,26 @@
 		hostState.invites = [];
 	}
 
-	/* 列表行数上限:超了从最老的失效行开始扔(还在用/还在等的行不丢) */
-	function pruneInvites() {		while (hostState.invites.length > MAX_INVITE_ROWS) {
-			var i = 0;
-			while (i < hostState.invites.length && hostState.invites[i].status !== "dead") {
-				i++;
+	/* 列表行数上限:超了从"最老且能扔的"行开始扔——dead 随时可扔;used 行
+	 * 留 5 分钟痕迹(足够工坊把这行渲染完、看清"谁用过")之后也算可扔,否则
+	 * 长局里 used 行只增不减,行数上限形同虚设。还在等回执/正在打通的
+	 * (pending/answering)永远不动 */
+	function pruneInvites() {
+		var usedTtlMs = 5 * 60 * 1000;
+		while (hostState.invites.length > MAX_INVITE_ROWS) {
+			var idx = -1;
+			for (var i = 0; i < hostState.invites.length; i++) {
+				var it = hostState.invites[i];
+				var droppable = it.status === "dead" || (it.status === "used" && Date.now() - (it.at || 0) > usedTtlMs);
+				if (droppable) {
+					idx = i;
+					break;
+				}
 			}
-			if (i >= hostState.invites.length) {
-				return;
+			if (idx < 0) {
+				return;   /* 满屏都是活跃码:保留,等它们收尾再来 */
 			}
-			hostState.invites.splice(i, 1);
+			hostState.invites.splice(idx, 1);
 		}
 	}
 
@@ -963,9 +985,6 @@
 			bridgeApi().setPhase("mqtt_waiting", { roomCode: hostState.roomCode, stage: "lobby" });
 			startMqtt();
 			emitRoomMembers();   /* 新房立刻报一张成员表(工坊弹窗不等第一位客人) */
-			if (signalingMode === "invite") {
-				startInvite();   /* 旧客户端兼容:建完补一张邀请码 */
-			}
 			/* 游戏不在联机大厅界面(引擎的联机菜单)时,自动带过去:重载进联机
 			 * 模式一次,落地后本段大厅与房号原样恢复。用户的操作预期是"建完房,
 			 * 游戏里就该停在联机大厅等载入"——不然游戏停在原界面,像什么都没
@@ -973,6 +992,13 @@
 			 * 秒级路径,不用再重载 */
 			var atConnectMenu = env._status.connectMode && !env.game.online && !env.game.onlineroom
 				&& !env._status.waitingForPlayer && (!env.game.players || !env.game.players.length);
+			/* 旧客户端兼容的补码放在重载判断之后:重载会清掉内存里的 invites 表
+			 * (房号靠 nnk_host_roomcode 接力,邀请码没有接力),重载窗口里生成的码
+			 * 到落地就成了死码——客人拿它生成回执码,主机粘贴必然报「没有待应答的
+			 * 邀请」。要重载时等落地后由客户端按需再要一张 */
+			if (signalingMode === "invite" && atConnectMenu) {
+				startInvite();   /* 旧客户端兼容:建完补一张邀请码 */
+			}
 			if (!atConnectMenu) {
 				try {
 					localStorage.setItem(env.lib.configprefix + "nnk_host_pending", JSON.stringify({ mode: mode, signaling: "mqtt", stage: "lobby" }));
@@ -1139,15 +1165,17 @@
 			hostState.active = false;
 			hostState.stage = null;
 			hostState.reuseCode = null;
-			/* 房号一并清掉:残留的话,工坊会显示幻影房号,甚至把旧房号当活房
-			 * 恢复显示(那个房号的信令早已拆掉,朋友加入只会扑空) */
+			/* 顺序要紧:cleanupMqtt 要拿房号去撤 broker 上那条 retained 心跳,
+			 * 先清房号的话 publishRaw 直接空转——公共 broker 上会永久留下一张
+			 * "这房还在"的心跳,之后任何人输这个房号加入都会先被判成"房主在线",
+			 * 白等一轮(实测:解散后旧房号仍显示在线) */
+			cleanupMqtt();
 			hostState.roomCode = null;
 			hostState.roomMode = null;
 			/* 邀请码整体作废(清表:房间都没了,这些码不该再出现) */
 			clearInvites("房间已解散");
 			/* 大厅/排队的客人收到 nnk_stage=closed 立即散场,不会永远挂在排队页 */
 			closeParkedBridges();
-			cleanupMqtt();
 			try {
 				localStorage.removeItem(env.lib.configprefix + "nnk_host_pending");
 				localStorage.removeItem(env.lib.configprefix + "nnk_host_roomcode");

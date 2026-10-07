@@ -123,7 +123,10 @@
 		/* 链代号:连续两次断开会各起一条重试链,旧链的迟到定时器必须作废
 		 * ——否则两条链并发重连,互相 resetSession 抢连接(实测隐患) */
 		var gen = guestState.rejoinGen = (guestState.rejoinGen || 0) + 1;
-		if (guestState.rejoinCode !== code || attempts <= 0 || !env._status.connectMode) {
+		if (attempts <= 0 || !env._status.connectMode) {
+			/* 次数用尽/不在联机模式:收掉会话令牌并给人话提示。能不能提示只看这一处
+			 * ——上面刚把 rejoinCode 赋成 code,再比它恒真;run 循环里的「用户已取消」
+			 * 由 setTimeout 内的令牌比对负责兜底 */
 			if (guestState.rejoinCode === code) {
 				guestState.rejoinCode = null;
 				bridgeApi().setPhase("idle");
@@ -323,15 +326,27 @@
 				 * lobby/queued=一体化房间的停车与排队,顺带从指令里收下房号:
 				 * 邀请码门进来的客人也拿着房号,断线后能走房号门自动重回 */
 				fake.onmessage = function(ev) {
+					var msg;
 					try {
-						var msg = JSON.parse(ev.data);
-						if (msg && msg.nnk_stage === "full") {
+						msg = JSON.parse(ev.data);
+					} catch (e2) {
+						/* 非 JSON 消息:暂存回放,防丢 */
+						fake._buffer.push(ev.data);
+						return;
+					}
+					/* JSON.parse("null") 会返回 null(不抛错)——显式判掉,别掉进外层
+					 * catch 把 "null" 原文回放给引擎,更别让它走到下面的分支判断 */
+					if (!msg) {
+						return;
+					}
+					try {
+						if (msg.nnk_stage === "full") {
 							/* 旧内核主机:房满直接拒收(新内核满员改为排队) */
 							session.autoConnect = false;
 							resetSession();
 							bridgeApi().setPhase("idle");
 							bridgeApi().emit("error", { message: "房间人数已满,主机没能让你进——等有人退出,让房主发一张新邀请码再来" });
-						} else if (msg && msg.nnk_stage === "closed") {
+						} else if (msg.nnk_stage === "closed") {
 							/* 房主解散房间(工坊取消):立即散场,不自动重回。
 							 * 与房号门同款:顺带把还在跑的重回链停掉 */
 							session.autoConnect = false;
@@ -339,7 +354,7 @@
 							resetSession();
 							bridgeApi().setPhase("idle");
 							bridgeApi().emit("info", { message: "房主已解散房间" });
-						} else if (msg && msg.nnk_stage === "lobby") {
+						} else if (msg.nnk_stage === "lobby") {
 							if (msg.code) {
 								session.code = String(msg.code);   /* 房号到手:断线走房号门自动重回 */
 							}
@@ -349,13 +364,13 @@
 								name: nnk.env.get.connectNickname(),
 								avatar: nnk.env.lib.config.connect_avatar || ""
 							} }));
-						} else if (msg && msg.nnk_stage === "queued") {
+						} else if (msg.nnk_stage === "queued") {
 							if (msg.code) {
 								session.code = String(msg.code);
 							}
 							session.parked = true;
 							bridgeApi().setPhase("queued", session.code ? { code: session.code } : {});
-						} else if (msg && msg.nnk_members) {
+						} else if (msg.nnk_members) {
 							/* 主机转发的成员表(与房号门同款分支!):客人弹窗的
 							 * 等待队列数据源——缺了这条,邀请码客人一开弹窗就永远
 							 * 停在「正在同步房间信息…」(实测报障) */
@@ -363,7 +378,7 @@
 						} else if (session.autoConnect && (msg.nnk_stage === "loaded" || Array.isArray(msg))) {
 							/* loaded=新内核放行指令;引擎消息(数组)直达=对端还没发
 							 * 放行指令的旧内核——都当作放行,缓冲后交引擎(混装不吊死) */
-							if (msg && msg.code && !session.code) {
+							if (msg.code && !session.code) {
 								session.code = String(msg.code);
 							}
 							fake._buffer.push(ev.data);
@@ -371,7 +386,7 @@
 						}
 						/* 其余(无 nnk_stage 的非数组消息)忽略 */
 					} catch (e2) {
-						/* 非 JSON 消息:暂存回放,防丢 */
+						/* 分支处理自身出错:原文暂存回放,不吞消息 */
 						fake._buffer.push(ev.data);
 					}
 				};
@@ -422,7 +437,11 @@
 			}).then(function() {
 				return rtc.waitGather(pc);
 			}).then(function() {
-				bridgeApi().setPhase("answer_ready");
+				/* 带上房号(与 joining/lobby_waiting/queued 同款):setPhase 是整体
+				 * 替换 state,不带的话生成回执码这一拍工坊的房号会凭空消失——客人
+				 * 手里的「房间大厅 / 退出房间」入口跟着闪没(实测:回执码出了,
+				 * 反而找不到自己的房间)。邀请码门进来的客人本来就有 session.code */
+				bridgeApi().setPhase("answer_ready", session.code ? { code: session.code } : undefined);
 				bridgeApi().emit("answer_ready", { code: rtc.encodeCode("answer", pc.localDescription) });
 			}).catch(function(err) {
 				console.error("[联机助手] 加入失败", err);
