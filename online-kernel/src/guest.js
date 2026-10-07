@@ -75,6 +75,7 @@
 	 * rejoinCode 是会话令牌:cancelJoin 置空即可停掉整个循环。 */
 	function autoRejoin(code, attempts) {
 		var env = nnk.env;
+		guestState.rejoinCode = code;
 		if (guestState.rejoinCode !== code || attempts <= 0 || !env._status.connectMode) {
 			if (guestState.rejoinCode === code) {
 				guestState.rejoinCode = null;
@@ -139,6 +140,22 @@
 				}
 				return origConnect.call(env.game, ip, callback);
 			};
+			/* 客人侧「重新开始」也走不散房:结算界面主客双方都有该按钮,客人点它
+			 * 走的是引擎裸 reload,会掉回联机菜单要手动输房号——包一层:对局结束
+			 * 且在房号房间里时写接力标记,重载后自动同房号重进(模式本就是 connect,
+			 * localStorage 同步写,无丢写竞速) */
+			if (!env.game.__nnkGuestReloadPatched) {
+				env.game.__nnkGuestReloadPatched = true;
+				var origGuestReload = env.game.reload;
+				env.game.reload = function() {
+					try {
+						if (guestState.session && guestState.session.code && env._status.over && env._status.connectMode) {
+							localStorage.setItem(env.lib.configprefix + "nnk_guest_pending", JSON.stringify({ kind: "room", code: guestState.session.code }));
+						}
+					} catch (e) { /* 忽略 */ }
+					return origGuestReload.apply(this, arguments);
+				};
+			}
 			/* 重载落地:联机界面 HUD 就绪后自动续跑被重载打断的加入流程。
 			 * fromResume=true 直通,不再触发重载(防引擎异常时无限重载环) */
 			try {
@@ -154,7 +171,9 @@
 							if (task && task.kind === "invite") {
 								api.joinByInvite(task.code, true);
 							} else if (task) {
-								api.joinByRoomCode(task.code, true);
+								/* 客人自己点「重新开始」/主机重组后的重进:主机可能也在
+								 * 重载重建,单次尝试大概率撞空——走带重试的自动重回 */
+								autoRejoin(task.code, 8);
 							}
 						} else if (waited > 15000) {
 							clearInterval(resumeTimer);
