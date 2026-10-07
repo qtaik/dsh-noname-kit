@@ -1,7 +1,9 @@
 /*
  * 客人端(无头):加入互联网房间 + 接管 game.connect 的 nnk:// 地址。
- * 邀请码模式里客人是 answer 方:工坊下发邀请码 → 内核生成回执码(事件上报,
- * 工坊展示复制)→ 房主粘贴回执 → 通道打通 → 引擎握手照常走。
+ * 同一个房间有两道门:房号门(客人=offer 方,经 MQTT 信令)与邀请码门
+ * (客人=answer 方:工坊下发邀请码 → 内核生成回执码 → 房主粘贴 → 通道打通)。
+ * 进门后都是同一套流程:先在大厅停车,房主载入时一起进引擎;断线自动重回
+ * 统一走房号门(邀请码客人也会从内核指令里拿到房号)。
  */
 (function() {
 	var nnk = window.__nnk__;
@@ -299,12 +301,16 @@
 				}
 				var fake = new rtc.FakeWebSocket(e.channel);
 				session.fake = fake;
+				fake.onUp(function() { session.wasIn = true; });
 				/* 内核协议 tap(与房号模式同款):收到放行(loaded/引擎消息直达)才接
-				 * 引擎——full=房满被拒、closed=房主解散,都给人话收场,不对着断线发懵 */
+				 * 引擎——closed=房主解散,给人话收场,不对着断线发懵;
+				 * lobby/queued=一体化房间的停车与排队,顺带从指令里收下房号:
+				 * 邀请码门进来的客人也拿着房号,断线后能走房号门自动重回 */
 				fake.onmessage = function(ev) {
 					try {
 						var msg = JSON.parse(ev.data);
 						if (msg && msg.nnk_stage === "full") {
+							/* 旧内核主机:房满直接拒收(新内核满员改为排队) */
 							session.autoConnect = false;
 							resetSession();
 							bridgeApi().setPhase("idle");
@@ -314,9 +320,28 @@
 							resetSession();
 							bridgeApi().setPhase("idle");
 							bridgeApi().emit("info", { message: "房主已解散房间" });
+						} else if (msg && msg.nnk_stage === "lobby") {
+							if (msg.code) {
+								session.code = String(msg.code);   /* 房号到手:断线走房号门自动重回 */
+							}
+							session.parked = true;   /* 落点:自动重回循环到此收 */
+							bridgeApi().setPhase("lobby_waiting", session.code ? { code: session.code } : {});
+							fake.send(JSON.stringify({ nnk_hello: {
+								name: nnk.env.get.connectNickname(),
+								avatar: nnk.env.lib.config.connect_avatar || ""
+							} }));
+						} else if (msg && msg.nnk_stage === "queued") {
+							if (msg.code) {
+								session.code = String(msg.code);
+							}
+							session.parked = true;
+							bridgeApi().setPhase("queued", session.code ? { code: session.code } : {});
 						} else if (session.autoConnect && (msg.nnk_stage === "loaded" || Array.isArray(msg))) {
 							/* loaded=新内核放行指令;引擎消息(数组)直达=对端还没发
 							 * 放行指令的旧内核——都当作放行,缓冲后交引擎(混装不吊死) */
+							if (msg && msg.code && !session.code) {
+								session.code = String(msg.code);
+							}
 							fake._buffer.push(ev.data);
 							connectNow();
 						}
@@ -330,6 +355,13 @@
 					if (guestState.session === session) {
 						guestState.session = null;
 						try { if (session.ping) session.ping.stop(); } catch (eP) { /* 忽略 */ }
+						/* 一体化房间:邀请码客人也拿着房号(内核随停车指令下发),
+						 * 断开后走房号门自动重回——恢复不再区分当初从哪道门进来 */
+						if (session.wasIn && session.code && nnk.env._status.connectMode) {
+							bridgeApi().setPhase("joining", { code: session.code });
+							autoRejoin(session.code, 8);
+							return;
+						}
 						bridgeApi().setPhase("idle");
 						bridgeApi().emit("room_closed", { side: "guest" });
 					}
@@ -426,24 +458,24 @@
 				/* 大厅停车:先不接引擎,等主机的 stage 指令——loaded=进引擎,
 				 * lobby=停车并报身份(hello)。tap 先收内核协议,进引擎时被
 				 * connectNow 换成引擎 handler,暂存的引擎消息由 replay 回放 */
-					fake.onmessage = function(ev) {
-						try {
-							var msg = JSON.parse(ev.data);
-							if (msg && msg.nnk_stage === "loaded" && session.autoConnect) {
-								connectNow(session.rejoin);
+				fake.onmessage = function(ev) {
+					try {
+						var msg = JSON.parse(ev.data);
+						if (msg && msg.nnk_stage === "loaded" && session.autoConnect) {
+							connectNow(session.rejoin);
 						} else if (msg && msg.nnk_stage === "queued") {
 							session.parked = true;   /* 排队也是落点,重试循环到此收 */
 							bridgeApi().setPhase("queued", { code: code });
 						} else if (msg && msg.nnk_stage === "lobby") {
-								/* 停车在大厅:必须报阶段——此前只发 hello 不报阶段,
-								 * 客人工坊一直停在「等房主应答」,看着像没进房(实测反馈) */
-								session.parked = true;   /* 落点:自动重回循环不必再重试 */
-								bridgeApi().setPhase("lobby_waiting", { code: code });
-								fake.send(JSON.stringify({ nnk_hello: {
-									name: nnk.env.get.connectNickname(),
-									avatar: nnk.env.lib.config.connect_avatar || ""
-								} }));
-							} else if (msg && msg.nnk_stage === "closed") {
+							/* 停车在大厅:必须报阶段——此前只发 hello 不报阶段,
+							 * 客人工坊一直停在「等房主应答」,看着像没进房(实测反馈) */
+							session.parked = true;   /* 落点:自动重回循环不必再重试 */
+							bridgeApi().setPhase("lobby_waiting", { code: code });
+							fake.send(JSON.stringify({ nnk_hello: {
+								name: nnk.env.get.connectNickname(),
+								avatar: nnk.env.lib.config.connect_avatar || ""
+							} }));
+						} else if (msg && msg.nnk_stage === "closed") {
 							/* 房主解散房间(工坊取消):立即散场,不自动重回。
 							 * resetSession 后随后的通道断开事件变成空操作(会话已不在) */
 							guestState.rejoinCode = null;
@@ -484,7 +516,7 @@
 			});
 			pc.onconnectionstatechange = function() {
 				if (pc.connectionState === "failed") {
-					bridgeApi().emit("error", { message: "直连建立失败(双方网络没打通)——反复失败检查防火墙是否放行无名杀(UDP),或换用邀请码方式" });
+						bridgeApi().emit("error", { message: "直连建立失败(双方网络没打通)——反复失败检查防火墙是否放行无名杀(UDP),或让房主发一张邀请码,从另一道门进来" });
 					bridgeApi().setPhase("idle");
 					resetSession();
 				}
@@ -561,7 +593,7 @@
 					}, 10000);
 					setTimeout(function() {
 						if (!answered && guestState.session === session) {
-							bridgeApi().emit("error", { message: "30 秒未收到房主应答(可能已掉线)——重新输入房号再试,或换用邀请码方式" });
+							bridgeApi().emit("error", { message: "30 秒未收到房主应答(可能已掉线)——重新输入房号再试,或让房主发一张邀请码" });
 							/* 收掉半死会话:自动重回循环据此续上下一试,状态不留悬空 */
 							bridgeApi().setPhase("idle");
 							resetSession();

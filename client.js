@@ -1006,14 +1006,16 @@ window.__ModuleLoader__.load({
     var MODE_MAX = { identity: 8, guozhan: 8, versus: 8, doudizhu: 3, single: 2 };
     /* 座位头像色板(名字首字色块):中饱和色,明暗主题下都清楚 */
     var SEAT_COLORS = ['#5b8def', '#e2725b', '#67a37c', '#c9a227', '#9b6bd3', '#4aa3a3', '#d2659b', '#7a8b99'];
-    /* 流程互斥:同一游戏实例要么在主机流程要么在客人流程,进行中时另一侧禁用 */
-    var HOST_PHASES = ['host_booting', 'hosting', 'invite_ready', 'connecting', 'room_open'];
+    /* 流程互斥:同一游戏实例要么在主机流程要么在客人流程,进行中时另一侧禁用。
+     * mqtt_waiting=大厅里等朋友加入(主机侧,创建/加入按钮都要锁住,别让房主
+     * 又去点「加入房间」把自己的房号当别人的房进) */
+    var HOST_PHASES = ['host_booting', 'hosting', 'mqtt_waiting', 'invite_ready', 'connecting', 'room_open'];
     var GUEST_PHASES = ['guest_booting', 'joining', 'answer_ready', 'entering', 'connected', 'queued', 'lobby_waiting'];
     var ONLINE_PHASE_TEXT = {
       idle: '待机',
       host_booting: '正在进入建房流程(游戏将自动重载,约几秒)…',
       guest_booting: '正在重载进联机模式(约几秒),落地后自动继续加入…',
-      hosting: '房间已建好,正在准备房号…',
+      hosting: '游戏房间已建好,等待客人加入…',
       mqtt_waiting: '房号就绪!把 6 位房号发给朋友,等朋友加入…',
       invite_ready: '邀请码已生成,等待客人回执码…',
       connecting: '正在建立点对点直连…(最长约 20 秒,打不通会自动换新码)',
@@ -1204,9 +1206,6 @@ window.__ModuleLoader__.load({
       var evs = bridge.events || [];
       var phase = (bridge.state && bridge.state.phase) || 'idle';
       var phaseText = ONLINE_PHASE_TEXT[phase] || phase;
-      if (phase === 'hosting' && (bridge.state && bridge.state.signaling) === 'invite') {
-        phaseText = '正在生成邀请码…';
-      }
       var bridgeOnline = Boolean(bridge.online);
       var hostFlow = HOST_PHASES.indexOf(phase) >= 0;
       var guestFlow = GUEST_PHASES.indexOf(phase) >= 0;
@@ -1216,9 +1215,10 @@ window.__ModuleLoader__.load({
       var kernelBad = !kernel || kernel.state === 'unknown';
       /* 码只在对应流程阶段展示:事件会长期留存,无条件展示会让人对着
        * 已作废的邀请码/回执码继续操作 */
-      /* 邀请码只在邀请码流程的专属阶段展示:曾在全部主机阶段展示,导致
-       * 先试过邀请码、后改用房号建房时,过期的邀请码事件一直压着新房号不显示 */
-      var inviteEv = (phase === 'invite_ready' || phase === 'connecting') ? onlinePickEvent(evs, 'invite_ready') : null;
+      /* 邀请码事件只在生成/协商阶段展示:客人一到大厅(阶段归位 mqtt_waiting),
+       * 这张码就收起来——别再对着已用过的那张继续操作 */
+      var invitePhase = phase === 'invite_ready' || phase === 'connecting';
+      var inviteEv = invitePhase ? onlinePickEvent(evs, 'invite_ready') : null;
       var answerEv = (phase === 'joining' || phase === 'answer_ready' || phase === 'entering') ? onlinePickEvent(evs, 'answer_ready') : null;
       /* bridge.state 在内核首次心跳前是 null——房号一律走安全局部变量 */
       var roomCode = (bridge.state && (bridge.state.roomCode || bridge.state.code)) || null;
@@ -1258,7 +1258,7 @@ window.__ModuleLoader__.load({
           title: '📨 邀请码已生成——发给朋友',
           onClose: function () { setInvitePopupDismissed(code) },
           body: h('div', {},
-            e('div', 'nnk-hint', '1. 点「复制」把整段邀请码发给朋友;2. 朋友在「我要加入 → 备用」粘贴,把生成的「回执码」发回给你;3. 回执码粘到下面,点「连接」。'),
+            e('div', 'nnk-hint', '1. 点「复制」把整段邀请码发给朋友;2. 朋友在「我要加入 → 📨 收到邀请码?从这里加入」粘贴,把生成的「回执码」发回给你;3. 回执码粘到下面,点「连接」。他进的是同一个房间,一样在大厅等载入。'),
             codeAgeText(ev.ts) ? e('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(ev.ts)) : null,
             e('div', 'nnk-label', '邀请码(整段复制)'),
             h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: code }),
@@ -1506,7 +1506,10 @@ window.__ModuleLoader__.load({
                         m.name + '(最多 ' + capFor(m.id) + ' 人)');
                     })),
                   h('button', { className: 'nnk-submit', onClick: function () { sendCmd('restart_room', { mode: roomMode }); setNote('🚀 载入中——成员会自动进入(原地进房不断线;需重载时自动跟随)'); } }, '🚀 载入到游戏(按所选模式)'),
-                  e('div', 'nnk-hint', '载入时主机尽量原地进房(成员不断线);需要重载时成员自动跟随进入。开局/禁将在游戏内点。'))
+                  e('div', 'nnk-hint', '载入时主机尽量原地进房(成员不断线);需要重载时成员自动跟随进入。开局/禁将在游戏内点。'),
+                  /* 房间相关的操作都收在这里:生成邀请码 = 给进不了房号门的朋友
+                   * 开同一房间的第二道门(一客一张),他同样会出现在上面的座位里 */
+                  h('button', { className: 'nnk-copy', onClick: function () { setAnswerText(''); sendCmd('invite_refresh', { kind: 'invite' }); setNote('📨 正在生成邀请码…生成后自动弹到屏幕中间'); } }, '📨 生成邀请码(给连不上房号的朋友)'))
                 : e('div', 'nnk-hint', '模式与载入由房主操作——他点「载入到游戏」后,你会自动跟着进房。')),
             h('div', { className: 'nnk-modal-actions' },
               h('button', { className: 'nnk-copy nnk-danger', onClick: function () { leaveRoom(isRoomHost) } }, isRoomHost ? '🗑 解散房间' : '🚪 退出房间'),
@@ -1547,7 +1550,7 @@ window.__ModuleLoader__.load({
                           : '';
                       })())),
                 phase !== 'idle'
-                  ? e('div', 'nnk-hint', '当前状态:' + phaseText + (bridge.state && bridge.state.roomCode ? '(房号 ' + bridge.state.roomCode + ')' : ''))
+                  ? e('div', 'nnk-hint', '当前状态:' + phaseText + (roomCode ? '(房号 ' + roomCode + ')' : ''))
                   : null)),
         status.active && kernel && kernel.state === 'ok'
           ? [
@@ -1557,19 +1560,23 @@ window.__ModuleLoader__.load({
             h('div', { key: 'col-host', className: 'nnk-col' },
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '🏠 我要当主机')),
-              e('div', 'nnk-hint', '创建 P2P 房间 → 房间大厅里选模式、载入到游戏,大家自动进入。开局/禁将在游戏里点。'),
+              e('div', 'nnk-hint', '创建 P2P 房间 → 房间大厅里选模式、载入到游戏,大家自动进入(房号连不上的朋友用「📨 生成邀请码」)。开局/禁将在游戏里点。'),
               h('div', { className: 'nnk-row' },
                 h('button', { className: 'nnk-submit', style: { marginTop: '0' }, disabled: !bridgeOnline || guestFlow || hostFlow || (bridge.role === 'host' && roomCode), onClick: function () { setAnswerText(''); setOfferText(''); sendCmd('create_room', { mode: roomMode }); setRoomPopupOpen(true) } }, '🏛 创建 P2P 房间'),
-                phase === 'room_open' && (bridge.state && bridge.state.signaling) === 'mqtt' ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一个房号')
-                  : phase === 'room_open' ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '➕ 再邀请一位')
-                  : phase === 'mqtt_waiting' ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一个房号')
-                  : (phase === 'invite_ready' || phase === 'connecting') ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一张邀请码重试')
+                /* 邀请码 = 同一房间的第二道门,按需生成(可多张、一客一张):
+                 * 房号进不来的朋友拿它进同一个房间,成员表/排队/载入全都共用。
+                 * 只在主机侧显示——客人的 roomCode 是自己那个房间的,别把
+                 * 「生成邀请码 / 解散」摆到客人面前 */
+                roomCode && !guestFlow && phase !== 'host_booting'
+                  ? (invitePhase
+                    ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { setAnswerText(''); sendCmd('invite_refresh', { kind: 'invite' }) } }, '♻️ 换一张邀请码重试')
+                    : h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { setAnswerText(''); sendCmd('invite_refresh', { kind: 'invite' }) } }, '📨 生成邀请码'))
+                  : null,
+                roomCode && !guestFlow && (phase === 'room_open' || phase === 'mqtt_waiting' || phase === 'hosting')
+                  ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一个房号')
                   : null),
-              !hostFlow && !guestFlow && !roomCode
-                ? h('button', { className: 'nnk-copy', disabled: !bridgeOnline, onClick: function () { setAnswerText(''); setOfferText(''); sendCmd('create_room', { mode: roomMode, signaling: 'invite' }) } }, '📨 房号反复连不上?改用邀请码方式建房(备用)')
-                : null,
               !bridgeOnline ? e('div', 'nnk-hint', '内核离线(先启动游戏)') : null,
-              roomCode && !roomPopupOpen
+              roomCode && !guestFlow && !roomPopupOpen
                 ? h('div', { className: 'nnk-row', style: { marginTop: '8px' } },
                   h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { setRoomPopupOpen(true) } }, (function () {
                     var b = roomBrief();
@@ -1580,7 +1587,7 @@ window.__ModuleLoader__.load({
                 : null,
               inviteEv
                 ? h('div', { style: { marginTop: '10px' } },
-                  e('div', 'nnk-label', '邀请码(整段复制发给朋友)——备用方式'),
+                  e('div', 'nnk-label', '邀请码(整段复制发给朋友,进的是同一个房间)'),
                   codeAgeText(inviteEv.ts) ? e('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(inviteEv.ts)) : null,
                   h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: (inviteEv.data && inviteEv.data.code) || '' }),
                   h('button', { className: 'nnk-copy', onClick: function () { copyText((inviteEv.data && inviteEv.data.code) || '') } }, '📋 复制邀请码'),
@@ -1604,7 +1611,8 @@ window.__ModuleLoader__.load({
                 : null,
               showInviteFallback
                 ? h('div', {},
-                  e('div', 'nnk-label', '备用:粘贴房主的邀请码'),
+                  e('div', 'nnk-label', '粘贴房主的邀请码'),
+                  e('div', 'nnk-hint', '房号连不上时房主会给你这一段——进的是同一个房间,一样在大厅等房主载入。'),
                   h('textarea', { className: 'nnk-textarea nnk-code', value: offerText, onChange: function (ev) { setOfferText(ev.target.value) }, placeholder: '粘贴房主的邀请码…' }),
                   h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow || guestFlow, onClick: function () { sendCmd('join_invite', { code: offerText }) } }, '生成回执码'),
                   answerEv
@@ -1614,7 +1622,7 @@ window.__ModuleLoader__.load({
                       h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: (answerEv.data && answerEv.data.code) || '' }),
                       h('button', { className: 'nnk-copy', onClick: function () { copyText((answerEv.data && answerEv.data.code) || '') } }, '📋 复制回执码'))
                     : null)
-                : h('button', { className: 'nnk-copy', onClick: function () { setShowInviteFallback(true) } }, '房号连不上?换邀请码方式(备用)…')),
+                : h('button', { className: 'nnk-copy', onClick: function () { setShowInviteFallback(true) } }, '📨 收到邀请码?从这里加入…')),
             /* 左栏收口(主机+加入+两块折叠配置):折叠卡进栏内,跟着本栏紧凑
              * 堆叠,不再被网格行高顶出大空隙 */
             renderFoldCard('identity', '👤 人物标识', function () { return renderIdentityCard() }),
@@ -1632,9 +1640,9 @@ window.__ModuleLoader__.load({
               e('div', 'nnk-hint',
                 '0.【官方版一次性】设置→通用→打开「自动导入扩展」→重载,否则扩展列表里没有「联机助手」。\n' +
                 '1. 两边都装插件、配好目录;本页点「📦 安装内核」→ 游戏扩展菜单给「联机助手」点「启」→ 重载。\n' +
-                '2. 主机:「创建 P2P 房间」→ 大厅选模式点「载入到游戏」;客人输房号加入,人满自动排队。房号不通换邀请码方式。打完一把自动回大厅,再点载入就行,房号不变。\n' +
+                '2. 主机:「创建 P2P 房间」→ 大厅选模式点「载入到游戏」;客人输房号加入,人满自动排队。房号连不上的朋友,主机点「📨 生成邀请码」发他一张——进的是同一个房间,一样等载入。打完一把自动回大厅,再点载入就行,房号不变。\n' +
                 '3. 主机在游戏里点「开始游戏」。禁将/包/人数在等待房间右上角「房间设置」改,点「启」广播全房。'),
-              e('div', 'nnk-hint', '连接信息经加密信令交换,游戏数据点对点直连。个别网络连不上就换邀请码方式。')) }))]
+              e('div', 'nnk-hint', '连接信息经加密信令交换,游戏数据点对点直连。个别网络连不上房号门,就用邀请码从另一道门进(同一个房间)。')) }))]
           : null,
         note ? e('div', { className: 'nnk-dash-full ' + (note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err') }, note) : null,
         roomPopupOpen && roomCode ? renderRoomModal() : null,

@@ -50,7 +50,7 @@
 				guest.joinByRoomCode(args.code);
 				break;
 			case "invite_refresh":
-				host.refreshInvite();
+				host.refreshInvite(args.kind);   /* kind="invite"=生成一张邀请码,否则换房号 */
 				break;
 			case "accept_answer":
 				host.acceptAnswer(args.code);

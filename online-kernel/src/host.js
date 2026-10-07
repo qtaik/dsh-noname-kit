@@ -1,5 +1,6 @@
 /*
- * 主机端(无头):软服务器 + 房号/邀请码双信令,事件经 bridge 上报工坊。
+ * 主机端(无头):软服务器 + 一体化房间的两道门。房间由房号标识、恒有房号门
+ * (MQTT 信令);邀请码是同一个房间的第二道门,按需生成(一客一张)。
  * 原生 createServer 在渲染进程里 require("ws") 起 8080 监听;这里把它整个
  * 换成 WebRTC 接客——每个客人的 DataChannel 包成 HostBridge 交给
  * lib.init.connection,引擎从此以为来的是普通客人。房主自己的座位由
@@ -12,7 +13,8 @@
 
 	var hostState = nnk.state.host = {
 		active: false,        /* 本次启动里已进入"互联网建房"流程(含跨重载接力) */
-		signaling: "mqtt",    /* mqtt=房号直连(默认) | invite=邀请码兜底 */
+		signaling: "mqtt",    /* 恒为 mqtt:一体化房间必有房号门;邀请码是同一房间的第二道门,
+		                       * 按需生成(一客一张),不在这里记状态 */
 		stage: null,          /* lobby=P2P 大厅(未进引擎) | loaded=引擎房间已建 */
 		roomCode: null,
 		reuseCode: null,      /* 打完一把重载重组:接力上局的房号,客人自动重进 */
@@ -21,7 +23,8 @@
 		invitePc: null,
 		mqttSession: null,
 		presenceTimer: null,
-		mqttGen: 0            /* 信令会话代号:startMqtt 递增,作废迟到会话用 */
+		mqttGen: 0,           /* 信令会话代号:startMqtt 递增,作废迟到会话用 */
+		inviteGen: 0          /* 邀请码代号:startInvite 递增,作废还在收候选的旧码 */
 	};
 
 	function bridgeApi() {
@@ -115,7 +118,7 @@
 				return;
 			}
 			b._queued = false;
-			b.send(JSON.stringify({ nnk_stage: "loaded" }));
+			b.send(stageMsg("loaded"));
 			env.lib.init.connection(b);
 			b._entered = true;
 			enteredGuests += 1;
@@ -193,16 +196,13 @@
 		setTimeout(go, 1500);
 	}
 
-	/* 按建房时选定的信令方式挂"互联网接入器" */
+	/* 挂"房号门"(一体化房间恒有)。邀请码是同一房间的第二道门,由工坊
+	 * 「生成邀请码」按需开,不在这里挂 */
 	function startHosting() {
-		if (hostState.signaling === "invite") {
-			startInvite();
-		} else {
-			startMqtt();
-		}
+		startMqtt();
 	}
 
-	/* 房号模式(MQTT):主机是 answer 方——订阅 offer 主题,每个客人一条
+	/* 房号门(MQTT):主机是 answer 方——订阅 offer 主题,每个客人一条
 	 * 连接提议就应答一条;同时以 retained 心跳向房号主题声明自己在房 */
 	function startMqtt() {
 		var env = nnk.env;
@@ -220,7 +220,7 @@
 				}
 			}
 		).then(function(session) {
-			if (hostState.signaling !== "mqtt" || hostState.roomCode !== code || hostState.mqttGen !== gen) {
+			if (hostState.roomCode !== code || hostState.mqttGen !== gen) {
 				session.end();   /* 等待期间被换码/取消/重新建房,这次会话作废 */
 				return;
 			}
@@ -232,7 +232,7 @@
 			presence();
 			hostState.presenceTimer = setInterval(presence, 10000);
 		}).catch(function(err) {
-			bridgeApi().emit("error", { message: "房号信令连接失败: " + (err.message || err) + " —— 可改用邀请码方式建房" });
+			bridgeApi().emit("error", { message: "房号信令连接失败: " + (err.message || err) + " —— 可给朋友生成一张邀请码,从另一道门进来" });
 		});
 	}
 
@@ -290,8 +290,8 @@
 		return caps;
 	}
 
-	/* 成员表上报(弹窗②数据源):房主始终在等待队列首位(带人物标识名字),
-	 * capacity=房间真实容量(roomCapacity,工坊据此画空座位)。
+	/* 成员表上报(工坊房间大厅的数据源):房主始终在等待队列首位(带人物标识
+	 * 名字),capacity=房间真实容量(roomCapacity,工坊据此画空座位)。
 	 * 同时转发给停泊中的客人(nnk_members):客人弹窗的等待队列不再是空的,
 	 * 排队的人也能看到自己排第几、前面还有几个空位 */
 	function emitRoomMembers() {
@@ -328,6 +328,92 @@
 		});
 	}
 
+	/* 内核阶段指令(大厅/排队/放行)统一带上房号:客人存下来,断线后就能走
+	 * 房号门自动重回——两道门进来的客人待遇一样,自动恢复不再区分门 */
+	function stageMsg(stage) {
+		return JSON.stringify({ nnk_stage: stage, code: hostState.roomCode });
+	}
+
+	/* 登记一条新客人通道(两道门共用):入册 + 挂统一的下线清理——
+	 * 摘客、停心跳、刷新成员表、让排队的人补位 */
+	function registerBridge(conn, pc) {
+		hostState.bridges.push(conn);
+		conn.onDown(function() {
+			var i = hostState.bridges.indexOf(conn);
+			if (i >= 0) {
+				hostState.bridges.splice(i, 1);
+			}
+			if (pc._nnkPing) {
+				try { pc._nnkPing.stop(); } catch (eP) { /* 忽略 */ }
+			}
+			if (pc._nnkPingCh) {
+				try { pc._nnkPingCh.close(); } catch (eP2) { /* 忽略 */ }
+			}
+			emitRoomMembers();
+			promoteNextQueued();
+		});
+	}
+
+	/* 接客公共流程(房号门与邀请码门完全共用):按房间阶段决定这位客人是停在
+	 * 大厅等载入、排队等空位,还是直接交给引擎——两道门只是"客人怎么找到
+	 * 主机"的差别,进来之后的成员表/容量队列/载入流程全共享 */
+	function handleNewBridge(conn) {
+		var env = nnk.env;
+		/* 房间已散(解散/换房)之后才打通链路的迟到连接:邀请码是外面留着的
+		 * 一段文本,客人可能隔一会儿才用——没有房间就不能把客人塞给引擎
+		 * (引擎的房间没建,init 会被"未就绪拒客"分支拦下)。客套收场:
+		 * 发 closed 让客人端显示「房主已解散房间」,通道关掉由 onDown 摘册 */
+		if (!hostState.active || !hostState.roomCode) {
+			try { conn.send(JSON.stringify({ nnk_stage: "closed" })); } catch (e0) { /* 通道可能已半死 */ }
+			try { conn.close(); } catch (e1) { /* 已关 */ }
+			return;
+		}
+		if (hostState.stage === "lobby") {
+			/* 大厅停车:引擎不接管,内核级 hello/成员表先跑;
+			 * 载入后 lib.init.connection 的 on("message") 会自然接管本槽。
+			 * 房号随指令下发:邀请码门进来的客人也拿得到,断线走房号门回来 */
+			conn.send(stageMsg("lobby"));
+			conn.onmessage = function(data) {
+				try {
+					var msg2 = JSON.parse(data);
+					if (msg2 && msg2.nnk_hello) {
+						var av = String(msg2.nnk_hello.avatar || "");
+						conn._member = {
+							name: String(msg2.nnk_hello.name || "").slice(0, 12) || "客人",
+							avatar: (nnk.env.lib.translate[av] || av)
+						};
+						emitRoomMembers();
+					}
+				} catch (e3) { /* 非内核协议消息忽略 */ }
+			};
+			/* 新人一进来就推一份成员表:客人开弹窗不再先看到 0 人
+			 * (hello 只在他那侧发出后才会到,这中间有空窗) */
+			emitRoomMembers();
+			/* 阶段归位:客人可能正是刚生成邀请码才来的,「等回执码」到此结束 */
+			bridgeApi().setPhase("mqtt_waiting", { roomCode: hostState.roomCode, stage: "lobby" });
+			return;
+		}
+		/* 等待队列门禁:房主占 1 席,客人按模式容量进入,超员排队等空位 */
+		var queueCapacity = roomCapacity();
+		var enteredGuests = hostState.bridges.filter(function(b) {
+			return b._entered;
+		}).length;
+		if (enteredGuests >= queueCapacity - 1) {
+			conn.send(stageMsg("queued"));
+			conn._queued = true;
+			emitRoomMembers();
+			return;
+		}
+		conn.send(stageMsg("loaded"));
+		env.lib.init.connection(conn);
+		conn._entered = true;
+		emitRoomMembers();
+		/* 上报 room_open:工坊据此把「房号就绪…等朋友加入」换成
+		 * 「客人已连接,游戏里点开始游戏」(此前无阶段承载,文案是死的) */
+		bridgeApi().setPhase("room_open", { roomCode: hostState.roomCode, signaling: hostState.signaling });
+		bridgeApi().emit("guest_connected", { guests: enteredGuests + 1 });
+	}
+
 	/* 空位补进:等待房里有人退出后,把排队里的第一个提升进引擎。
 	 * 只在等待房阶段补位(stage=loaded 且引擎在等客):对局中有人掉线,
 	 * 空位交给引擎原生机制(断线重连/掉线转 AI),不把排队客人硬塞进
@@ -348,7 +434,7 @@
 			var b = hostState.bridges[i];
 			if (b._queued) {
 				b._queued = false;
-				b.send(JSON.stringify({ nnk_stage: "loaded" }));
+				b.send(stageMsg("loaded"));
 				env.lib.init.connection(b);
 				b._entered = true;
 				emitRoomMembers();
@@ -378,63 +464,8 @@
 			var channel = e.channel;
 			channel.onopen = function() {
 				var conn = new rtc.HostBridge(channel);
-				conn._pc = pc;
-				hostState.bridges.push(conn);
-				conn.onDown(function() {
-					var i = hostState.bridges.indexOf(conn);
-					if (i >= 0) {
-						hostState.bridges.splice(i, 1);
-					}
-					if (pc._nnkPing) {
-						try { pc._nnkPing.stop(); } catch (eP) { /* 忽略 */ }
-					}
-					if (pc._nnkPingCh) {
-						try { pc._nnkPingCh.close(); } catch (eP2) { /* 忽略 */ }
-					}
-					emitRoomMembers();
-					promoteNextQueued();
-				});
-				if (hostState.stage === "lobby") {
-					/* 大厅停车:引擎不接管,内核级 hello/成员表先跑;
-					 * 载入后 lib.init.connection 的 on("message") 会自然接管本槽 */
-					conn.send(JSON.stringify({ nnk_stage: "lobby" }));
-					conn.onmessage = function(data) {
-						try {
-							var msg2 = JSON.parse(data);
-							if (msg2 && msg2.nnk_hello) {
-								var av = String(msg2.nnk_hello.avatar || "");
-								conn._member = {
-									name: String(msg2.nnk_hello.name || "").slice(0, 12) || "客人",
-									avatar: (nnk.env.lib.translate[av] || av)
-								};
-								emitRoomMembers();
-							}
-						} catch (e3) { /* 非内核协议消息忽略 */ }
-					};
-					/* 新人一进来就推一份成员表:客人开弹窗不再先看到 0 人
-					 * (hello 只在他那侧发出后才会到,这中间有空窗) */
-					emitRoomMembers();
-					return;
-				}
-				/* 等待队列门禁:房主占 1 席,客人按模式容量进入,超员排队等空位 */
-				var queueCapacity = roomCapacity();
-				var enteredGuests = hostState.bridges.filter(function(b) {
-					return b._entered;
-				}).length;
-				if (enteredGuests >= queueCapacity - 1) {
-					conn.send(JSON.stringify({ nnk_stage: "queued" }));
-					conn._queued = true;
-					emitRoomMembers();
-					return;
-				}
-				conn.send(JSON.stringify({ nnk_stage: "loaded" }));
-				env.lib.init.connection(conn);
-				conn._entered = true;
-				emitRoomMembers();
-				/* 上报 room_open:工坊据此把「房号就绪…等朋友加入」换成
-				 * 「客人已连接,游戏里点开始游戏」(此前无阶段承载,文案是死的) */
-				bridgeApi().setPhase("room_open", { roomCode: code, signaling: hostState.signaling });
-				bridgeApi().emit("guest_connected", { guests: enteredGuests + 1 });
+				registerBridge(conn, pc);
+				handleNewBridge(conn);
 			};
 		};
 		pc.onconnectionstatechange = function() {
@@ -442,7 +473,7 @@
 				/* failed 是终态且本侧不做 ICE restart,半死 pc 必须关掉,
 				 * 否则客人每重试一次就漏一个连接对象 */
 				try { pc.close(); } catch (e2) { /* 忽略 */ }
-				bridgeApi().emit("error", { message: "一位客人的直连建立失败(双方网络没打通),需要其重新加入——房号反复失败,主机可改用邀请码方式建房" });
+				bridgeApi().emit("error", { message: "一位客人的直连建立失败(双方网络没打通),需要其重新加入——反复失败的话,给这位朋友生成一张邀请码,让他从另一道门进来" });
 			}
 		};
 		pc.setRemoteDescription(msg.sdp).then(function() {
@@ -486,9 +517,10 @@
 		}
 	}
 
-	/* 关掉所有"停在大厅/排队"的内核级连接(已交给引擎的连接归引擎管,不动):
-	 * 主机取消或另建新房时,停泊中的客人靠 nnk_stage=closed 立即知道房主已散,
-	 * 不用在排队页干等,也不会把旧成员带进下一个房间的成员表 */
+	/* 关掉所有"停在大厅/排队"的内核级连接(已交给引擎的不动它的通道,只从
+	 * 内核的成员表/队列里清出——引擎自己管着那些连接):主机解散或另建新房时,
+	 * 停泊中的客人靠 nnk_stage=closed 立即知道房主已散,不用在排队页干等;
+	 * 全体清空是为了下一张成员表干净——否则旧客人(含已在局的)会挂到新房里 */
 	function closeParkedBridges() {
 		hostState.bridges.forEach(function(b) {
 			if (b._entered) {
@@ -497,19 +529,21 @@
 			try { b.send(JSON.stringify({ nnk_stage: "closed" })); } catch (e) { /* 通道可能已半死 */ }
 			try { b.close(); } catch (e2) { /* 已关 */ }
 		});
-		hostState.bridges = hostState.bridges.filter(function(b) {
-			return b._entered;
-		});
+		hostState.bridges = [];
 	}
 
-	/* 邀请码模式:主机是 offer 方(邀请码→客人回执码→工坊粘贴回执) */
+	/* 邀请码门(按需生成,一客一张):主机是 offer 方(邀请码→客人回执码→工坊粘贴回执)。
+	 * 通道打通后与房号门走同一套接客流程——共用成员表/容量队列/载入流程 */
 	function startInvite() {
-		var env = nnk.env;
-		/* 幂等:上一次邀请还挂着就先关掉(重复建房/换码),防泄漏与误应答 */
+		/* 幂等:上一次邀请还挂着就先关掉(重复换码),防泄漏与误应答 */
 		if (hostState.invitePc) {
 			try { hostState.invitePc.close(); } catch (e) { /* 忽略 */ }
 			hostState.invitePc = null;
 		}
+		/* 代号:连点两次生成时,先点那张码可能还在收 ICE 候选(还没挂上 invitePc),
+		 * 等它落地就把新的盖掉、自己变成没人认领的野连接——收尾时比对代号,
+		 * 过期的直接关掉(与 startMqtt 的 mqttGen 同款) */
+		var gen = hostState.inviteGen = (hostState.inviteGen || 0) + 1;
 		var pc = new RTCPeerConnection(rtc.pcConfig());
 		var settled = false;
 		var channel = pc.createDataChannel("nnk-link", { ordered: true });
@@ -527,36 +561,13 @@
 			}
 			settled = true;
 			/* 这张 pc 已经转为在座客人的承载连接,必须从"待应答"位上摘掉:
-			 * 否则下一次 refreshInvite 会把它 close 掉,等于踢掉已坐下的客人 */
+			 * 否则下一次生成邀请码会把它 close 掉,等于踢掉已坐下的客人 */
 			hostState.invitePc = null;
-			/* 队列门禁与房号模式同款:房满就拒(先发 full 再关,客人端内核 tap
-			 * 认得它,给人话提示),邀请码通道不再绕过人数限制 */
-			var capacity = roomCapacity();
-			var enteredGuests = hostState.bridges.filter(function(b) {
-				return b._entered;
-			}).length;
-			if (enteredGuests >= capacity - 1) {
-				try { channel.send(JSON.stringify({ nnk_stage: "full" })); } catch (e2) { /* 忽略 */ }
-				try { pc.close(); } catch (e3) { /* 忽略 */ }
-				bridgeApi().emit("error", { message: "房间人数已满(" + capacity + " 人),这位客人没能进入——等有人退出,再发一张新邀请码让他重连" });
-				return;
-			}
+			/* 与房号门完全同款:停车场/门禁/进引擎都交给公共流程——
+			 * 房满不再是拒收(full),而是进等待队列,空位自动补进 */
 			var conn = new rtc.HostBridge(channel);
-			conn._pc = pc;
-			hostState.bridges.push(conn);
-			conn.onDown(function() {
-				var i = hostState.bridges.indexOf(conn);
-				if (i >= 0) {
-					hostState.bridges.splice(i, 1);
-				}
-			});
-			/* 与房号模式同款:先发内核放行指令再交给引擎——客人端 tap 收到
-			 * loaded 才接引擎,full/closed 这类内核消息也才有人接 */
-			conn.send(JSON.stringify({ nnk_stage: "loaded" }));
-			env.lib.init.connection(conn);
-			conn._entered = true;
-			bridgeApi().setPhase("room_open", { roomCode: hostState.roomCode, signaling: hostState.signaling });
-			bridgeApi().emit("guest_connected", { guests: hostState.bridges.filter(function(b2) { return b2._entered; }).length });
+			registerBridge(conn, pc);
+			handleNewBridge(conn);
 		};
 		pc.createOffer().then(function(offer) {
 			return pc.setLocalDescription(offer);
@@ -566,6 +577,11 @@
 			if (!hostState.active) {
 				/* 生成邀请码期间被取消:这张码作废,别把已取消的邀请挂回去 */
 				try { pc.close(); } catch (e) { /* 忽略 */ }
+				return;
+			}
+			if (hostState.inviteGen !== gen) {
+				/* 已被更新的那张码取代(连点两次):这张没人认领,关掉防泄漏 */
+				try { pc.close(); } catch (e2) { /* 忽略 */ }
 				return;
 			}
 			hostState.invitePc = pc;
@@ -631,13 +647,14 @@
 				var pending = localStorage.getItem(env.lib.configprefix + "nnk_host_pending");
 				if (pending) {
 					localStorage.removeItem(env.lib.configprefix + "nnk_host_pending");
-					/* 信令方式与阶段都要接力:lobby=回到大厅(引擎停在联机菜单,
-					 * 不建等待房);loaded=直启进引擎等待房间。兼容旧格式(纯串=loaded) */
+					/* 阶段接力:lobby=回到大厅(引擎停在联机菜单,不建等待房);
+					 * loaded=直启进引擎等待房间。兼容旧格式(纯串=loaded) */
 					var pendingStage = "loaded";
 					try {
 						var pendingTask = JSON.parse(pending);
 						if (pendingTask && typeof pendingTask === "object") {
-							hostState.signaling = pendingTask.signaling === "invite" ? "invite" : "mqtt";
+							/* 旧的 signaling:"invite" 标记不再改变建房方式:一体化房间
+							 * 一律先建大厅带走房号门(旧邀请码房没有房号,已并入) */
 							if (pendingTask.stage === "lobby") {
 								pendingStage = "lobby";
 							}
@@ -660,10 +677,8 @@
 						hostState.roomCode = hostState.reuseCode || genRoomCode();
 						hostState.reuseCode = null;
 						env.game.ip = "nnk://" + hostState.roomCode;
-						if (hostState.signaling === "mqtt") {
-							startMqtt();
-							bridgeApi().setPhase("mqtt_waiting", { roomCode: hostState.roomCode });
-						}
+						startMqtt();
+						bridgeApi().setPhase("mqtt_waiting", { roomCode: hostState.roomCode, stage: "lobby" });
 						emitRoomMembers();   /* 恢复后立刻报一份成员表:否则工坊弹窗一直停在「同步中…」(等客人进来才补上) */
 						console.log("[联机助手] 大厅已恢复(房号 " + hostState.roomCode + "),等待载入到游戏");
 					} else {
@@ -714,19 +729,20 @@
 			} catch (e) { /* localStorage 不可用则无接力 */ }
 			/* 打完一把不散房:引擎在联机对局结束后强制 game.reload(结束 15 秒定时器
 			 * 和「重新开始」按钮都走它),软服务器随页面消失,房间即散。包装 reload:
-			 * 对局刚结束(over)且房号模式房间还在时,把同一房号接力过去再重载——
+			 * 对局刚结束(over)且房间还在时,把同一房号接力过去再重载——
 			 * 重载后沿用原房号续建,客人凭断线感知自动重进,谁都不用再输码。
-		 * ★ saveConfig 是异步写库,直接重载会把 mode 的写入丢掉(实测:重载后
-		 *   引擎拿不到直启标记,卡在纯背景页)——等写入回调落地再重载,1.5 秒
-		 *   兜底防写库挂死;directstartmode 故意不写(回大厅不自动进房)。
-		 * 邀请码模式的 SDP 一次性无法复用,仍是重载即散(备用方式不变) */
+			 * ★ saveConfig 是异步写库,直接重载会把 mode 的写入丢掉(实测:重载后
+			 *   引擎拿不到直启标记,卡在纯背景页)——等写入回调落地再重载,1.5 秒
+			 *   兜底防写库挂死;directstartmode 故意不写(回大厅不自动进房)。
+			 * 一体化房间恒有房号(邀请码只是第二道门),所以这条接力对所有房间都成立,
+			 * 客人自动重回也不再分门——旧的「邀请码房间重载即散」限制随一体化消失 */
 		if (!env.game.__nnkReloadPatched) {
 			env.game.__nnkReloadPatched = true;
 			var origReload = env.game.reload;
 			hostState.origReload = origReload;   /* 工坊「载入/重开」复用同一重载 */
 			env.game.reload = function() {
 				try {
-					if (hostState.active && hostState.roomCode && hostState.signaling === "mqtt"
+					if (hostState.active && hostState.roomCode
 						&& env._status.connectMode && env._status.over) {
 						var overMode = env._status.mode || "identity";
 						/* 回大厅:重载后引擎停在联机菜单,stage=lobby,成员重连后
@@ -753,14 +769,13 @@
 		}
 	},
 
-		/* 工坊命令:创建互联网房间。
-		 * mqtt(默认)= 大厅路径:只建信令与房号,主机停在当前界面不重载,
-		 * 选模式后由「载入到游戏」(restart_room)进引擎;
-		 * invite(备用)= 旧路径:邀请码 offer 要求引擎房间先建好,走重载直启。 */
+		/* 工坊命令:创建互联网房间(一体化:建房即开大厅,房号门自动就绪)。
+		 * signalingMode 参数只为兼容旧客户端:传 invite = 建完顺手生成一张邀请码
+		 * (邀请码早已不是独立的建房方式,而是同一房间的第二道门,按需开) */
 		createInternetRoom: function(mode, signalingMode) {
 			var env = nnk.env;
 			mode = String(mode || "identity");
-			hostState.signaling = signalingMode === "invite" ? "invite" : "mqtt";
+			hostState.signaling = "mqtt";
 			if (["identity", "guozhan", "versus", "doudizhu", "single"].indexOf(mode) < 0) {
 				bridgeApi().emit("error", { message: "不支持的模式: " + mode });
 				return;
@@ -771,41 +786,18 @@
 			}
 			if (hostState.active && hostState.roomCode) {
 				/* 房间已存在(弹窗重开/页面刷新):不发新房号,恢复显示。
-				 * 有房号的房间必是 mqtt(邀请码房没有房号)——信令方式钉回去,
-				 * 防止这次传进来的 invite 参数翻转 signaling,害「载入到游戏」误拒 */
-				hostState.signaling = "mqtt";
+				 * 旧客户端的「改用邀请码方式建房」请求在这里补一张邀请码 */
 				bridgeApi().setPhase(hostState.stage === "loaded" ? "room_open" : "mqtt_waiting", { roomCode: hostState.roomCode, signaling: "mqtt", stage: hostState.stage });
 				emitRoomMembers();
-				return;
-			}
-			if (hostState.signaling === "invite") {
-				/* 邀请码备用路径(旧流程):重载直启建引擎房间 */
-				hostState.stage = "loaded";
-				hostState.active = true;
-				hostState.roomMode = mode;   /* 容量门禁按这次选的模式算 */
-				bridgeApi().setPhase("host_booting", { mode: mode });
-				try {
-					localStorage.setItem(env.lib.configprefix + "nnk_host_pending", JSON.stringify({ mode: mode, signaling: "invite", stage: "loaded" }));
-					localStorage.setItem(env.lib.configprefix + "directstart", "true");
-				} catch (e) { /* 忽略 */ }
-				var inviteGone = false;
-				var inviteGo = function() {
-					if (inviteGone) {
-						return;
-					}
-					inviteGone = true;
-					env.game.reload();
-				};
-				env.game.saveConfig("directstartmode", mode, null, inviteGo);
-				env.game.saveConfig("mode", "connect", null, inviteGo);
-				setTimeout(inviteGo, 1500);
+				if (signalingMode === "invite") {
+					startInvite();
+				}
 				return;
 			}
 			/* 单机对局中点创建:直接退出对局进联机界面(房间在重载落地后的大厅里
 			 * 自动建好)——顺带让之后的「载入到游戏」能走原地进房(秒级、不断线)。
 			 * 此前这里只是"大厅先建着",结果载入又被对局守卫拒绝,成了死角。 */
 			if (env.game.players && env.game.players.length && !env._status.over && !env._status.waitingForPlayer && !env.game.online) {
-				hostState.signaling = "mqtt";
 				hostState.stage = "lobby";
 				hostState.active = true;
 				hostState.roomMode = mode;
@@ -837,6 +829,9 @@
 			bridgeApi().setPhase("mqtt_waiting", { roomCode: hostState.roomCode, stage: "lobby" });
 			startMqtt();
 			emitRoomMembers();   /* 新房立刻报一张成员表(工坊弹窗不等第一位客人) */
+			if (signalingMode === "invite") {
+				startInvite();   /* 旧客户端兼容:建完补一张邀请码 */
+			}
 		},
 
 		/* 工坊弹窗换模式:只更新"下一局模式"并广播(不碰引擎、不重载)。
@@ -856,38 +851,37 @@
 			emitRoomMembers();
 		},
 
-		refreshInvite: function() {
+		/* 一个按钮两种用途:kind==="invite" = 按需生成一张邀请码(可多张、一客一张);
+		 * 不带 kind = 换一个房号(轮换房号门) */
+		refreshInvite: function(kind) {
 			var env = nnk.env;
 			if (!hostState.roomCode) {
 				bridgeApi().emit("error", { message: "还没有可用的房间,请先创建互联网房间" });
 				return;
 			}
-			if (hostState.signaling === "mqtt") {
-				/* 房号模式换码:重生成房号并重挂信令(旧房号的心跳随之停止)。
-				 * 大厅阶段不碰引擎随时可换;等待房阶段要求引擎就绪(env_ready) */
-				if (hostState.stage === "loaded" && !env_ready()) {
-					bridgeApi().emit("error", { message: "房间还没就绪,稍等一下再换房号" });
-					return;
-				}
-				cleanupMqtt();
-				hostState.roomCode = genRoomCode();
-				env.game.ip = "nnk://" + hostState.roomCode;
-				bridgeApi().setPhase(hostState.stage === "lobby" ? "mqtt_waiting" : "hosting", { roomCode: hostState.roomCode });
-				startMqtt();
+			if (kind === "invite") {
+				/* 邀请码是同一房间的第二道门:大厅阶段(客人先在厅里等)和载入后
+				 * 都能生成,进来的客人走与房号门同一套容量队列与载入流程 */
+				startInvite();
 				return;
 			}
-			if (!env_ready()) {
-				bridgeApi().emit("error", { message: "还没有可用的房间,请先创建互联网房间" });
+			/* 换房号:重生成房号并重挂信令(旧房号的心跳随之停止)。
+			 * 大厅阶段不碰引擎随时可换;等待房阶段要求引擎就绪(env_ready) */
+			if (hostState.stage === "loaded" && !env_ready()) {
+				bridgeApi().emit("error", { message: "房间还没就绪,稍等一下再换房号" });
 				return;
 			}
-			/* 旧邀请码的关闭在 startInvite 里统一做 */
-			startInvite();
+			cleanupMqtt();
+			hostState.roomCode = genRoomCode();
+			env.game.ip = "nnk://" + hostState.roomCode;
+			bridgeApi().setPhase(hostState.stage === "lobby" ? "mqtt_waiting" : "hosting", { roomCode: hostState.roomCode });
+			startMqtt();
 		},
 
 		acceptAnswer: function(codeText) {
 			var pc = hostState.invitePc;
 			if (!pc) {
-				bridgeApi().emit("error", { message: "没有待应答的邀请,请先创建互联网房间" });
+				bridgeApi().emit("error", { message: "没有待应答的邀请——先点「📨 生成邀请码」把码发给朋友" });
 				return;
 			}
 			/* 一张邀请码只能被应答一次:协商完成后 signalingState 回到 stable,
@@ -906,18 +900,18 @@
 				bridgeApi().emit("error", { message: err.message });
 				return;
 			}
-	pc.setRemoteDescription(data.sdp).then(function() {
-		bridgeApi().setPhase("connecting", { roomCode: hostState.roomCode });
-		/* 码龄预警:邀请码里的 ICE 候选跟着 NAT 端口映射活,映射几十秒到几
-		 * 分钟就过期——实测放 14 分钟的码必失败。粘码时先报个龄,失败了别懵 */
-		var ageMin = hostState.inviteAt ? Math.round((Date.now() - hostState.inviteAt) / 60000) : 0;
-		if (ageMin >= 3) {
-			bridgeApi().emit("info", { message: "这张邀请码已生成 " + ageMin + " 分钟——码放太久,里面的候选地址基本过期了,直连大概率失败;失败后点「换一张邀请码重试」,新码要马上发马上用" });
-		}
-		watchHostConnection(pc);
-	}).catch(function(err) {
-		bridgeApi().emit("error", { message: "回执码无效: " + (err.message || err) });
-	});
+			pc.setRemoteDescription(data.sdp).then(function() {
+				bridgeApi().setPhase("connecting", { roomCode: hostState.roomCode });
+				/* 码龄预警:邀请码里的 ICE 候选跟着 NAT 端口映射活,映射几十秒到几
+				 * 分钟就过期——实测放 14 分钟的码必失败。粘码时先报个龄,失败了别懵 */
+				var ageMin = hostState.inviteAt ? Math.round((Date.now() - hostState.inviteAt) / 60000) : 0;
+				if (ageMin >= 3) {
+					bridgeApi().emit("info", { message: "这张邀请码已生成 " + ageMin + " 分钟——码放太久,里面的候选地址基本过期了,直连大概率失败;失败后点「📨 生成邀请码」换一张,新码要马上发马上用" });
+				}
+				watchHostConnection(pc);
+			}).catch(function(err) {
+				bridgeApi().emit("error", { message: "回执码无效: " + (err.message || err) });
+			});
 		},
 
 		/* 工坊大厅:按所选模式重开一局(原房号不变,客人自动重回)。
@@ -926,8 +920,8 @@
 		 * 否则 → 重载进房(老路径,客人自动跟随)。 */
 		restartRoom: function(mode) {
 			var env = nnk.env;
-			if (!hostState.active || !hostState.roomCode || hostState.signaling !== "mqtt") {
-				bridgeApi().emit("error", { message: "还没有房号模式的房间可以重开" });
+			if (!hostState.active || !hostState.roomCode) {
+				bridgeApi().emit("error", { message: "还没有房间可以重开,先创建 P2P 房间" });
 				return;
 			}
 			mode = String(mode || env._status.mode || "identity");
