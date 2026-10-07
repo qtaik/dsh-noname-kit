@@ -30,6 +30,7 @@ window.__ModuleLoader__.load({
       '.nnk-modal-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}',
       '.nnk-dash{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px;align-items:start}',
       '.nnk-dash .nnk-card{margin-bottom:0}',
+      '.nnk-col{display:flex;flex-direction:column;gap:12px;min-width:0}',
       '.nnk-dash .nnk-log{max-height:280px}',
       '.nnk-dash-full{grid-column:1/-1}',
       '.nnk-fold-head{cursor:pointer;user-select:none;font-size:14px}',
@@ -1232,13 +1233,15 @@ window.__ModuleLoader__.load({
         });
       }
 
-      function renderFoldCard(key, title, content, full) {
+      /* 折叠卡:content 传函数(懒渲染)——折叠状态下不构建内部虚拟节点,
+       * 人物标识卡两千个下拉项不能每 1.5 秒白建一遍 */
+      function renderFoldCard(key, title, contentFn, full) {
         var next = Object.assign({}, folds);
         next[key] = !folds[key];
         return h('div', { className: 'nnk-card' + (full ? ' nnk-dash-full' : '') },
           h('div', { className: 'nnk-fold-head', onClick: function () { setFolds(next) } },
             h('b', null, (folds[key] ? '▾ ' : '▸ ') + title)),
-          folds[key] ? content : null);
+          folds[key] ? contentFn() : null);
       }
 
       function renderSignalingCard() {
@@ -1390,6 +1393,10 @@ window.__ModuleLoader__.load({
                   : null)),
         status.active && kernel && kernel.state === 'ok'
           ? [
+            /* 左右各包一层列容器:网格的行高取整行最高项,主机卡展开邀请码区
+             * 很高时,右栏的动态/体检会跟它裂开大空隙——列内 flex 纵排让每栏
+             * 自己紧密堆叠(实测反馈的空隙病根) */
+            h('div', { key: 'col-host', className: 'nnk-col' },
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '🏠 我要当主机')),
               e('div', 'nnk-hint', '选玩法 → 创建房间 → 把 6 位房号发给朋友,朋友在「我要加入」输房号即可。开局(开始游戏/选将)在游戏里点。建房会自动关闭「禁止不同版本玩家进房」,不同游戏版本的朋友也能进。'),
@@ -1427,13 +1434,6 @@ window.__ModuleLoader__.load({
                   h('button', { className: 'nnk-copy', onClick: function () { sendCmd('accept_answer', { code: answerText }) } }, '🔗 连接'))
                 : null),
             h('div', { className: 'nnk-card' },
-              e('div', null, h('b', null, '📡 动态')),
-              h('div', { className: 'nnk-log' }, evs.length
-                ? evs.slice(-8).reverse().map(function (ev, i) {
-                  return e('div', { key: i, className: 'nnk-break' }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
-                })
-                : e('div', { className: 'nnk-hint' }, '暂无动态——建房/加入/扩展报错都会显示在这里。'))),
-            h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '🔗 我要加入')),
               e('div', 'nnk-hint', '输入房主发给你的 6 位房号,点「加入」;房主应答后自动进房。'),
               h('input', { className: 'nnk-input', value: roomText, maxLength: 6, onChange: function (ev) { setRoomText(ev.target.value.toUpperCase()) }, placeholder: '输入 6 位房号,如 AB2C9X', style: { textTransform: 'uppercase', letterSpacing: '4px', fontSize: '16px' } }),
@@ -1451,17 +1451,27 @@ window.__ModuleLoader__.load({
                       h('button', { className: 'nnk-copy', onClick: function () { copyText((answerEv.data && answerEv.data.code) || '') } }, '📋 复制回执码'))
                     : null)
                 : h('button', { className: 'nnk-copy', onClick: function () { setShowInviteFallback(true) } }, '房号连不上?换邀请码方式(备用)…')),
-            renderManifestCard(evs, hostFlow)]
+            /* 左栏(主机+加入)收口 */
+            ),
+            h('div', { key: 'col-info', className: 'nnk-col' },
+            h('div', { className: 'nnk-card' },
+              e('div', null, h('b', null, '📡 动态')),
+              h('div', { className: 'nnk-log' }, evs.length
+                ? evs.slice(-20).reverse().map(function (ev, i) {
+                  return e('div', { key: i, className: 'nnk-break' }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
+                })
+                : e('div', { className: 'nnk-hint' }, '暂无动态——建房/加入/扩展报错都会显示在这里。'))),
+            renderManifestCard(evs, hostFlow))]
           : null,
-        status.active && kernel && kernel.state === 'ok' ? renderFoldCard('identity', '👤 人物标识(联机昵称+头像)', renderIdentityCard()) : null,
-        status.active && kernel && kernel.state === 'ok' ? renderFoldCard('signaling', '📡 信令服务器(可选)', renderSignalingCard()) : null,
-        renderFoldCard('help', '📖 怎么用(四步)', h('div', {},          e('div', 'nnk-hint',
+        status.active && kernel && kernel.state === 'ok' ? renderFoldCard('identity', '👤 人物标识(联机昵称+头像)', function () { return renderIdentityCard() }) : null,
+        status.active && kernel && kernel.state === 'ok' ? renderFoldCard('signaling', '📡 信令服务器(可选)', function () { return renderSignalingCard() }) : null,
+        renderFoldCard('help', '📖 怎么用(四步)', function () { return h('div', {},          e('div', 'nnk-hint',
             '0.【官方版一次性】进游戏:设置 → 通用(部分版本在「不常用选项」)→ 打开「自动导入扩展」→ 按提示重载。不开它,「扩展」菜单里根本不会出现「联机助手」;装完内核的游戏都要过这一步。\n' +
             '1. 双方或多方都装本插件(dsh plugin --profile web add dsh-noname-kit,桌面版用 --profile desktop)并配好各自的游戏目录;然后各自在本页点「📦 安装内核」→ 进游戏在主菜单「扩展」里给「联机助手」点「启」开启(新扩展默认不启用;列表里没有它就回第 0 步)→ 按游戏提示重载生效。内核没有操作界面,联机操作都在本页,所以每个人都要装插件。\n' +
             '2. 主机:创建房间 → 把 6 位房号发给朋友;朋友:输入房号加入。房号走不通时,主机可改用「邀请码方式建房」(备用)。打完一把点「重新开始」会自动用原房号重开,不用重新发码。\n' +
             '3. 游戏里出现等待房间(房主座位已就位),朋友进房后主机在游戏里点「开始游戏」。\n' +
             '禁将/武将包/卡牌包/人数:游戏内等待房间右上角点「房间设置」打开模式菜单,改完点「启」自动广播到全房。'),
-          e('div', 'nnk-hint', '房号模式经国内可达的公共信令服务器交换连接信息(载荷按房号加密,点对点直连、无需公网 IP);个别网络(如手机热点)打不通时换个网络再试,或改用邀请码兜底。无人大厅在后续版本。')), true),
+          e('div', 'nnk-hint', '房号模式经国内可达的公共信令服务器交换连接信息(载荷按房号加密,点对点直连、无需公网 IP);个别网络(如手机热点)打不通时换个网络再试,或改用邀请码兜底。无人大厅在后续版本。')) }, true),
         note ? e('div', { className: 'nnk-dash-full ' + (note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err') }, note) : null,
         phase === 'invite_ready' && inviteEv && (inviteEv.data && inviteEv.data.code) && invitePopupDismissed !== inviteEv.data.code
           ? renderInviteModal(inviteEv) : null,
