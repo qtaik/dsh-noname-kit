@@ -109,7 +109,7 @@
 			if (guestState.rejoinCode === code) {
 				guestState.rejoinCode = null;
 				bridgeApi().setPhase("idle");
-				bridgeApi().emit("error", { message: "自动重回房间失败——请手动输入房号 " + code + " 重进" });
+				bridgeApi().emit("error", { message: "自动重回房间失败(房主可能已关闭游戏)——请让房主重新建房,或手动输入房号 " + code + " 重试" });
 			}
 			return;
 		}
@@ -500,6 +500,15 @@
 					function(topic, msg) {
 						if (/\/host$/.test(topic)) {
 							session.hostSeen = Date.now();
+							/* 心跳刷新判定:主机活着每 10 秒换一个新时间戳。retained
+							 * 的旧心跳会一直挂在 broker 上(主机强关时不撤),只看
+							 * "有没有心跳"会把死主机当在线——所以要盯"有没有刷新" */
+							if (msg && typeof msg.ts === "number") {
+								if (session.beatTs && msg.ts !== session.beatTs) {
+									session.beatRefreshed = true;
+								}
+								session.beatTs = msg.ts;
+							}
 							if (msg && msg.nnk_loading && !session.loadingSeen) {
 								/* 主机点「载入到游戏」:报个信就行,不整页重载——跟随靠
 								 * 通道断开后的 autoRejoin 重连(轻量;早先这里会重载,
@@ -539,6 +548,17 @@
 					});
 				}).then(function() {
 					bridgeApi().setPhase("waiting_host", { code: code });
+					/* 心跳快判:主机活着每 10 秒刷一次心跳;发完提议后 10 秒内
+					 * 没见刷新=主机强关/掉线(只剩 broker 上的 retained 旧心跳),
+					 * 立刻收会话让自动重回续下一试——不干等 30 秒(实测:死主机
+					 * 时每轮都要耗满 30 秒,重试磨磨蹭蹭) */
+					setTimeout(function() {
+						if (!answered && guestState.session === session && !session.beatRefreshed) {
+							bridgeApi().emit("error", { message: "房主心跳已停止刷新——主机可能已关闭游戏,正在重试…" });
+							bridgeApi().setPhase("idle");
+							resetSession();
+						}
+					}, 10000);
 					setTimeout(function() {
 						if (!answered && guestState.session === session) {
 							bridgeApi().emit("error", { message: "30 秒未收到房主应答(可能已掉线)——重新输入房号再试,或换用邀请码方式" });
