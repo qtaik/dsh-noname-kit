@@ -53,6 +53,8 @@ window.__ModuleLoader__.load({
       '.nnk-copy{border:1px solid var(--dsw-alias-border-l2);border-radius:7px;padding:4px 12px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer;font:inherit;font-size:12px;margin-top:8px;transition:border-color var(--nnk-t)}',
       '.nnk-copy:hover:not(:disabled){border-color:var(--dsw-alias-brand-primary)}',
       '.nnk-copy:disabled{opacity:.45;cursor:default}',
+      '.nnk-copy.nnk-danger{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}',
+      '.nnk-copy.nnk-danger:hover:not(:disabled){border-color:var(--dsw-alias-state-error-primary);filter:brightness(1.15)}',
       '.nnk-badge{display:inline-block;border-radius:6px;padding:1px 8px;font-size:11px;margin-right:8px;border:1px solid var(--dsw-alias-border-l2)}',
       '.nnk-panel{position:fixed;width:380px;max-height:560px;display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.25);z-index:60}',
       '.nnk-panel-head{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);cursor:move;user-select:none}',
@@ -1398,6 +1400,20 @@ window.__ModuleLoader__.load({
           txEv ? e('div', { className: 'nnk-break', style: { marginTop: '6px' } }, onlineEventText(txEv)) : null);
       }
 
+      /* 解散/退出房间(内核 cancel:主机=停信令+通知停泊客人散场,客人=中止
+       * 加入与自动重回)。主机有别的成员在房时先确认一句,防手滑把朋友请出去 */
+      function leaveRoom(asHost) {
+        if (asHost) {
+          var b = roomBrief();
+          if (b.list.length > 1 && !window.confirm('解散房间:在房等待的成员会被请出去,继续吗?')) {
+            return;
+          }
+        }
+        sendCmd('cancel');
+        setNote(asHost ? '🗑 房间已解散' : '🚪 已退出房间');
+        setRoomPopupOpen(false);
+      }
+
       /* 房间速览(主卡按钮与大厅弹窗共用同一套容量口径):成员表 + 当前容量 */
       function roomBrief() {
         var ev0 = onlinePickEvent(evs, 'room_members');
@@ -1477,6 +1493,7 @@ window.__ModuleLoader__.load({
                   e('div', 'nnk-hint', '载入时主机游戏重载一次,成员自动进入;开局/禁将在游戏内点。'))
                 : e('div', 'nnk-hint', '模式与载入由房主操作——他点「载入到游戏」后,你会自动跟着进房。')),
             h('div', { className: 'nnk-modal-actions' },
+              h('button', { className: 'nnk-copy nnk-danger', onClick: function () { leaveRoom(isRoomHost) } }, isRoomHost ? '🗑 解散房间' : '🚪 退出房间'),
               h('button', { className: 'nnk-copy', onClick: function () { setRoomPopupOpen(false) } }, '收起(连接继续保持,可随时再打开)'))));
       }
 
@@ -1537,11 +1554,13 @@ window.__ModuleLoader__.load({
                 : null,
               !bridgeOnline ? e('div', 'nnk-hint', '内核离线(先启动游戏)') : null,
               roomCode && !roomPopupOpen
-                ? h('button', { className: 'nnk-copy', style: { marginTop: '8px' }, onClick: function () { setRoomPopupOpen(true) } }, (function () {
-                  var b = roomBrief();
-                  var seatedN = b.list.filter(function (mm) { return !mm.queued; }).length;
-                  return '🏛 房间大厅(房号 ' + roomCode + ' · ' + seatedN + '/' + b.cap + ' 人)';
-                })())
+                ? h('div', { className: 'nnk-row', style: { marginTop: '8px' } },
+                  h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { setRoomPopupOpen(true) } }, (function () {
+                    var b = roomBrief();
+                    var seatedN = b.list.filter(function (mm) { return !mm.queued; }).length;
+                    return '🏛 房间大厅(房号 ' + roomCode + ' · ' + seatedN + '/' + b.cap + ' 人)';
+                  })()),
+                  h('button', { className: 'nnk-copy nnk-danger', style: { marginTop: '0' }, onClick: function () { leaveRoom(true) } }, '🗑 解散'))
                 : null,
               inviteEv
                 ? h('div', { style: { marginTop: '10px' } },
@@ -1559,11 +1578,13 @@ window.__ModuleLoader__.load({
               h('input', { className: 'nnk-input', value: roomText, maxLength: 6, onChange: function (ev) { setRoomText(ev.target.value.toUpperCase()) }, placeholder: '输入 6 位房号,如 AB2C9X', style: { textTransform: 'uppercase', letterSpacing: '4px', fontSize: '16px' } }),
               h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow || guestFlow, onClick: function () { sendCmd('join_room', { code: roomText }) } }, '🚪 加入房间'),
               (guestFlow || phase === 'connected') && roomCode
-                ? h('button', { className: 'nnk-copy', style: { marginTop: '8px' }, onClick: function () { setRoomPopupOpen(true) } }, (function () {
-                  var b = roomBrief();
-                  var seatedN = b.list.filter(function (mm) { return !mm.queued; }).length;
-                  return '🏛 房间大厅(房号 ' + roomCode + ' · ' + seatedN + '/' + b.cap + ' 人)';
-                })())
+                ? h('div', { className: 'nnk-row', style: { marginTop: '8px' } },
+                  h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { setRoomPopupOpen(true) } }, (function () {
+                    var b = roomBrief();
+                    var seatedN = b.list.filter(function (mm) { return !mm.queued; }).length;
+                    return '🏛 房间大厅(房号 ' + roomCode + ' · ' + seatedN + '/' + b.cap + ' 人)';
+                  })()),
+                  h('button', { className: 'nnk-copy nnk-danger', style: { marginTop: '0' }, onClick: function () { leaveRoom(false) } }, '🚪 退出'))
                 : null,
               showInviteFallback
                 ? h('div', {},

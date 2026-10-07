@@ -28,6 +28,10 @@ const BACKUP_KEEP = 3
 const COMMAND_TTL_MS = 60_000
 /** bridge.snapshot() 里 online 的判定窗口(内核 0.7s 一轮,3 秒没消息即视为离线)。 */
 const ONLINE_WINDOW_MS = 3000
+/* 房间状态宽限:游戏关掉后,最后一拍心跳的状态(房号/成员/阶段)不能永远挂
+ * 在工坊上(实测:关游戏后房间还在)。30 秒=覆盖「载入到游戏」重载期间的心跳
+ * 空窗(游戏页重载→内核重启),超时即视为房间已散,快照不再下发 state/role */
+const ROOM_STATE_GRACE_MS = 30_000
 
 /** 插件包内自带的内核源目录(唯一真源)。 */
 export function bundledKernelDir() {
@@ -266,13 +270,17 @@ export function createBridgeSession({ token, syncSource }) {
     },
     /** 工坊轮询的快照。 */
     snapshot() {
+      const now = Date.now()
+      const stateFresh = Boolean(session.lastSeen) && now - session.lastSeen < ROOM_STATE_GRACE_MS
       return {
-        online: Boolean(session.lastSeen) && Date.now() - session.lastSeen < ONLINE_WINDOW_MS,
+        online: Boolean(session.lastSeen) && now - session.lastSeen < ONLINE_WINDOW_MS,
         lastSeen: session.lastSeen || null,
         kernelVersion: session.kernelVersion,
         bootStage: session.bootStage,
-        role: session.role,
-        state: session.state,
+        /* 角色/房间状态只在心跳还热时下发:游戏关掉后房间随即从工坊消失,
+         * 不会永远挂着最后一拍的房号;cfg 保留(身份回填/离线保存仍可用) */
+        role: stateFresh ? session.role : '',
+        state: stateFresh ? session.state : null,
         cfg: session.cfg,
         events: session.events.slice(-50),
         pending: session.commands.length,
