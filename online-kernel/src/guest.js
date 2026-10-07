@@ -36,6 +36,7 @@
 			if (success) {
 				session.entered = true;   /* 自动重回循环据此区分「真进了」和「还在握手」 */
 				guestState.hostLoadingAt = 0;   /* 已进来,载入跟随之类的话术复位 */
+				try { localStorage.removeItem(env.lib.configprefix + "nnk_guest_reentry"); } catch (eR) { /* 忽略 */ }
 				bridgeApi().setPhase("connected");
 				bridgeApi().emit("session_established");
 			}
@@ -170,16 +171,36 @@
 				return origConnect.call(env.game, ip, callback);
 			};
 			/* 客人侧「重新开始」也走不散房:结算界面主客双方都有该按钮,客人点它
-			 * 走的是引擎裸 reload,会掉回联机菜单要手动输房号——包一层:对局结束
-			 * 且在房号房间里时写接力标记,重载后自动同房号重进(模式本就是 connect,
-			 * localStorage 同步写,无丢写竞速) */
+			 * 走的是引擎裸 reload,会掉回联机菜单要手动输房号——包一层写接力标记。
+			 * ★ 还不能只认「对局结束」:引擎自己在联机中断时也会重载(library
+			 * index.js ws.onclose:联机中一断 ws 就 directstart+game.reload),
+			 * 以前这种重载不登记,客人重载后就静默停在菜单上(实测「进房后秒退」
+			 * 的真身)。改为:只要还握着房间会话(或重试中的房号)就登记,任何
+			 * 来源的重载都能自动重回;带连败保护(2 分钟内自动重回 >3 次就停,
+			 * 防「重载→重进→再断」变死循环,并明说引导手动) */
 			if (!env.game.__nnkGuestReloadPatched) {
 				env.game.__nnkGuestReloadPatched = true;
 				var origGuestReload = env.game.reload;
 				env.game.reload = function() {
 					try {
-						if (guestState.session && guestState.session.code && env._status.over && env._status.connectMode) {
-							localStorage.setItem(env.lib.configprefix + "nnk_guest_pending", JSON.stringify({ kind: "room", code: guestState.session.code }));
+						var rc = (guestState.session && guestState.session.code) || guestState.rejoinCode;
+						if (rc && env._status.connectMode) {
+							var key = env.lib.configprefix + "nnk_guest_reentry";
+							var rec = { n: 0, at: 0 };
+							try { rec = JSON.parse(localStorage.getItem(key)) || rec; } catch (e3) { rec = { n: 0, at: 0 }; }
+							var now = Date.now();
+							if (now - rec.at > 120000) {
+								rec = { n: 0, at: now };
+							}
+							rec.n += 1;
+							try { localStorage.setItem(key, JSON.stringify(rec)); } catch (e4) { /* 忽略 */ }
+							if (rec.n > 3) {
+								try { localStorage.removeItem(env.lib.configprefix + "nnk_guest_pending"); } catch (e5) { /* 忽略 */ }
+								bridgeApi().emit("error", { message: "客人端连续自动重连已多次——先点「退出房间」再重新加入(反复重连通常是本机游戏或网络不稳)" });
+							} else {
+								localStorage.setItem(env.lib.configprefix + "nnk_guest_pending", JSON.stringify({ kind: "room", code: rc }));
+								bridgeApi().emit("info", { message: "游戏触发重载,已登记自动重回(原房号 " + rc + ")…" });
+							}
 						}
 					} catch (e) { /* 忽略 */ }
 					return origGuestReload.apply(this, arguments);
