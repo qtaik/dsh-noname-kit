@@ -977,11 +977,12 @@ window.__ModuleLoader__.load({
       { id: 'doudizhu', name: '斗地主' },
       { id: 'single', name: '单挑' }
     ];
-    /* 模式人数上限兜底(与内核兜底表一致;载入后内核读引擎真实上限并随
-     * room_members 事件的 capacity 字段下发)。必须放模块层:面板组件里
-     * 这条赋值曾写在 `return renderOnlinePanel()` 之后,组件体永远执行不到
-     * ——刚建房、还没有成员事件时弹窗一开就 TypeError(实测事故,已修) */
-    var MODE_MAX = { identity: 8, guozhan: 8, versus: 8, doudizhu: 4, single: 2 };
+    /* 模式人数上限兜底(引擎真值:身份 2~10/国战 2~12/对决 1v1~4v4=2~8/
+     * 斗地主固定 3/单挑 2;内核随 room_members 的 caps 字段上报同值,
+     * 这里只作旧内核兜底)。必须放模块层:面板组件里这条赋值曾写在
+     * `return renderOnlinePanel()` 之后,组件体永远执行不到——刚建房、
+     * 还没有成员事件时弹窗一开就 TypeError(实测事故,已修) */
+    var MODE_MAX = { identity: 10, guozhan: 12, versus: 8, doudizhu: 3, single: 2 };
     /* 流程互斥:同一游戏实例要么在主机流程要么在客人流程,进行中时另一侧禁用 */
     var HOST_PHASES = ['host_booting', 'hosting', 'invite_ready', 'connecting', 'room_open'];
     var GUEST_PHASES = ['guest_booting', 'joining', 'answer_ready', 'entering', 'connected', 'queued'];
@@ -1377,7 +1378,12 @@ window.__ModuleLoader__.load({
 
       /* P2P 房间大厅弹窗:①模式+载入 ②等待队列。客人=只读视角 */
       function renderRoomModal() {
-        var MODE_COUNT = { identity: '2~8 人', guozhan: '2~8 人', versus: '2~8 人', doudizhu: '3~4 人', single: '2 人' };
+        var membersEv = onlinePickEvent(evs, 'room_members');
+        var mData = (membersEv && membersEv.data) || {};
+        /* 各模式人数上限:内核随成员表上报引擎真值(身份 2~10/国战 2~12/
+         * 对决 8/斗地主 3/单挑 2),旧内核没有该字段就用本地同值兜底表 */
+        var modeCaps = (mData.caps && typeof mData.caps === 'object') ? mData.caps : MODE_MAX;
+        var capFor = function (m) { return modeCaps[m] || MODE_MAX[m] || 8; };
         return h('div', { className: 'nnk-modal-mask', onClick: function (ev) { if (ev.target === ev.currentTarget) setRoomPopupOpen(false) } },
           h('div', { className: 'nnk-modal' },
             e('div', 'nnk-modal-title', '🏛 P2P 房间大厅(房号 ' + (roomCode || '…') + ')'),
@@ -1389,19 +1395,21 @@ window.__ModuleLoader__.load({
                   ONLINE_MODES.map(function (m) {
                     return h('label', { key: m.id, className: 'nnk-radio' + (roomMode === m.id ? ' nnk-radio-on' : '') },
                       h('input', { type: 'radio', name: 'nnk-room-mode', checked: roomMode === m.id, onChange: function () { setRoomMode(m.id) } }),
-                      m.name + '(' + (MODE_COUNT[m.id] || '?') + ')');
+                      m.name + '(最多 ' + capFor(m.id) + ' 人)');
                   })),
                 h('button', { className: 'nnk-submit', style: { marginTop: '10px' }, onClick: function () { sendCmd('restart_room', { mode: roomMode }); setNote('🚀 载入中——主机游戏重载一次,成员自动跟随进入'); } }, '🚀 载入到游戏(按所选模式)'))
               : e('div', 'nnk-hint', '① 模式选择与载入由主机操作,你会在下方看到进入状态。'),
             e('div', 'nnk-hint', '载入时主机的游戏会重载一次,成员自动重连进入,无需任何操作。开局/禁将在游戏内进行。'),
             /* 块 2:等待队列(房主在首位;空座位=还能进几人,按「已进入」人数算,
-             * 排队/等待的人不占座——超员的会标「排队」,载入时不会跟进来) */
+             * 排队/等待的人不占座——超员的会标「排队」,载入时不会跟进来)。
+             * 座位数:主机=当前选中模式的上限(点了别的模式立刻变),若选中的
+             * 就是房间当前模式且内核报了真容量(如房间设置改了人数),用真值;
+             * 客人=房间当前模式的真值(客人没有模式选择权) */
             e('div', 'nnk-label', '② 等待队列(只有队列里的人会进入游戏,空座位=还能进几人)'),
             (function () {
-              var membersEv = onlinePickEvent(evs, 'room_members');
-              var mData = (membersEv && membersEv.data) || {};
+              var selMode = isRoomHost ? roomMode : (mData.mode || roomMode);
+              var cap = (mData.mode === selMode && mData.capacity) ? mData.capacity : capFor(selMode);
               var mList = mData.list || [];
-              var cap = mData.capacity || MODE_MAX[roomMode] || 8;
               var enteredCount = mList.filter(function (mm) { return mm.entered; }).length;
               var rows = mList.map(function (mm, i) {
                 var st = mm.entered ? '✅ 已进入游戏房间'

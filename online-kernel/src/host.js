@@ -121,10 +121,11 @@
 		});
 	}
 
-	/* 模式人数上限:优先读引擎的模式配置(lib.mode[模式].config.player_number),
-	 * 读不到用常见上限兜底(与工坊弹窗显示同一张表) */
+	/* 模式人数上限:优先读引擎的模式配置(lib.mode[模式].config.player_number.item,
+	 * 动态 getter——身份 2~10、国战 2~12),读不到用兜底表。
+	 * 兜底表按引擎真值:对决 1v1~4v4=2/4/6/8、斗地主固定 3、单挑 2 */
 	function modeMaxPlayers(mode) {
-		var fallback = { identity: 8, guozhan: 8, versus: 8, doudizhu: 4, single: 2 };
+		var fallback = { identity: 10, guozhan: 12, versus: 8, doudizhu: 3, single: 2 };
 		try {
 			var pn = nnk.env.lib.mode[mode] && nnk.env.lib.mode[mode].config && nnk.env.lib.mode[mode].config.player_number;
 			var nums = (pn && pn.item ? Object.keys(pn.item) : []).map(function(k) {
@@ -136,25 +137,38 @@
 				return Math.max.apply(null, nums);
 			}
 		} catch (e) { /* 忽略 */ }
-		return fallback[mode] || 8;
+		return fallback[mode] || 10;
 	}
 
-	/* 房间真实容量:载入后读引擎房间配置(configOL.player_number——switchMode
-	 * 从模式 connect 配置填入,游戏里房间设置改人数后引擎改的也是它)。
-	 * 比模式上限准:5 人局不该按身份上限 8 放人。大厅阶段房间还没建,
-	 * configOL 可能是上一局的残值,不可信,退回模式上限 */
+	/* 房间真实容量:载入后读引擎房间配置。取值顺序对齐引擎口径——
+	 * 引擎自己的放人自检读 configOL.number(library/index.js「denied number」),
+	 * 显示口径是 player_number || number(ui/create);identity 8 人局改人数后
+	 * 两个键都会跟着变,对决/斗地主/单挑由 waitForPlayer 设 number。
+	 * 大厅阶段房间还没建,configOL 可能是上一局的残值,不可信,退回模式上限 */
 	function roomCapacity() {
 		var env = nnk.env;
 		var mode = hostState.roomMode || "identity";
 		if (hostState.stage === "loaded") {
 			try {
-				var n = parseInt(env.lib.configOL && env.lib.configOL.player_number, 10);
-				if (n > 0 && env.lib.configOL.mode === mode) {
-					return n;
+				if (env.lib.configOL && env.lib.configOL.mode === mode) {
+					var n = parseInt(env.lib.configOL.number, 10) || parseInt(env.lib.configOL.player_number, 10);
+					if (n > 0) {
+						return n;
+					}
 				}
 			} catch (e) { /* 读不到退回模式上限 */ }
 		}
 		return modeMaxPlayers(mode);
+	}
+
+	/* 各模式人数上限快照(随成员表上报工坊):工坊弹窗的座位数/模式标签用它,
+	 * 点其他模式也能立刻显示该模式能装几人 */
+	function modeCaps() {
+		var caps = {};
+		["identity", "guozhan", "versus", "doudizhu", "single"].forEach(function(m) {
+			caps[m] = modeMaxPlayers(m);
+		});
+		return caps;
 	}
 
 	/* 成员表上报(弹窗②数据源):房主始终在等待队列首位(带人物标识名字),
@@ -181,13 +195,16 @@
 			});
 		});
 		var cap = roomCapacity();
-		bridgeApi().emit("room_members", {
+		var payload = {
 			list: list,
-			capacity: cap
-		});
+			capacity: cap,
+			mode: hostState.roomMode || null,   /* 房间当前模式(工坊判「选中模式=房间模式」用真容量) */
+			caps: modeCaps()                    /* 各模式人数上限(座位数/标签数据源) */
+		};
+		bridgeApi().emit("room_members", payload);
 		hostState.bridges.forEach(function(b) {
 			if (!b._entered) {
-				try { b.send(JSON.stringify({ nnk_members: { list: list, capacity: cap } })); } catch (e2) { /* 通道可能已半死 */ }
+				try { b.send(JSON.stringify({ nnk_members: payload })); } catch (e2) { /* 通道可能已半死 */ }
 			}
 		});
 	}
