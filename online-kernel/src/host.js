@@ -800,11 +800,33 @@
 				setTimeout(inviteGo, 1500);
 				return;
 			}
-			/* 大厅路径:瞬间完成,不重载不进游戏 */
-			if (env.game.players && env.game.players.length && !env._status.over && !env._status.waitingForPlayer) {
-				bridgeApi().emit("info", { message: "检测到对局未结束:大厅先建着,「载入到游戏」时会自动退出对局" });
+			/* 单机对局中点创建:直接退出对局进联机界面(房间在重载落地后的大厅里
+			 * 自动建好)——顺带让之后的「载入到游戏」能走原地进房(秒级、不断线)。
+			 * 此前这里只是"大厅先建着",结果载入又被对局守卫拒绝,成了死角。 */
+			if (env.game.players && env.game.players.length && !env._status.over && !env._status.waitingForPlayer && !env.game.online) {
+				hostState.signaling = "mqtt";
+				hostState.stage = "lobby";
+				hostState.active = true;
+				hostState.roomMode = mode;
+				bridgeApi().setPhase("host_booting", { mode: mode });
+				bridgeApi().emit("info", { message: "正在退出当前对局并进入联机界面…(单机进度不会保留;房间落地后自动建好)" });
+				try {
+					localStorage.setItem(env.lib.configprefix + "nnk_host_pending", JSON.stringify({ mode: mode, signaling: "mqtt", stage: "lobby" }));
+				} catch (e) { /* 忽略 */ }
+				var exitGone = false;
+				var exitGo = function() {
+					if (exitGone) {
+						return;
+					}
+					exitGone = true;
+					env.game.reload();
+				};
+				env.game.saveConfig("mode", "connect", null, exitGo);
+				setTimeout(exitGo, 1500);
+				return;
 			}
-			/* 上一次会话停泊的客人(大厅/排队)不带走:通知散场再开新房 */
+			/* 大厅路径:瞬间完成,不重载不进游戏。
+			 * 上一次会话停泊的客人(大厅/排队)不带走:通知散场再开新房 */
 			closeParkedBridges();
 			hostState.stage = "lobby";
 			hostState.active = true;
@@ -913,8 +935,13 @@
 				return;
 			}
 			if (env.game.players && env.game.players.length && !env._status.over && !env._status.waitingForPlayer) {
-				bridgeApi().emit("error", { message: "对局还没打完,结束后再重开" });
-				return;
+				if (env.game.online) {
+					bridgeApi().emit("error", { message: "对局还没打完,结束后再重开" });
+					return;
+				}
+				/* 单机对局中:载入即退出对局(重载落地时单机局面自然丢弃,
+				 * 与创建房间的提示口径一致);联机对局仍拒绝 */
+				bridgeApi().emit("info", { message: "正在退出当前对局并载入…(单机进度不会保留)" });
 			}
 			/* 原地快路径:引擎正停在联机菜单(connect 模式、无房无局)——复刻
 			 * 原生联机菜单的"选择模式→开始"(startMenu.js):switchMode 之后
