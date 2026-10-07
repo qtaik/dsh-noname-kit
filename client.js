@@ -1907,7 +1907,7 @@ window.__ModuleLoader__.load({
             h('button', { className: 'nnk-tab' + (active === 'new' ? ' nnk-active' : ''), onClick: function () { setActive('new') } }, '🛠 任务'),
             h('button', { className: 'nnk-tab' + (active === 'tasklist' ? ' nnk-active' : ''), onClick: function () { setActive('tasklist') } }, '📋 任务列表'),
             h('button', { className: 'nnk-tab' + (active === 'history' ? ' nnk-active' : ''), onClick: function () { setActive('history') } }, '📜 历史'),
-            h('button', { className: 'nnk-tab' + (active === 'online' ? ' nnk-active' : ''), onClick: function () { setActive('online') } }, '🌐 联机(测试)'),
+            h('button', { className: 'nnk-tab' + (active === 'online' ? ' nnk-active' : ''), onClick: function () { setActive('online') } }, '🌐 联机'),
             h('button', { className: 'nnk-tab' + (active === 'settings' ? ' nnk-active' : ''), onClick: function () { setActive('settings') } }, '⚙ 设置')
           ),
           phase === false && active === 'new' ? e('div', 'nnk-err', '⚠️ 还没配置游戏目录——到「⚙ 设置」页填一下就能自动写入;暂时不配也行,把写入方式设为「手动复制」。') : null,
