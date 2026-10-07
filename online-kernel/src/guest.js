@@ -9,7 +9,8 @@
 	var signaling;
 
 	var guestState = nnk.state.guest = {
-		session: null   /* { pc, fake, autoConnect } */
+		session: null,   /* { pc, fake, autoConnect } */
+		rejoinGen: 0     /* 自动重回链代号:每次新链/取消都递增,旧链的迟到定时器作废 */
 	};
 
 	function bridgeApi() {
@@ -17,11 +18,14 @@
 	}
 
 	/* 把已就绪的 FakeWebSocket 接进引擎(复刻 game.connect 的接线部分,
-	 * 唯一差别是 game.sandbox 置空:nnk 通道没有原生沙盒键,好友局信任主机) */
-	function connectNow() {
+	 * 唯一差别是 game.sandbox 置空:nnk 通道没有原生沙盒键,好友局信任主机)。
+	 * force=自动重回:客人进过房间后 game.online 恒真(引擎 init 置的),
+	 * 不带 force 会被下面这道守卫拦死,重连永远进不来(实测 bug)——绕过后
+	 * 由引擎原生重连协议接管(握手带旧 id,主机识别为老玩家回发 reinit) */
+	function connectNow(force) {
 		var env = nnk.env;
 		var session = guestState.session;
-		if (!session || !session.fake || env.game.online) {
+		if (!session || !session.fake || (env.game.online && !force)) {
 			return;
 		}
 		if (nnk.modules.compat) {
@@ -53,6 +57,7 @@
 		if (fake.isOpen()) {
 			fake.onopen();
 		}
+		session.parked = true;   /* 已交给引擎:自动重回循环到此算落点,不再重试 */
 		bridgeApi().setPhase("entering");
 		bridgeApi().emit("entering_room");
 		/* 包清单上报房主体检(消息走对局连接,房主内核已登记处理器) */
@@ -81,6 +86,9 @@
 	function autoRejoin(code, attempts, inFlight) {
 		var env = nnk.env;
 		guestState.rejoinCode = code;
+		/* 链代号:连续两次断开会各起一条重试链,旧链的迟到定时器必须作废
+		 * ——否则两条链并发重连,互相 resetSession 抢连接(实测隐患) */
+		var gen = guestState.rejoinGen = (guestState.rejoinGen || 0) + 1;
 		if (guestState.rejoinCode !== code || attempts <= 0 || !env._status.connectMode) {
 			if (guestState.rejoinCode === code) {
 				guestState.rejoinCode = null;
@@ -94,15 +102,15 @@
 			 * 以为房主崩了;其他场景(打完一把重组/掉线)照旧 */
 			var hostLoading = Date.now() - (guestState.hostLoadingAt || 0) < 60000;
 			bridgeApi().emit("info", { message: (hostLoading ? "主机正在载入游戏,自动跟随重连 " : "房主正在重组房间,自动重回 ") + code + "(第 " + (9 - attempts) + " 次尝试)…" });
-			api.joinByRoomCode(code);
+			api.joinByRoomCode(code, true, true);   /* rejoin 模式:绕过「联机中不能加入」守卫 */
 		}
 		setTimeout(function() {
-			if (guestState.rejoinCode !== code) {
-				return;   /* 用户已取消 */
+			if (guestState.rejoinCode !== code || guestState.rejoinGen !== gen) {
+				return;   /* 用户已取消 / 已被更新的重试链取代 */
 			}
-			if (guestState.session && guestState.session.entered) {
+			if (guestState.session && (guestState.session.entered || guestState.session.parked)) {
 				guestState.rejoinCode = null;
-				return;   /* 已进入房间,循环完成 */
+				return;   /* 已进入房间 / 已停回大厅,循环完成 */
 			}
 			autoRejoin(code, attempts - (guestState.session ? 0 : 1), !!guestState.session);
 		}, 4000);
@@ -318,19 +326,22 @@
 			});
 		},
 
-		/* 房号模式(客人=offer 方):输房号 → 经 MQTT 发连接提议,等房主应答 */
-		joinByRoomCode: function(codeText, fromResume) {
+		/* 房号模式(客人=offer 方):输房号 → 经 MQTT 发连接提议,等房主应答。
+		 * rejoin=自动重回专用:客人进过房间后 game.online/waitingForPlayer 恒为真,
+		 * 这两道"防加入别的房间"的守卫会把重回自己房间也拦死(实测 bug),
+		 * 整个跳过——重连交给引擎原生协议(旧 id 握手 → 主机回 reinit) */
+		joinByRoomCode: function(codeText, fromResume, rejoin) {
 			var env = nnk.env;
 			if (!fromResume && !env._status.connectMode) {
 				ensureConnectBoot({ kind: "room", code: String(codeText || "") });
 				return;
 			}
 			resetSession();
-			if (env.game.online) {
+			if (!rejoin && env.game.online) {
 				bridgeApi().emit("error", { message: "游戏正在联机中,请先退出当前对局" });
 				return;
 			}
-			if (env._status.waitingForPlayer) {
+			if (!rejoin && env._status.waitingForPlayer) {
 				bridgeApi().emit("error", { message: "本游戏正在建房等待中,不能同时加入其他房间" });
 				return;
 			}
@@ -341,7 +352,7 @@
 			}
 			var pc = new RTCPeerConnection(rtc.pcConfig());
 			var guestId = signaling.randomId();
-			var session = { pc: pc, autoConnect: true, code: code };
+			var session = { pc: pc, autoConnect: true, code: code, rejoin: !!rejoin };
 			guestState.session = session;
 			bridgeApi().setPhase("joining", { code: code });
 			var channel = pc.createDataChannel("nnk-link", { ordered: true });
@@ -352,22 +363,24 @@
 				/* 大厅停车:先不接引擎,等主机的 stage 指令——loaded=进引擎,
 				 * lobby=停车并报身份(hello)。tap 先收内核协议,进引擎时被
 				 * connectNow 换成引擎 handler,暂存的引擎消息由 replay 回放 */
-				fake.onmessage = function(ev) {
-					try {
-						var msg = JSON.parse(ev.data);
-						if (msg && msg.nnk_stage === "loaded" && session.autoConnect) {
-							connectNow();
-						} else if (msg && msg.nnk_stage === "queued") {
-							bridgeApi().setPhase("queued");
-						} else if (msg && msg.nnk_stage === "lobby") {
-							/* 停车在大厅:必须报阶段——此前只发 hello 不报阶段,
-							 * 客人工坊一直停在「等房主应答」,看着像没进房(实测反馈) */
-							bridgeApi().setPhase("lobby_waiting", { code: code });
-							fake.send(JSON.stringify({ nnk_hello: {
-								name: nnk.env.get.connectNickname(),
-								avatar: nnk.env.lib.config.connect_avatar || ""
-							} }));
-						} else if (msg && msg.nnk_stage === "closed") {
+					fake.onmessage = function(ev) {
+						try {
+							var msg = JSON.parse(ev.data);
+							if (msg && msg.nnk_stage === "loaded" && session.autoConnect) {
+								connectNow(session.rejoin);
+							} else if (msg && msg.nnk_stage === "queued") {
+								session.parked = true;   /* 排队也是落点,重试循环到此收 */
+								bridgeApi().setPhase("queued");
+							} else if (msg && msg.nnk_stage === "lobby") {
+								/* 停车在大厅:必须报阶段——此前只发 hello 不报阶段,
+								 * 客人工坊一直停在「等房主应答」,看着像没进房(实测反馈) */
+								session.parked = true;   /* 落点:自动重回循环不必再重试 */
+								bridgeApi().setPhase("lobby_waiting", { code: code });
+								fake.send(JSON.stringify({ nnk_hello: {
+									name: nnk.env.get.connectNickname(),
+									avatar: nnk.env.lib.config.connect_avatar || ""
+								} }));
+							} else if (msg && msg.nnk_stage === "closed") {
 							/* 房主解散房间(工坊取消):立即散场,不自动重回。
 							 * resetSession 后随后的通道断开事件变成空操作(会话已不在) */
 							guestState.rejoinCode = null;
@@ -382,7 +395,7 @@
 							/* 引擎消息(数组)直达=对端旧内核没发放行指令——当作
 							 * 放行(混装不吊死);大厅停车期主机引擎不发包,无此路径 */
 							fake._buffer.push(ev.data);
-							connectNow();
+							connectNow(session.rejoin);
 						}
 					} catch (e2) {
 						/* 非 JSON 消息:暂存回放,防丢 */
@@ -484,6 +497,7 @@
 
 		cancelJoin: function() {
 			guestState.rejoinCode = null;   /* 停掉还在跑的自动重进循环 */
+			guestState.rejoinGen = (guestState.rejoinGen || 0) + 1;   /* 迟到定时器一并作废 */
 			resetSession();
 			/* 重载尚未落地就取消:把待续跑标记一并清掉,落地后不再自动加入 */
 			try {
