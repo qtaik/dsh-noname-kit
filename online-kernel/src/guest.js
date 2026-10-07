@@ -52,7 +52,23 @@
 		var fake = session.fake;
 		env.game.ws = fake;
 		fake.onopen = env.lib.element.ws.onopen;
-		fake.onmessage = env.lib.element.ws.onmessage;
+		/* 进引擎之后通道里仍会来主机转发的小量内核消息(成员表 nnk_members):
+		 * 在这里嗅探出来转给工坊——不这么接,客人弹窗会在进房那一刻定格,
+		 * 连自己都显示「等待载入」(实测报障);其余消息原样交给引擎
+		 * (引擎对非数组消息只会打 invalid message,所以内核消息必须自己消化) */
+		var engineOnMessage = env.lib.element.ws.onmessage;
+		fake.onmessage = function(ev) {
+			if (ev && typeof ev.data === "string" && ev.data.indexOf("nnk_members") >= 0) {
+				try {
+					var m = JSON.parse(ev.data);
+					if (m && m.nnk_members) {
+						bridgeApi().emit("room_members", m.nnk_members);
+						return;
+					}
+				} catch (eK) { /* 不是内核消息:交给引擎 */ }
+			}
+			return engineOnMessage.call(this, ev);
+		};
 		/* 会话期内连接出错:内核自己会接管恢复(自动重回 / 引擎重载+自动重回),
 		 * 引擎原生的 alert(「连接失败」)是阻塞弹窗——不点它页面就冻着,会拖住
 		 * 恢复流程,也和工坊动态里的自助提示重复。房间会话里统一吞掉,其余照旧 */

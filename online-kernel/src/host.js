@@ -292,8 +292,9 @@
 
 	/* 成员表上报(工坊房间大厅的数据源):房主始终在等待队列首位(带人物标识
 	 * 名字),capacity=房间真实容量(roomCapacity,工坊据此画空座位)。
-	 * 同时转发给停泊中的客人(nnk_members):客人弹窗的等待队列不再是空的,
-	 * 排队的人也能看到自己排第几、前面还有几个空位 */
+	 * 同时转发给每个客人(nnk_members):停泊中的客人靠内核 tap 接,已进引擎的
+	 * 客人靠自己的内核在通道里嗅探同一条消息——两种门、进没进引擎都推,
+	 * 客人弹窗才不会在进房那一刻定格(实测:两边都显示「等待载入」) */
 	function emitRoomMembers() {
 		var list = [];
 		try {
@@ -322,9 +323,7 @@
 		};
 		bridgeApi().emit("room_members", payload);
 		hostState.bridges.forEach(function(b) {
-			if (!b._entered) {
-				try { b.send(JSON.stringify({ nnk_members: payload })); } catch (e2) { /* 通道可能已半死 */ }
-			}
+			try { b.send(JSON.stringify({ nnk_members: payload })); } catch (e2) { /* 通道可能已半死 */ }
 		});
 	}
 
