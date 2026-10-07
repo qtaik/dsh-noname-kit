@@ -1303,6 +1303,16 @@ window.__ModuleLoader__.load({
         var missPacks = (d.packs && d.packs.missing) || [];
         /* P2P 连接识别 v1:身份随清单交换,主机看客人、客人看房主 */
         var peer = hostFlow ? (d.guestIdentity || null) : (d.hostIdentity || null);
+        /* 补传完成的从缺失列表摘出来:体检快照是进房时的,传完不刷新,
+         * 不摘的话传完了还挂着「补传」按钮,看着像白传(实测反馈) */
+        var transferred = {};
+        evs.forEach(function (ev) {
+          if (ev.type === 'transfer_done' && ev.data && ev.data.name) {
+            transferred[ev.data.name] = true;
+          }
+        });
+        var stillMissing = missing.filter(function (n) { return !transferred[n]; });
+        var doneList = missing.filter(function (n) { return transferred[n]; });
         var txEv = null;
         for (var i = evs.length - 1; i >= 0; i--) {
           if (evs[i].type === 'transfer_begin' || evs[i].type === 'transfer_progress' || evs[i].type === 'transfer_done' || evs[i].type === 'transfer_failed') {
@@ -1316,17 +1326,18 @@ window.__ModuleLoader__.load({
             ? '⚠️ 本机无法定位游戏目录,扩展分类已跳过(全部扩展会参与联机加载)。'
             : '联机默认只加载带武将/卡牌包的内容扩展,美化类不参与。'),
           peer && peer.name ? e('div', 'nnk-ok', '👤 对方(' + (hostFlow ? '客人' : '房主') + '):「' + peer.name + '」' + (peer.avatar ? '(头像:' + peer.avatar + ')' : '')) : null,
-          missing.length
+          stillMissing.length
             ? h('div', {},
               e('div', 'nnk-hint', hostFlow
                 ? '客人缺少以下已启用扩展,点「补传」把本机文件传过去(只补传已启用的;传完客人在游戏里重开一次生效):'
                 : '你这边缺少以下扩展,请房主点「补传」传给你(传完重开游戏生效):'),
-              missing.map(function (name) {
+              stillMissing.map(function (name) {
                 return h('div', { key: name, style: { marginTop: '6px' } },
                   h('span', null, name + ' '),
                   hostFlow ? h('button', { className: 'nnk-copy', onClick: function () { sendCmd('transfer_pack', { name: name }) } }, '📦 补传') : null);
               }))
             : e('div', 'nnk-ok', '✅ 双方扩展一致,不需要补传。'),
+          doneList.length ? e('div', 'nnk-ok', '✅ 已补传完成(客人重启游戏后自动生效,届时列表自动清零):' + doneList.join('、')) : null,
           missPacks.length ? e('div', 'nnk-hint', '客人少的武将包(都在上面的扩展里,补传扩展即可):' + missPacks.join('、')) : null,
           extra.length ? e('div', 'nnk-hint', '对方多出的扩展(不影响联机):' + extra.join('、')) : null,
           e('label', { style: { display: 'block', marginTop: '8px' } },

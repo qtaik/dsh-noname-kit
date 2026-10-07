@@ -61,11 +61,13 @@
 	var txSeq = 0;
 	var txQueue = [];
 	var txBusy = false;
+	var txCurrent = null;   /* 正在传的名字:防同名牌重复入队重复传 */
 
 	function startTransfer(name) {
 		var list = Array.isArray(name) ? name : [name];
 		for (var i = 0; i < list.length; i++) {
-			if (txQueue.indexOf(list[i]) < 0) {
+			/* 正在传的同名扩展不再排队(手动按钮连点/自动+手动撞车防重复传) */
+			if (list[i] !== txCurrent && txQueue.indexOf(list[i]) < 0) {
 				txQueue.push(list[i]);
 			}
 		}
@@ -81,8 +83,10 @@
 			return;
 		}
 		txBusy = true;
+		txCurrent = next;
 		startOne(next, function() {
 			txBusy = false;
+			txCurrent = null;
 			pumpQueue();
 		});
 	}
@@ -269,6 +273,11 @@
 				if (!rx || !msg || msg.id !== rx.id) {
 					return;
 				}
+				/* 收尾先补一条 100%:进度判定只按 20% 步进,最后一段可能停在 80% */
+				if (rx.reported < 100) {
+					rx.reported = 100;
+					bridgeApi().emit("transfer_progress", { name: rx.name, pct: 100, side: "guest" });
+				}
 				flushFile();
 				bridgeApi().emit("transfer_done", { name: rx.name, side: "guest" });
 				console.log("[联机助手] 补包接收完成:「" + rx.name + "」,重启游戏后重新加入");
@@ -326,8 +335,9 @@
 			return;
 		}
 		var pct = Math.min(100, Math.round(rx.doneBytes / rx.total * 100));
-		/* 每 20% 报一次,别刷屏 */
-		if (pct >= rx.reported + 20 || pct === 100) {
+		/* 每 20% 报一次,别刷屏;100% 由 tx_done 收尾统一补发(这里的相等判定
+		 * 若不去掉,重复送达的尾块会把 100% 刷好几遍——实测 4 连发) */
+		if (pct >= rx.reported + 20) {
 			rx.reported = pct;
 			bridgeApi().emit("transfer_progress", { name: rx.name, pct: pct, side: "guest" });
 			try {
