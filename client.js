@@ -72,7 +72,25 @@ window.__ModuleLoader__.load({
       '.nnk-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}',
       '.nnk-log{border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-2);padding:6px 10px;font-size:12px;max-height:130px;overflow:auto;color:var(--dsw-alias-label-secondary);line-height:1.6}',
       '.nnk-phaseline{font-size:13px;margin-top:8px}',
-      '.nnk-break{overflow-wrap:anywhere;word-break:break-all}'
+      '.nnk-break{overflow-wrap:anywhere;word-break:break-all}',
+      /* 房间大厅弹窗:房号牌 + 座位网格 */
+      '.nnk-rm-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}',
+      '.nnk-rm-head .nnk-badge{margin-right:0}',
+      '.nnk-rm-code{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--nnk-rs);background:var(--dsw-alias-bg-layer-2)}',
+      '.nnk-rm-code .nnk-rm-codelabel{font-size:12px;color:var(--dsw-alias-label-secondary)}',
+      '.nnk-rm-code .nnk-rm-codeval{font-family:Consolas,monospace;font-size:22px;font-weight:700;letter-spacing:3px;color:var(--dsw-alias-label-primary);user-select:all}',
+      '.nnk-rm-code .nnk-copy{margin-top:0}',
+      '.nnk-rm-seats{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;margin-top:8px}',
+      '.nnk-seat{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--nnk-rs);background:var(--dsw-alias-bg-layer-2);min-width:0;text-align:center}',
+      '.nnk-seat-avatar{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:600;color:#fff;flex:none}',
+      '.nnk-seat-name{font-size:12px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary)}',
+      '.nnk-seat-state{font-size:11px;color:var(--dsw-alias-label-secondary)}',
+      '.nnk-seat-host .nnk-seat-avatar{box-shadow:0 0 0 2px var(--dsw-alias-brand-primary)}',
+      '.nnk-seat-empty{border-style:dashed;background:transparent;opacity:.65}',
+      '.nnk-seat-empty .nnk-seat-avatar{background:transparent!important;font-size:20px}',
+      '.nnk-seat-queued{border-style:dashed}',
+      '.nnk-rm-ops{margin-top:12px;padding-top:4px;border-top:1px solid var(--dsw-alias-border-l2)}',
+      '.nnk-rm-ops .nnk-submit{width:100%;margin-top:10px}'
     ].join('\n');
     if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css="dsh-noname-kit/ui"]') === null) {
       var tag = document.createElement('style');
@@ -984,6 +1002,8 @@ window.__ModuleLoader__.load({
      * 之后,组件体永远执行不到——刚建房、还没有成员事件时弹窗一开就
      * TypeError(实测事故,已修) */
     var MODE_MAX = { identity: 8, guozhan: 8, versus: 8, doudizhu: 3, single: 2 };
+    /* 座位头像色板(名字首字色块):中饱和色,明暗主题下都清楚 */
+    var SEAT_COLORS = ['#5b8def', '#e2725b', '#67a37c', '#c9a227', '#9b6bd3', '#4aa3a3', '#d2659b', '#7a8b99'];
     /* 流程互斥:同一游戏实例要么在主机流程要么在客人流程,进行中时另一侧禁用 */
     var HOST_PHASES = ['host_booting', 'hosting', 'invite_ready', 'connecting', 'room_open'];
     var GUEST_PHASES = ['guest_booting', 'joining', 'answer_ready', 'entering', 'connected', 'queued', 'lobby_waiting'];
@@ -1378,52 +1398,84 @@ window.__ModuleLoader__.load({
           txEv ? e('div', { className: 'nnk-break', style: { marginTop: '6px' } }, onlineEventText(txEv)) : null);
       }
 
-      /* P2P 房间大厅弹窗:①模式+载入 ②等待队列。客人=只读视角 */
+      /* 房间速览(主卡按钮与大厅弹窗共用同一套容量口径):成员表 + 当前容量 */
+      function roomBrief() {
+        var ev0 = onlinePickEvent(evs, 'room_members');
+        var d = (ev0 && ev0.data) || {};
+        var list = d.list || [];
+        var caps = (d.caps && typeof d.caps === 'object') ? d.caps : MODE_MAX;
+        /* 座位数:主机=当前选中模式的上限(点别的模式立刻变),选中的就是房间
+         * 当前模式且内核报了真容量(如房间设置改了人数)时用真值;客人=房间真值 */
+        var sel = isRoomHost ? roomMode : (d.mode || roomMode);
+        var cap = (d.mode === sel && d.capacity) ? d.capacity : (caps[sel] || MODE_MAX[sel] || 8);
+        return { data: d, list: list, caps: caps, cap: cap };
+      }
+
+      /* P2P 房间大厅弹窗:房号牌 → 座位网格 → 操作区。客人=只读视角。
+       * 头像=名字首字色块(按名字哈希取色,同一个人两边颜色一致,零依赖)。
+       * 注意:这两个必须是函数声明——组件体在 return 之后不再执行,var 赋值
+       * 会静默变成 undefined(MODE_MAX 同款坑,已踩过) */
+      function seatColor(name) {
+        var h2 = 0;
+        for (var i = 0; i < name.length; i++) { h2 = (h2 * 31 + name.charCodeAt(i)) >>> 0; }
+        return SEAT_COLORS[h2 % SEAT_COLORS.length];
+      }
+      function seatAvatar(name) {
+        return h('div', { className: 'nnk-seat-avatar', style: { background: seatColor(name) } }, (name || '?').slice(0, 1));
+      }
       function renderRoomModal() {
-        var membersEv = onlinePickEvent(evs, 'room_members');
-        var mData = (membersEv && membersEv.data) || {};
-        /* 各模式人数上限:内核随成员表上报引擎真值(身份 2~10/国战 2~12/
-         * 对决 8/斗地主 3/单挑 2),旧内核没有该字段就用本地同值兜底表 */
-        var modeCaps = (mData.caps && typeof mData.caps === 'object') ? mData.caps : MODE_MAX;
-        var capFor = function (m) { return modeCaps[m] || MODE_MAX[m] || 8; };
+        var brief = roomBrief();
+        var mData = brief.data;
+        var cap = brief.cap;
+        var capFor = function (m) { return brief.caps[m] || MODE_MAX[m] || 8; };
+        /* 成员分席:排队的人不占容量席位,排在成员后面;空位=容量-已占席人数 */
+        var mList = mData.list || [];
+        var seated = mList.filter(function (mm) { return !mm.queued; });
+        var queuedList = mList.filter(function (mm) { return mm.queued; });
+        var empties = Math.max(0, cap - seated.length);
+        var hostEntered = mList.some(function (mm) { return mm.role === 'host' && mm.entered; });
+        var seats = seated.map(function (mm, i) {
+          var isHost = mm.role === 'host';
+          return h('div', { key: 'm' + i, className: 'nnk-seat' + (isHost ? ' nnk-seat-host' : '') },
+            seatAvatar(mm.name),
+            h('div', { className: 'nnk-seat-name', title: mm.name }, (isHost ? '👑 ' : '') + mm.name),
+            e('div', 'nnk-seat-state', mm.entered ? '✅ 已进入' : '⏳ 等待载入'));
+        }).concat(queuedList.map(function (mm, i) {
+          return h('div', { key: 'q' + i, className: 'nnk-seat nnk-seat-queued' },
+            seatAvatar(mm.name),
+            h('div', { className: 'nnk-seat-name', title: mm.name }, mm.name),
+            e('div', 'nnk-seat-state', '🚏 排队中'));
+        })).concat(Array.apply(null, Array(empties)).map(function (_, i) {
+          return h('div', { key: 'e' + i, className: 'nnk-seat nnk-seat-empty' },
+            h('div', { className: 'nnk-seat-avatar' }, '🪑'),
+            e('div', 'nnk-seat-state', '空位'));
+        }));
         return h('div', { className: 'nnk-modal-mask', onClick: function (ev) { if (ev.target === ev.currentTarget) setRoomPopupOpen(false) } },
           h('div', { className: 'nnk-modal' },
-            e('div', 'nnk-modal-title', '🏛 P2P 房间大厅(房号 ' + (roomCode || '…') + ')'),
-            /* 块 1:模式 + 载入(主机专属;客人只读提示) */
-            isRoomHost
-              ? h('div', {},
-                e('div', 'nnk-label', '① 模式(主机可随时换,应用到下一次载入)'),
-                h('div', { className: 'nnk-radios' },
-                  ONLINE_MODES.map(function (m) {
-                    return h('label', { key: m.id, className: 'nnk-radio' + (roomMode === m.id ? ' nnk-radio-on' : '') },
-                      h('input', { type: 'radio', name: 'nnk-room-mode', checked: roomMode === m.id, onChange: function () { setRoomMode(m.id) } }),
-                      m.name + '(最多 ' + capFor(m.id) + ' 人)');
-                  })),
-                h('button', { className: 'nnk-submit', style: { marginTop: '10px' }, onClick: function () { sendCmd('restart_room', { mode: roomMode }); setNote('🚀 载入中——主机游戏重载一次,成员自动跟随进入'); } }, '🚀 载入到游戏(按所选模式)'))
-              : e('div', 'nnk-hint', '① 模式选择与载入由主机操作,你会在下方看到进入状态。'),
-            e('div', 'nnk-hint', '载入时主机的游戏会重载一次,成员自动重连进入,无需任何操作。开局/禁将在游戏内进行。'),
-            /* 块 2:等待队列(房主在首位;空座位=还能进几人,按「已进入」人数算,
-             * 排队/等待的人不占座——超员的会标「排队」,载入时不会跟进来)。
-             * 座位数:主机=当前选中模式的上限(点了别的模式立刻变),若选中的
-             * 就是房间当前模式且内核报了真容量(如房间设置改了人数),用真值;
-             * 客人=房间当前模式的真值(客人没有模式选择权) */
-            e('div', 'nnk-label', '② 等待队列(只有队列里的人会进入游戏,空座位=还能进几人)'),
-            (function () {
-              var selMode = isRoomHost ? roomMode : (mData.mode || roomMode);
-              var cap = (mData.mode === selMode && mData.capacity) ? mData.capacity : capFor(selMode);
-              var mList = mData.list || [];
-              var enteredCount = mList.filter(function (mm) { return mm.entered; }).length;
-              var rows = mList.map(function (mm, i) {
-                var st = mm.entered ? '✅ 已进入游戏房间'
-                  : mm.queued ? '🚏 排队等待空位(人满,有人退出自动进)'
-                    : '⏳ 等待载入';
-                return e('div', { key: i, className: 'nnk-hint' }, '👤 ' + mm.name + (mm.role === 'host' ? '(房主)' : '') + ' · ' + st);
-              });
-              for (var s = enteredCount; s < cap; s++) {
-                rows.push(e('div', { key: 'seat' + s, className: 'nnk-hint' }, '🪑 空座位'));
-              }
-              return rows;
-            })(),
+            h('div', { className: 'nnk-rm-head' },
+              e('div', 'nnk-modal-title', '🏛 房间大厅'),
+              e('span', 'nnk-badge', hostEntered ? '✅ 游戏房间已建好' : seated.length + '/' + cap + ' 人在房')),
+            /* 房号牌:大号等宽 + 一键复制 */
+            h('div', { className: 'nnk-rm-code' },
+              e('span', 'nnk-rm-codelabel', '房号'),
+              e('span', 'nnk-rm-codeval', roomCode || '…'),
+              h('button', { className: 'nnk-copy', onClick: function () { copyText(roomCode || '') } }, '📋 复制')),
+            /* 座位网格:成员 → 排队 → 空位 */
+            h('div', { className: 'nnk-rm-seats' }, seats),
+            /* 操作区:主机换模式+载入;客人只读 */
+            h('div', { className: 'nnk-rm-ops' },
+              isRoomHost
+                ? h('div', {},
+                  e('div', 'nnk-label', '模式(应用到下一次载入)'),
+                  h('div', { className: 'nnk-radios' },
+                    ONLINE_MODES.map(function (m) {
+                      return h('label', { key: m.id, className: 'nnk-radio' + (roomMode === m.id ? ' nnk-radio-on' : '') },
+                        h('input', { type: 'radio', name: 'nnk-room-mode', checked: roomMode === m.id, onChange: function () { setRoomMode(m.id) } }),
+                        m.name + '(最多 ' + capFor(m.id) + ' 人)');
+                    })),
+                  h('button', { className: 'nnk-submit', onClick: function () { sendCmd('restart_room', { mode: roomMode }); setNote('🚀 载入中——主机游戏重载一次,成员自动跟随进入'); } }, '🚀 载入到游戏(按所选模式)'),
+                  e('div', 'nnk-hint', '载入时主机游戏重载一次,成员自动进入;开局/禁将在游戏内点。'))
+                : e('div', 'nnk-hint', '模式与载入由房主操作——他点「载入到游戏」后,你会自动跟着进房。')),
             h('div', { className: 'nnk-modal-actions' },
               h('button', { className: 'nnk-copy', onClick: function () { setRoomPopupOpen(false) } }, '收起(连接继续保持,可随时再打开)'))));
       }
@@ -1485,7 +1537,11 @@ window.__ModuleLoader__.load({
                 : null,
               !bridgeOnline ? e('div', 'nnk-hint', '内核离线(先启动游戏)') : null,
               roomCode && !roomPopupOpen
-                ? h('button', { className: 'nnk-copy', style: { marginTop: '8px' }, onClick: function () { setRoomPopupOpen(true) } }, '🏛 打开房间大厅(房号 ' + roomCode + ')')
+                ? h('button', { className: 'nnk-copy', style: { marginTop: '8px' }, onClick: function () { setRoomPopupOpen(true) } }, (function () {
+                  var b = roomBrief();
+                  var seatedN = b.list.filter(function (mm) { return !mm.queued; }).length;
+                  return '🏛 房间大厅(房号 ' + roomCode + ' · ' + seatedN + '/' + b.cap + ' 人)';
+                })())
                 : null,
               inviteEv
                 ? h('div', { style: { marginTop: '10px' } },
@@ -1503,7 +1559,11 @@ window.__ModuleLoader__.load({
               h('input', { className: 'nnk-input', value: roomText, maxLength: 6, onChange: function (ev) { setRoomText(ev.target.value.toUpperCase()) }, placeholder: '输入 6 位房号,如 AB2C9X', style: { textTransform: 'uppercase', letterSpacing: '4px', fontSize: '16px' } }),
               h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow || guestFlow, onClick: function () { sendCmd('join_room', { code: roomText }) } }, '🚪 加入房间'),
               (guestFlow || phase === 'connected') && roomCode
-                ? h('button', { className: 'nnk-copy', style: { marginTop: '8px' }, onClick: function () { setRoomPopupOpen(true) } }, '🏛 打开房间大厅')
+                ? h('button', { className: 'nnk-copy', style: { marginTop: '8px' }, onClick: function () { setRoomPopupOpen(true) } }, (function () {
+                  var b = roomBrief();
+                  var seatedN = b.list.filter(function (mm) { return !mm.queued; }).length;
+                  return '🏛 房间大厅(房号 ' + roomCode + ' · ' + seatedN + '/' + b.cap + ' 人)';
+                })())
                 : null,
               showInviteFallback
                 ? h('div', {},
