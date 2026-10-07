@@ -966,6 +966,31 @@
 			if (signalingMode === "invite") {
 				startInvite();   /* 旧客户端兼容:建完补一张邀请码 */
 			}
+			/* 游戏不在联机大厅界面(引擎的联机菜单)时,自动带过去:重载进联机
+			 * 模式一次,落地后本段大厅与房号原样恢复。用户的操作预期是"建完房,
+			 * 游戏里就该停在联机大厅等载入"——不然游戏停在原界面,像什么都没
+			 * 发生(实测报障);而且停进联机菜单后,之后的「载入到游戏」走原地
+			 * 秒级路径,不用再重载 */
+			var atConnectMenu = env._status.connectMode && !env.game.online && !env.game.onlineroom
+				&& !env._status.waitingForPlayer && (!env.game.players || !env.game.players.length);
+			if (!atConnectMenu) {
+				try {
+					localStorage.setItem(env.lib.configprefix + "nnk_host_pending", JSON.stringify({ mode: mode, signaling: "mqtt", stage: "lobby" }));
+					localStorage.setItem(env.lib.configprefix + "nnk_host_roomcode", hostState.roomCode);   /* 房号跨重载保留 */
+					localStorage.setItem(env.lib.configprefix + "directstart", "true");
+				} catch (e2) { /* 忽略 */ }
+				bridgeApi().emit("info", { message: "正在把游戏带进联机大厅界面(重载一次,房号 " + hostState.roomCode + " 不变,客人邀请码仍然有效)…" });
+				var lobbyGone = false;
+				var lobbyGo = function() {
+					if (lobbyGone) {
+						return;
+					}
+					lobbyGone = true;
+					env.game.reload();
+				};
+				env.game.saveConfig("mode", "connect", null, lobbyGo);
+				setTimeout(lobbyGo, 1500);
+			}
 		},
 
 		/* 工坊弹窗换模式:只更新"下一局模式"并广播(不碰引擎、不重载)。
