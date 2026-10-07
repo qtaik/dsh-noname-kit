@@ -117,7 +117,7 @@
 	 * inFlight=上一尝试还在握手(信令校验/等应答):不占尝试次数,只隔 4 秒
 	 * 复查——握手各阶段都有自己的超时(30 秒等应答会收掉会话),超时后这里
 	 * 自然续上下一试;看 session.entered 区分「真进了」和「还在连」。 */
-	function autoRejoin(code, attempts, inFlight) {
+	function autoRejoin(code, attempts, inFlight, signalOnly) {
 		var env = nnk.env;
 		guestState.rejoinCode = code;
 		/* 链代号:连续两次断开会各起一条重试链,旧链的迟到定时器必须作废
@@ -149,7 +149,26 @@
 				guestState.rejoinCode = null;
 				return;   /* 已进入房间 / 已停回大厅,循环完成 */
 			}
-			autoRejoin(code, attempts - (guestState.session ? 0 : 1), !!guestState.session);
+			/* 次数扣减:只有"真尝试过、连到房间层"才扣。信令服务器连不上
+			 * (公共 broker 偶发抽风)算信号层失败,不扣次数——否则 8 次被信号
+			 * 超时耗完,会误报"房主可能已关闭游戏"。但也不能无限等:连续信号
+			 * 失败超过 8 次(约 90 秒)仍收场并给出路。 */
+			var signalOnlyNext = Boolean(guestState.lastJoinSignalFail);
+			guestState.lastJoinSignalFail = false;
+			if (signalOnlyNext) {
+				guestState.rejoinSignalStreak = (guestState.rejoinSignalStreak || 0) + 1;
+			} else if (guestState.session) {
+				guestState.rejoinSignalStreak = 0;
+			}
+			if (signalOnlyNext && guestState.rejoinSignalStreak > 8) {
+				guestState.rejoinCode = null;
+				guestState.rejoinSignalStreak = 0;
+				bridgeApi().setPhase("idle");
+				bridgeApi().emit("error", { message: "信令服务器一直连不上,自动重回中止——请检查网络,或让房主发一张邀请码从另一道门进" });
+				return;
+			}
+			var deduct = signalOnlyNext ? 0 : (guestState.session ? 0 : 1);
+			autoRejoin(code, attempts - deduct, !!guestState.session, signalOnlyNext);
 		}, 4000);
 	}
 
@@ -648,6 +667,12 @@
 					bridgeApi().emit("error", { message: (err && err.message) || "加入失败" });
 				});
 			}).catch(function(err) {
+				/* 信令层失败(MQTT 连不上/超时)打标:自动重回循环据此不扣重试次数
+				 * ——这不是"房主不在"的证据,是公共 broker 抽风(实测:8 次重试
+				 * 全被信令超时耗完,误报"房主可能已关闭游戏") */
+				if (/信令服务器/.test(String((err && err.message) || err))) {
+					guestState.lastJoinSignalFail = true;
+				}
 				resetSession();
 				bridgeApi().setPhase("idle");
 				bridgeApi().emit("error", { message: "加入失败: " + (err.message || err) });

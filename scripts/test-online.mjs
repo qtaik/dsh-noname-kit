@@ -10,6 +10,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
+import { fileURLToPath } from 'node:url'
+import { dirname } from 'node:path'
+
+const here = dirname(fileURLToPath(import.meta.url))
 
 let passed = 0
 function ok(cond, label) {
@@ -175,6 +179,17 @@ export default { name: "standard", character: characters, translate: translates 
   const idxYuejin = avatars.findIndex((a) => a.id === 'av_yuejin')
   const idxOld = avatars.findIndex((a) => a.id === 'av_old')
   ok(idxYuejin >= 0 && idxOld >= 0 && idxYuejin < idxOld, '按中文名排序(标乐进 b < 老武将 l)')
+
+  // ── 结构性回归锁:重试预算与信令超时的策略(防止被无声改回) ──
+  const repoRoot = join(here, '..')
+  const guestSrc = readFileSync(join(repoRoot, 'online-kernel', 'src', 'guest.js'), 'utf8')
+  const sigSrc = readFileSync(join(repoRoot, 'online-kernel', 'src', 'signaling.js'), 'utf8')
+  ok(guestSrc.includes('lastJoinSignalFail'), '信令层失败有打标(自动重回据此不扣次数)')
+  ok(guestSrc.includes('var deduct = signalOnlyNext ? 0 :'), '信令失败不扣重试次数(只扣房间层失败)')
+  ok(guestSrc.includes('rejoinSignalStreak > 8'), '信令连续失败有上限(不会无限重试)')
+  ok(sigSrc.includes('connectTimeout: 6000'), '信令连接超时压到 6 秒(健康连接 1~3 秒完成)')
+  ok(sigSrc.includes('}, 7000);'), '信令兜底超时 7 秒(不再 12 秒拖慢自动重回)')
+  ok(!sigSrc.includes('连接超时(可改用邀请码方式)'), '超时文案不再甩锅房主')
 
   console.log(`\n全部通过:${passed} 项`)
 } finally {
