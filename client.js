@@ -1079,7 +1079,7 @@ window.__ModuleLoader__.load({
           if (pk.cardsConnect) {
             line += ' || 连接卡牌包池(' + pk.cardsConnect.length + '):' + (pk.cardsConnect.join('、') || '空');
           }
-          if (pk.all && pk.all.length !== pk.connect.length) {
+          if (pk.all && pk.connect && pk.all.length !== pk.connect.length) {
             line += ' | 全部包(' + pk.all.length + '):' + pk.all.join('、');
           }
           return line;
@@ -1237,6 +1237,11 @@ window.__ModuleLoader__.load({
       };
       if (!status) return e('div', 'nnk-hint', '正在获取联机状态…');
       if (status.fetchFailed) return e('div', 'nnk-err', '❌ 联机状态获取失败(插件服务不可达)——确认 dsh 正在运行,恢复后本页几秒内自动重试。');
+      /* 渲染保护罩住整段派生计算 + 渲染:早先只在 renderOnlinePanel() 外面包了一层,
+       * 底下这段(vars 与钩子之外的一切)抛错会冒到 DSH 槽位边界,表现是整块空白
+       * ——连错误文字都看不到(实测:客户机粘贴邀请码后工坊整页空白)。
+       * 注:var 在 try 里声明仍提升到组件作用域,下面那些渲染函数照样看得见 */
+      try {
       var kernel = status.kernel;
       var bridge = status.bridge || {};
       var evs = bridge.events || [];
@@ -1254,10 +1259,11 @@ window.__ModuleLoader__.load({
       var answerEv = (phase === 'joining' || phase === 'answer_ready' || phase === 'entering') ? onlinePickEvent(evs, 'answer_ready') : null;
       /* bridge.state 在内核首次心跳前是 null——房号一律走安全局部变量 */
       var roomCode = (bridge.state && (bridge.state.roomCode || bridge.state.code)) || null;
-      /* 渲染层任何异常都会被 slot 系统吞成空白(记忆坑),这里兜底把错误亮出来 */
-      try {
-        return renderOnlinePanel();
+      return renderOnlinePanel();
       } catch (renderErr) {
+        /* 渲染层任何异常都会被 slot 系统吞成空白(记忆坑):一律把错误亮出来,
+         * 不许再出现"整块空白查不出原因"。堆栈同步进控制台,方便 F12 取证 */
+        console.error('[联机助手] 联机页渲染出错:', renderErr);
         return e('div', 'nnk-err', '❌ 联机页渲染出错: ' + ((renderErr && renderErr.message) || renderErr) + ' —— 请截图本行文字与当时的操作发给开发者');
       }
 
@@ -1835,21 +1841,29 @@ window.__ModuleLoader__.load({
       };
       if (phase === null) return e('div', 'nnk-hint', '正在检查插件配置…');
 
-      return h('div', { className: 'nnk-wrap' },
-        h('div', { className: 'nnk-tabs' },
-          h('button', { className: 'nnk-tab' + (active === 'new' ? ' nnk-active' : ''), onClick: function () { setActive('new') } }, '🛠 任务'),
-          h('button', { className: 'nnk-tab' + (active === 'tasklist' ? ' nnk-active' : ''), onClick: function () { setActive('tasklist') } }, '📋 任务列表'),
-          h('button', { className: 'nnk-tab' + (active === 'history' ? ' nnk-active' : ''), onClick: function () { setActive('history') } }, '📜 历史'),
-          h('button', { className: 'nnk-tab' + (active === 'online' ? ' nnk-active' : ''), onClick: function () { setActive('online') } }, '🌐 联机(测试)'),
-          h('button', { className: 'nnk-tab' + (active === 'settings' ? ' nnk-active' : ''), onClick: function () { setActive('settings') } }, '⚙ 设置')
-        ),
-        phase === false && active === 'new' ? e('div', 'nnk-err', '⚠️ 还没配置游戏目录——到「⚙ 设置」页填一下就能自动写入;暂时不配也行,把写入方式设为「手动复制」。') : null,
-        active === 'new' ? h(NewTaskForm, { sessionId: sessionId, send: send }) : null,
-        active === 'tasklist' ? h(TaskListContent, { sessions: props.sessions, uiSession: props.uiSession, compact: false }) : null,
-        active === 'history' ? h(HistoryPanel) : null,
-        active === 'online' ? h(OnlinePanel) : null,
-        active === 'settings' ? h(SettingsPanel) : null
-      );
+      /* 整页保护:DSH 槽位边界一旦接到抛错就把这块渲染成空白(实测:客户机
+       * 出现过「工坊整页空白、连插件自己的页签栏都没了」)——里面任何一处
+       * 抛错都改成把错误文字亮出来,不许静默空白 */
+      try {
+        return h('div', { className: 'nnk-wrap' },
+          h('div', { className: 'nnk-tabs' },
+            h('button', { className: 'nnk-tab' + (active === 'new' ? ' nnk-active' : ''), onClick: function () { setActive('new') } }, '🛠 任务'),
+            h('button', { className: 'nnk-tab' + (active === 'tasklist' ? ' nnk-active' : ''), onClick: function () { setActive('tasklist') } }, '📋 任务列表'),
+            h('button', { className: 'nnk-tab' + (active === 'history' ? ' nnk-active' : ''), onClick: function () { setActive('history') } }, '📜 历史'),
+            h('button', { className: 'nnk-tab' + (active === 'online' ? ' nnk-active' : ''), onClick: function () { setActive('online') } }, '🌐 联机(测试)'),
+            h('button', { className: 'nnk-tab' + (active === 'settings' ? ' nnk-active' : ''), onClick: function () { setActive('settings') } }, '⚙ 设置')
+          ),
+          phase === false && active === 'new' ? e('div', 'nnk-err', '⚠️ 还没配置游戏目录——到「⚙ 设置」页填一下就能自动写入;暂时不配也行,把写入方式设为「手动复制」。') : null,
+          active === 'new' ? h(NewTaskForm, { sessionId: sessionId, send: send }) : null,
+          active === 'tasklist' ? h(TaskListContent, { sessions: props.sessions, uiSession: props.uiSession, compact: false }) : null,
+          active === 'history' ? h(HistoryPanel) : null,
+          active === 'online' ? h(OnlinePanel) : null,
+          active === 'settings' ? h(SettingsPanel) : null
+        );
+      } catch (viewErr) {
+        console.error('[联机助手] 工坊页渲染出错(' + active + '):', viewErr);
+        return e('div', 'nnk-err', '❌ 工坊页渲染出错(' + active + ' 页): ' + ((viewErr && viewErr.message) || viewErr) + ' —— 请截图本行文字发给开发者');
+      }
     }
 
     // ── 工具结果卡片 ────────────────────────────────────────────
