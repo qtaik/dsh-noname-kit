@@ -316,7 +316,10 @@
 							bridgeApi().setPhase("idle");
 							bridgeApi().emit("error", { message: "房间人数已满,主机没能让你进——等有人退出,让房主发一张新邀请码再来" });
 						} else if (msg && msg.nnk_stage === "closed") {
+							/* 房主解散房间(工坊取消):立即散场,不自动重回。
+							 * 与房号门同款:顺带把还在跑的重回链停掉 */
 							session.autoConnect = false;
+							guestState.rejoinCode = null;
 							resetSession();
 							bridgeApi().setPhase("idle");
 							bridgeApi().emit("info", { message: "房主已解散房间" });
@@ -336,6 +339,11 @@
 							}
 							session.parked = true;
 							bridgeApi().setPhase("queued", session.code ? { code: session.code } : {});
+						} else if (msg && msg.nnk_members) {
+							/* 主机转发的成员表(与房号门同款分支!):客人弹窗的
+							 * 等待队列数据源——缺了这条,邀请码客人一开弹窗就永远
+							 * 停在「正在同步房间信息…」(实测报障) */
+							bridgeApi().emit("room_members", msg.nnk_members);
 						} else if (session.autoConnect && (msg.nnk_stage === "loaded" || Array.isArray(msg))) {
 							/* loaded=新内核放行指令;引擎消息(数组)直达=对端还没发
 							 * 放行指令的旧内核——都当作放行,缓冲后交引擎(混装不吊死) */
