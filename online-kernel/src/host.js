@@ -74,6 +74,7 @@
 			nnk.modules.compat.dumpExtensions();   /* 透视:本次联机实际加载/跳过了哪些扩展 */
 		}
 		bridgeApi().setPhase("hosting", { roomCode: hostState.roomCode, signaling: hostState.signaling });
+		emitRoomMembers();   /* 房间一建好就报成员表,工坊弹窗从一开始就有准确容量 */
 		startHosting();
 	}
 
@@ -651,6 +652,7 @@
 			env.game.ip = "nnk://" + hostState.roomCode;
 			bridgeApi().setPhase("mqtt_waiting", { roomCode: hostState.roomCode, stage: "lobby" });
 			startMqtt();
+			emitRoomMembers();   /* 新房立刻报一张成员表(工坊弹窗不等第一位客人) */
 		},
 
 		refreshInvite: function() {

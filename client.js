@@ -977,6 +977,11 @@ window.__ModuleLoader__.load({
       { id: 'doudizhu', name: '斗地主' },
       { id: 'single', name: '单挑' }
     ];
+    /* 模式人数上限兜底(与内核兜底表一致;载入后内核读引擎真实上限并随
+     * room_members 事件的 capacity 字段下发)。必须放模块层:面板组件里
+     * 这条赋值曾写在 `return renderOnlinePanel()` 之后,组件体永远执行不到
+     * ——刚建房、还没有成员事件时弹窗一开就 TypeError(实测事故,已修) */
+    var MODE_MAX = { identity: 8, guozhan: 8, versus: 8, doudizhu: 4, single: 2 };
     /* 流程互斥:同一游戏实例要么在主机流程要么在客人流程,进行中时另一侧禁用 */
     var HOST_PHASES = ['host_booting', 'hosting', 'invite_ready', 'connecting', 'room_open'];
     var GUEST_PHASES = ['guest_booting', 'joining', 'answer_ready', 'entering', 'connected', 'queued'];
@@ -1370,9 +1375,6 @@ window.__ModuleLoader__.load({
           txEv ? e('div', { className: 'nnk-break', style: { marginTop: '6px' } }, onlineEventText(txEv)) : null);
       }
 
-      /* 模式人数上限(与内核兜底表一致;载入后内核会读引擎真实上限并随
-       * room_members 事件的 capacity 字段下发) */
-      var MODE_MAX = { identity: 8, guozhan: 8, versus: 8, doudizhu: 4, single: 2 };
       /* P2P 房间大厅弹窗:①模式+载入 ②等待队列。客人=只读视角 */
       function renderRoomModal() {
         var MODE_COUNT = { identity: '2~8 人', guozhan: '2~8 人', versus: '2~8 人', doudizhu: '3~4 人', single: '2 人' };
