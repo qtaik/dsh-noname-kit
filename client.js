@@ -92,7 +92,16 @@ window.__ModuleLoader__.load({
       '.nnk-seat-empty .nnk-seat-avatar{background:transparent!important;font-size:20px}',
       '.nnk-seat-queued{border-style:dashed}',
       '.nnk-rm-ops{margin-top:12px;padding-top:4px;border-top:1px solid var(--dsw-alias-border-l2)}',
-      '.nnk-rm-ops .nnk-submit{width:100%;margin-top:10px}'
+      '.nnk-rm-ops .nnk-submit{width:100%;margin-top:10px}',
+      /* 邀请码列表(一客一张):每行自带状态与操作,回执码入口常驻 */
+      '.nnk-inv-box{margin-top:10px}',
+      '.nnk-inv-row{margin-top:6px;padding:6px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--nnk-rs);background:var(--dsw-alias-bg-layer-2)}',
+      '.nnk-inv-head{display:flex;align-items:center;gap:4px;flex-wrap:wrap}',
+      '.nnk-inv-head .nnk-smallbtn{margin:0 0 0 4px}',
+      '.nnk-inv-id{font-family:Consolas,monospace;font-size:12px;font-weight:700;color:var(--dsw-alias-brand-primary);flex:none}',
+      '.nnk-inv-state{font-size:12px;color:var(--dsw-alias-label-secondary);margin-right:auto;min-width:0;overflow:hidden;text-overflow:ellipsis}',
+      '.nnk-inv-ans{margin-top:6px}',
+      '.nnk-inv-ans .nnk-label{margin-top:4px}'
     ].join('\n');
     if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css="dsh-noname-kit/ui"]') === null) {
       var tag = document.createElement('style');
@@ -1093,8 +1102,6 @@ window.__ModuleLoader__.load({
       var roomMode = modeState[0], setRoomMode = modeState[1];
       var roomPopState = React.useState(false);
       var roomPopupOpen = roomPopState[0], setRoomPopupOpen = roomPopState[1];
-      var answerIn = React.useState('');
-      var answerText = answerIn[0], setAnswerText = answerIn[1];
       var offerIn = React.useState('');
       var offerText = offerIn[0], setOfferText = offerIn[1];
       var roomIn = React.useState('');
@@ -1118,9 +1125,15 @@ window.__ModuleLoader__.load({
       var rmSyncKey = rmSyncState[0], setRmSyncKey = rmSyncState[1];
       var sigUrlState = React.useState('');
       var sigUrl = sigUrlState[0], setSigUrl = sigUrlState[1];
-      /* 码交接弹窗的关闭标记:同一张码关了不再弹,换新码(重试/重生成)才再弹 */
-      var invPopState = React.useState('');
-      var invitePopupDismissed = invPopState[0], setInvitePopupDismissed = invPopState[1];
+      /* 码交接弹窗的关闭标记:同一张码关了不再弹,换新码(重试/重生成)才再弹。
+       * 邀请码改成"列表"后按行号记:popped=上次弹过的行,dismissed=被收起的那行 */
+      var invPopState = React.useState({ popped: null, dismissed: null });
+      var invPop = invPopState[0], setInvPop = invPopState[1];
+      /* 每行的「回执码」输入:各记各的,粘错不会串行;openAns=展开了粘贴框的那行 */
+      var ansTextsState = React.useState({});
+      var ansTexts = ansTextsState[0], setAnsTexts = ansTextsState[1];
+      var openAnsState = React.useState(null);
+      var openAns = openAnsState[0], setOpenAns = openAnsState[1];
       var ansPopState = React.useState('');
       var answerPopupDismissed = ansPopState[0], setAnswerPopupDismissed = ansPopState[1];
       /* 仪表盘折叠块:配置/帮助类默认收起,点标题展开 */
@@ -1174,6 +1187,29 @@ window.__ModuleLoader__.load({
         setRmSyncKey(m);
         setRoomMode(m);
       });
+      /* 码正文只走事件流(不给 0.7 秒一轮的心跳塞 SDP):事件窗口只有几十条,
+       * 忙碌的房间会把较早的 invite_ready 挤出去——用一份按行号的缓存留住
+       * 见过的码;顺带发现新码就自动弹一次码窗口(每个行号只弹一次) */
+      var codeCacheState = React.useState({});
+      var codeCache = codeCacheState[0], setCodeCache = codeCacheState[1];
+      React.useEffect(function () {
+        var evs0 = (status && status.bridge && status.bridge.events) || [];
+        var add = null;
+        var newest = null;
+        for (var i = 0; i < evs0.length; i++) {
+          var ev = evs0[i];
+          if (ev.type !== 'invite_ready' || !ev.data || !ev.data.id) continue;
+          if (ev.data.code && !codeCache[ev.data.id]) {
+            add = add || {};
+            add[ev.data.id] = ev.data.code;
+          }
+          newest = ev.data.id;
+        }
+        if (add) setCodeCache(Object.assign({}, codeCache, add));
+        if (newest && invPop.popped !== newest) {
+          setInvPop({ popped: newest, dismissed: null });
+        }
+      });
       var sendCmd = function (action, args) {
         return fetch('/noname-kit-api/online/command', {
           method: 'POST',
@@ -1213,12 +1249,8 @@ window.__ModuleLoader__.load({
        * (注意先后:先算 hostFlow/guestFlow,旧内核没有 role 时才有后备可用) */
       var isRoomHost = hostFlow || bridge.role === 'host';
       var kernelBad = !kernel || kernel.state === 'unknown';
-      /* 码只在对应流程阶段展示:事件会长期留存,无条件展示会让人对着
-       * 已作废的邀请码/回执码继续操作 */
-      /* 邀请码事件只在生成/协商阶段展示:客人一到大厅(阶段归位 mqtt_waiting),
-       * 这张码就收起来——别再对着已用过的那张继续操作 */
-      var invitePhase = phase === 'invite_ready' || phase === 'connecting';
-      var inviteEv = invitePhase ? onlinePickEvent(evs, 'invite_ready') : null;
+      /* 回执码只在客人侧的对应阶段展示:事件会长期留存,无条件展示会让人对着
+       * 已作废的码继续操作(邀请码那侧已改成"列表常驻 + 按行取用") */
       var answerEv = (phase === 'joining' || phase === 'answer_ready' || phase === 'entering') ? onlinePickEvent(evs, 'answer_ready') : null;
       /* bridge.state 在内核首次心跳前是 null——房号一律走安全局部变量 */
       var roomCode = (bridge.state && (bridge.state.roomCode || bridge.state.code)) || null;
@@ -1233,7 +1265,8 @@ window.__ModuleLoader__.load({
        * 不够(实测反馈),直接弹到屏幕中间。关了不重复弹,换新码才再弹;
        * 阶段推进(连接中/进房中)自动消失,卡片里的同款操作仍可用 */
       /* 码龄:邀请码里的 ICE 候选跟着 NAT 端口映射活,几十秒到几分钟就过期
-       * (实测放 14 分钟必失败),超 3 分钟就亮牌催换 */
+       * (实测放 14 分钟必失败),超 3 分钟就亮牌催换。这段文案只出现在客人侧
+       * (回执码),催"换码"要说清楚是房主那边换 */
       function codeAgeText(ts) {
         if (!ts) return '';
         var sec = Math.max(0, Math.round((Date.now() - ts) / 1000));
@@ -1241,7 +1274,7 @@ window.__ModuleLoader__.load({
         var min = Math.floor(sec / 60);
         var text = '此码已生成 ' + min + ' 分钟';
         return sec >= 180
-          ? '⚠️ ' + text + '——里面的候选地址基本过期了,直连大概率失败!点「换一张邀请码重试」重新生成,新码马上发马上用'
+          ? '⚠️ ' + text + '——候选地址多半过期了,直连大概率失败!请房主作废这张、重新生成一张,新码马上发马上用'
           : text + '——放太久会失效,建议 3 分钟内用完';
       }
       function renderCodeModal(opts) {
@@ -1252,20 +1285,23 @@ window.__ModuleLoader__.load({
             h('div', { className: 'nnk-modal-actions' },
               h('button', { className: 'nnk-copy', onClick: opts.onClose }, '收起(下方卡片里仍可操作)'))));
       }
-      function renderInviteModal(ev) {
-        var code = (ev.data && ev.data.code) || '';
+      /* 码交接弹窗(按行号):生成后自动弹一次,也可从列表那行的「🔎 再看」重开——
+       * 误触关掉不再等于丢码(列表里随时能复制)。回执码就贴这一行的 */
+      function renderInviteModal(row) {
         return renderCodeModal({
-          title: '📨 邀请码已生成——发给朋友',
-          onClose: function () { setInvitePopupDismissed(code) },
+          title: '📨 邀请码 #' + row.id + ' 已生成——发给朋友',
+          onClose: function () { setInvPop({ popped: row.id, dismissed: row.id }) },
           body: h('div', {},
-            e('div', 'nnk-hint', '1. 点「复制」把整段邀请码发给朋友;2. 朋友在「我要加入 → 📨 收到邀请码?从这里加入」粘贴,把生成的「回执码」发回给你;3. 回执码粘到下面,点「连接」。他进的是同一个房间,一样在大厅等载入。'),
-            codeAgeText(ev.ts) ? e('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(ev.ts)) : null,
+            e('div', 'nnk-hint', '1. 点「复制」把整段邀请码发给朋友;2. 朋友在「我要加入 → 📨 收到邀请码?从这里加入」粘贴,把生成的「回执码」发回给你;3. 回执码贴到下面(或列表里第 #' + row.id + ' 行),点「连接」。他进的是同一个房间,一样在大厅等载入。'),
+            row.status === 'pending' && Date.now() - (row.at || 0) >= 180000
+              ? e('div', 'nnk-hint', { style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, '⚠️ 这张码已生成 ' + Math.floor((Date.now() - row.at) / 60000) + ' 分钟——里面的候选地址基本过期了,直连大概率失败;作废它再生成一张新码,新码马上发马上用')
+              : null,
             e('div', 'nnk-label', '邀请码(整段复制)'),
-            h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: code }),
-            h('button', { className: 'nnk-copy', onClick: function () { copyText(code) } }, '📋 复制邀请码'),
-            e('div', 'nnk-label', '朋友回发的「回执码」粘贴到这里'),
-            h('textarea', { className: 'nnk-textarea nnk-code', value: answerText, onChange: function (ev2) { setAnswerText(ev2.target.value) }, placeholder: '粘贴客人的回执码…' }),
-            h('button', { className: 'nnk-copy', onClick: function () { sendCmd('accept_answer', { code: answerText }) } }, '🔗 连接'))
+            h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: row.code }),
+            h('button', { className: 'nnk-copy', onClick: function () { copyText(row.code) } }, '📋 复制邀请码'),
+            e('div', 'nnk-label', '朋友回发的「回执码」粘贴到这里(第 #' + row.id + ' 张码)'),
+            h('textarea', { className: 'nnk-textarea nnk-code', value: ansTexts[row.id] || '', onChange: function (ev2) { setAnsText(row.id, ev2.target.value) }, placeholder: '粘贴这位朋友的回执码…' }),
+            h('button', { className: 'nnk-copy', onClick: function () { sendCmd('accept_answer', { id: row.id, code: ansTexts[row.id] || '' }) } }, '🔗 连接'))
         });
       }
       function renderAnswerModal(ev) {
@@ -1427,6 +1463,89 @@ window.__ModuleLoader__.load({
         setRoomPopupOpen(false);
       }
 
+      /* 邀请码列表(一客一张):状态元数据走心跳(bridge.state.invites,随房间一起
+       * 过期),码正文走事件流(invite_ready 带 id+code,不塞进 0.7 秒一轮的心跳)。
+       * 注意:这是函数声明——组件体在 return 之后不再执行,var 赋值会变死语句 */
+      function inviteRows() {
+        var list = (bridge.state && bridge.state.invites) || [];
+        var codes = {};
+        evs.forEach(function (ev) {
+          if (ev.type === 'invite_ready' && ev.data && ev.data.id) { codes[ev.data.id] = ev.data.code; }
+        });
+        return list.map(function (it) {
+          return { id: it.id, status: it.status, at: it.at, guest: it.guest || '', note: it.note || '', code: codeCache[it.id] || codes[it.id] || '' };
+        });
+      }
+      function inviteRowById(id) {
+        var rows = inviteRows();
+        for (var i = 0; i < rows.length; i++) {
+          if (rows[i].id === id) return rows[i];
+        }
+        return null;
+      }
+      /* 码龄:候选地址跟着 NAT 端口映射活,几分钟就过期——超 3 分钟亮牌 */
+      function inviteAgeText(at) {
+        if (!at) return '';
+        var sec = Math.max(0, Math.round((Date.now() - at) / 1000));
+        if (sec < 60) return '刚生成';
+        var min = Math.floor(sec / 60);
+        return (sec >= 180 ? '⚠️ ' : '') + min + ' 分钟前';
+      }
+      function inviteStatusText(r) {
+        if (r.status === 'pending') return '⏳ 等回执码 · ' + inviteAgeText(r.at);
+        if (r.status === 'answering') return '🔗 正在打通直连…(最长 20 秒)';
+        if (r.status === 'used') return '✅ 已使用' + (r.guest ? '—— 客人「' + r.guest + '」' : '');
+        return '⚠️ 已失效' + (r.note ? '(' + r.note + ')' : '');
+      }
+      /* 每行的回执码输入各记各的(粘错不串行) */
+      function setAnsText(id, text) {
+        setAnsTexts(function (prev) {
+          var nx = Object.assign({}, prev);
+          nx[id] = text;
+          return nx;
+        });
+      }
+
+      /* 邀请码列表(主机侧,房间大厅里那块):一客一张、可同时挂多张。
+       * 每行自带「复制码 / 粘回执码 / 作废」——回执码入口常驻,关弹窗不丢 */
+      function renderInviteRow(r) {
+        var open = openAns === r.id;
+        var live = r.status === 'pending' || r.status === 'answering';
+        return h('div', { key: r.id, className: 'nnk-inv-row' },
+          h('div', { className: 'nnk-inv-head' },
+            e('span', 'nnk-inv-id', '#' + r.id),
+            e('span', 'nnk-inv-state', inviteStatusText(r)),
+            r.code ? h('button', { className: 'nnk-smallbtn', onClick: function () { copyText(r.code) } }, '📋 复制码') : null,
+            r.code && r.status === 'pending'
+              ? h('button', { className: 'nnk-smallbtn', onClick: function () { setInvPop({ popped: r.id, dismissed: null }) } }, '🔎 再看')
+              : null,
+            live
+              ? h('button', { className: 'nnk-smallbtn', onClick: function () { setOpenAns(open ? null : r.id) } }, open ? '收起粘贴框' : '📨 粘回执码')
+              : null,
+            live
+              ? h('button', { className: 'nnk-smallbtn', onClick: function () { sendCmd('invite_refresh', { kind: 'cancel', id: r.id }) } }, '🗑 作废')
+              : null),
+          open
+            ? h('div', { className: 'nnk-inv-ans' },
+              e('div', 'nnk-label', '朋友回发的「回执码」贴到这一行(第 #' + r.id + ' 张码)'),
+              h('textarea', { className: 'nnk-textarea nnk-code', value: ansTexts[r.id] || '', onChange: function (ev) { setAnsText(r.id, ev.target.value) }, placeholder: '粘贴这位朋友的回执码…' }),
+              h('button', { className: 'nnk-copy', onClick: function () { sendCmd('accept_answer', { id: r.id, code: ansTexts[r.id] || '' }) } }, '🔗 连接'))
+            : null);
+      }
+      function renderInviteCard() {
+        var rows = inviteRows();
+        var waiting = rows.filter(function (r) { return r.status === 'pending' || r.status === 'answering'; });
+        return h('div', { className: 'nnk-inv-box' },
+          e('div', 'nnk-label', '邀请码(一客一张,可同时挂多张)'),
+          rows.length
+            ? rows.map(function (r) { return renderInviteRow(r); })
+            : e('div', 'nnk-hint', '还没有邀请码。朋友进不了房号门时,点下面「生成邀请码」发他一张,他进的是同一个房间。'),
+          h('div', { className: 'nnk-row', style: { marginTop: '6px' } },
+            h('button', { className: 'nnk-submit', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh', { kind: 'invite' }); setNote('📨 正在生成邀请码…生成后自动弹到屏幕中间'); } }, '📨 生成邀请码'),
+            waiting.length ? e('span', 'nnk-hint', '有 ' + waiting.length + ' 张还没收尾') : null),
+          e('div', 'nnk-hint', '把整段码发给朋友 → 他回发的「回执码」贴到对应那一行点「连接」。码放太久会失效(超 3 分钟会亮牌)。'));
+      }
+
       /* 房间速览(主卡按钮与大厅弹窗共用同一套容量口径):成员表 + 当前容量 */
       function roomBrief() {
         var ev0 = onlinePickEvent(evs, 'room_members');
@@ -1507,9 +1626,8 @@ window.__ModuleLoader__.load({
                     })),
                   h('button', { className: 'nnk-submit', onClick: function () { sendCmd('restart_room', { mode: roomMode }); setNote('🚀 载入中——成员会自动进入(原地进房不断线;需重载时自动跟随)'); } }, '🚀 载入到游戏(按所选模式)'),
                   e('div', 'nnk-hint', '载入时主机尽量原地进房(成员不断线);需要重载时成员自动跟随进入。开局/禁将在游戏内点。'),
-                  /* 房间相关的操作都收在这里:生成邀请码 = 给进不了房号门的朋友
-                   * 开同一房间的第二道门(一客一张),他同样会出现在上面的座位里 */
-                  h('button', { className: 'nnk-copy', onClick: function () { setAnswerText(''); sendCmd('invite_refresh', { kind: 'invite' }); setNote('📨 正在生成邀请码…生成后自动弹到屏幕中间'); } }, '📨 生成邀请码(给连不上房号的朋友)'))
+                  /* 邀请码列表常驻这里:码随时可复制、回执码随时可粘,不依赖弹窗 */
+                  renderInviteCard())
                 : e('div', 'nnk-hint', '模式与载入由房主操作——他点「载入到游戏」后,你会自动跟着进房。')),
             h('div', { className: 'nnk-modal-actions' },
               h('button', { className: 'nnk-copy nnk-danger', onClick: function () { leaveRoom(isRoomHost) } }, isRoomHost ? '🗑 解散房间' : '🚪 退出房间'),
@@ -1562,15 +1680,12 @@ window.__ModuleLoader__.load({
               e('div', null, h('b', null, '🏠 我要当主机')),
               e('div', 'nnk-hint', '创建 P2P 房间 → 房间大厅里选模式、载入到游戏,大家自动进入(房号连不上的朋友用「📨 生成邀请码」)。开局/禁将在游戏里点。'),
               h('div', { className: 'nnk-row' },
-                h('button', { className: 'nnk-submit', style: { marginTop: '0' }, disabled: !bridgeOnline || guestFlow || hostFlow || (bridge.role === 'host' && roomCode), onClick: function () { setAnswerText(''); setOfferText(''); sendCmd('create_room', { mode: roomMode }); setRoomPopupOpen(true) } }, '🏛 创建 P2P 房间'),
-                /* 邀请码 = 同一房间的第二道门,按需生成(可多张、一客一张):
-                 * 房号进不来的朋友拿它进同一个房间,成员表/排队/载入全都共用。
-                 * 只在主机侧显示——客人的 roomCode 是自己那个房间的,别把
-                 * 「生成邀请码 / 解散」摆到客人面前 */
+                h('button', { className: 'nnk-submit', style: { marginTop: '0' }, disabled: !bridgeOnline || guestFlow || hostFlow || (bridge.role === 'host' && roomCode), onClick: function () { setOfferText(''); sendCmd('create_room', { mode: roomMode }); setRoomPopupOpen(true) } }, '🏛 创建 P2P 房间'),
+                /* 邀请码 = 同一房间的第二道门,按需生成(一客一张、可同时挂多张)。
+                 * 列表与回执码入口都在「房间大厅」里;这里只管"再来一张"和换房号。
+                 * 只在主机侧显示——客人的 roomCode 是自己那个房间的 */
                 roomCode && !guestFlow && phase !== 'host_booting'
-                  ? (invitePhase
-                    ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { setAnswerText(''); sendCmd('invite_refresh', { kind: 'invite' }) } }, '♻️ 换一张邀请码重试')
-                    : h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { setAnswerText(''); sendCmd('invite_refresh', { kind: 'invite' }) } }, '📨 生成邀请码'))
+                  ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh', { kind: 'invite' }) } }, '📨 生成邀请码')
                   : null,
                 roomCode && !guestFlow && (phase === 'room_open' || phase === 'mqtt_waiting' || phase === 'hosting')
                   ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一个房号')
@@ -1585,16 +1700,18 @@ window.__ModuleLoader__.load({
                   })()),
                   h('button', { className: 'nnk-copy nnk-danger', style: { marginTop: '0' }, onClick: function () { leaveRoom(true) } }, '🗑 解散'))
                 : null,
-              inviteEv
-                ? h('div', { style: { marginTop: '10px' } },
-                  e('div', 'nnk-label', '邀请码(整段复制发给朋友,进的是同一个房间)'),
-                  codeAgeText(inviteEv.ts) ? e('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(inviteEv.ts)) : null,
-                  h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: (inviteEv.data && inviteEv.data.code) || '' }),
-                  h('button', { className: 'nnk-copy', onClick: function () { copyText((inviteEv.data && inviteEv.data.code) || '') } }, '📋 复制邀请码'),
-                  e('div', 'nnk-label', '朋友回发的「回执码」粘贴到这里'),
-                  h('textarea', { className: 'nnk-textarea nnk-code', value: answerText, onChange: function (ev) { setAnswerText(ev.target.value) }, placeholder: '粘贴客人的回执码…' }),
-                  h('button', { className: 'nnk-copy', onClick: function () { sendCmd('accept_answer', { code: answerText }) } }, '🔗 连接'))
-                : null),
+              /* 邀请码:列表常驻在「房间大厅」里,这里给汇总入口——有码在等结果时
+               * 一眼看到有几张,点它直接打开大厅并展开第一张的「粘回执码」 */
+              roomCode && !guestFlow && (function () {
+                var rows = inviteRows();
+                var pend = rows.filter(function (r) { return r.status === 'pending'; });
+                var answering = rows.filter(function (r) { return r.status === 'answering'; });
+                if (!pend.length && !answering.length) return null;
+                return h('button', { className: 'nnk-copy', style: { marginTop: '8px' }, onClick: function () {
+                  if (pend.length) setOpenAns(pend[0].id);
+                  setRoomPopupOpen(true);
+                } }, '📨 ' + (pend.length ? pend.length + ' 张邀请码等回执码' + (answering.length ? '(另 ' + answering.length + ' 张在打通)' : '') : answering.length + ' 张邀请码正在打通') + ' → 去粘贴/复制');
+              })()),
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '🔗 我要加入')),
               e('div', 'nnk-hint', '输入 6 位房号,点「加入」,直连打通后自动进房;房间坐满会排队,有空位自动进。'),
@@ -1614,13 +1731,30 @@ window.__ModuleLoader__.load({
                   e('div', 'nnk-label', '粘贴房主的邀请码'),
                   e('div', 'nnk-hint', '房号连不上时房主会给你这一段——进的是同一个房间,一样在大厅等房主载入。'),
                   h('textarea', { className: 'nnk-textarea nnk-code', value: offerText, onChange: function (ev) { setOfferText(ev.target.value) }, placeholder: '粘贴房主的邀请码…' }),
-                  h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow || guestFlow, onClick: function () { sendCmd('join_invite', { code: offerText }) } }, '生成回执码'),
+                  h('div', { className: 'nnk-row', style: { marginTop: '0' } },
+                    h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow || guestFlow, onClick: function () { sendCmd('join_invite', { code: offerText }) } }, '生成回执码'),
+                    /* 重新来过:清掉当前这一轮的会话与输入,重新贴一张新码(房主换了码、
+                     * 或自己贴错时不用等超时,也不用刷新页面)。已经进了游戏/正在进房
+                     * 时不摆这个按钮——那时点它等于"退游戏重来",不该藏在弹窗化流程里 */
+                    (phase === 'joining' || phase === 'answer_ready' || phase === 'lobby_waiting' || phase === 'queued')
+                      ? h('button', { className: 'nnk-copy', disabled: !bridgeOnline, onClick: function () {
+                        sendCmd('cancel');
+                        setOfferText('');
+                        setNote('↺ 已清空,重新粘贴房主的新邀请码即可');
+                      } }, '↺ 重新来过')
+                      : null,
+                    (guestFlow && !roomCode)
+                      ? h('button', { className: 'nnk-copy', disabled: !bridgeOnline, onClick: function () { leaveRoom(false) } }, '✖ 取消加入')
+                      : null),
                   answerEv
                     ? h('div', { style: { marginTop: '10px' } },
                       e('div', 'nnk-label', '回执码(发回给房主)'),
-                      codeAgeText(answerEv.ts) ? e('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(answerEv.ts)) : null,
+                      codeAgeText(answerEv.ts) ? e('div', 'nnk-hint', { style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(answerEv.ts)) : null,
                       h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: (answerEv.data && answerEv.data.code) || '' }),
-                      h('button', { className: 'nnk-copy', onClick: function () { copyText((answerEv.data && answerEv.data.code) || '') } }, '📋 复制回执码'))
+                      h('div', { className: 'nnk-row', style: { marginTop: '0' } },
+                        h('button', { className: 'nnk-copy', onClick: function () { copyText((answerEv.data && answerEv.data.code) || '') } }, '📋 复制回执码'),
+                        /* 弹窗误触收起后不必慌张:这里能把回执码窗口再弹回来 */
+                        h('button', { className: 'nnk-copy', onClick: function () { setAnswerPopupDismissed('') } }, '🔎 再看一次')))
                     : null)
                 : h('button', { className: 'nnk-copy', onClick: function () { setShowInviteFallback(true) } }, '📨 收到邀请码?从这里加入…')),
             /* 左栏收口(主机+加入+两块折叠配置):折叠卡进栏内,跟着本栏紧凑
@@ -1646,8 +1780,12 @@ window.__ModuleLoader__.load({
           : null,
         note ? e('div', { className: 'nnk-dash-full ' + (note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err') }, note) : null,
         roomPopupOpen && roomCode ? renderRoomModal() : null,
-        phase === 'invite_ready' && inviteEv && (inviteEv.data && inviteEv.data.code) && invitePopupDismissed !== inviteEv.data.code
-          ? renderInviteModal(inviteEv) : null,
+        /* 新码弹窗(按行号):生成后自动弹一次;误触收起不影响——列表里随时能复制,
+         * 那行的「🔎 再看」也能重开 */
+        (function () {
+          var row = invPop.popped && invPop.dismissed !== invPop.popped ? inviteRowById(invPop.popped) : null;
+          return row && row.status === 'pending' && row.code ? renderInviteModal(row) : null;
+        })(),
         phase === 'answer_ready' && answerEv && (answerEv.data && answerEv.data.code) && answerPopupDismissed !== answerEv.data.code
           ? renderAnswerModal(answerEv) : null
         );

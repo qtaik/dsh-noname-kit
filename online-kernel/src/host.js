@@ -18,14 +18,19 @@
 		stage: null,          /* lobby=P2P 大厅(未进引擎) | loaded=引擎房间已建 */
 		roomCode: null,
 		reuseCode: null,      /* 打完一把重载重组:接力上局的房号,客人自动重进 */
-		inviteAt: 0,          /* 当前邀请码生成时刻:候选地址会随 NAT 映射过期,时效提示用 */
+		invites: [],          /* 邀请码列表(一客一张,可同时挂多张):见 startInvite */
+		inviteSeq: 0,         /* 邀请码行号自增(列表里按行号定位:粘回执码/作废) */
 		bridges: [],
-		invitePc: null,
 		mqttSession: null,
 		presenceTimer: null,
-		mqttGen: 0,           /* 信令会话代号:startMqtt 递增,作废迟到会话用 */
-		inviteGen: 0          /* 邀请码代号:startInvite 递增,作废还在收候选的旧码 */
+		mqttGen: 0            /* 信令会话代号:startMqtt 递增,作废迟到会话用 */
 	};
+
+	/* 一张邀请码最多同时挂几张:候选地址会随 NAT 映射过期,挂多了也没用,
+	 * 还白占本机端口;超了就挤掉最老的那张(列表里留痕,不静默消失) */
+	var MAX_PENDING_INVITES = 6;
+	/* 列表总行数上限(含已用/失效的历史行):超了从最老的失效行开始扔 */
+	var MAX_INVITE_ROWS = 12;
 
 	function bridgeApi() {
 		return nnk.modules.bridge;
@@ -126,7 +131,7 @@
 		});
 		emitRoomMembers();
 		if (admitted > 0) {
-			bridgeApi().setPhase("room_open", { roomCode: hostState.roomCode, signaling: hostState.signaling });
+			settleInvitePhase();   /* 还有码在等回执就停在 invite_ready,否则 room_open */
 			bridgeApi().emit("guest_connected", { guests: enteredGuests });
 		}
 	}
@@ -381,6 +386,10 @@
 							name: String(msg2.nnk_hello.name || "").slice(0, 12) || "客人",
 							avatar: (nnk.env.lib.translate[av] || av)
 						};
+						/* 邀请码门进来的:名字写回那一行,列表里就能看到"谁在用这张码" */
+						if (conn._invite) {
+							conn._invite.guest = conn._member.name;
+						}
 						emitRoomMembers();
 					}
 				} catch (e3) { /* 非内核协议消息忽略 */ }
@@ -388,8 +397,9 @@
 			/* 新人一进来就推一份成员表:客人开弹窗不再先看到 0 人
 			 * (hello 只在他那侧发出后才会到,这中间有空窗) */
 			emitRoomMembers();
-			/* 阶段归位:客人可能正是刚生成邀请码才来的,「等回执码」到此结束 */
-			bridgeApi().setPhase("mqtt_waiting", { roomCode: hostState.roomCode, stage: "lobby" });
+			/* 阶段收口:这位客人可能正是拿某张邀请码来的(那张码转「已使用」),
+			 * 还有别的码在等就继续停在等回执——交给统一的阶段收口函数 */
+			settleInvitePhase();
 			return;
 		}
 		/* 等待队列门禁:房主占 1 席,客人按模式容量进入,超员排队等空位 */
@@ -407,9 +417,9 @@
 		env.lib.init.connection(conn);
 		conn._entered = true;
 		emitRoomMembers();
-		/* 上报 room_open:工坊据此把「房号就绪…等朋友加入」换成
-		 * 「客人已连接,游戏里点开始游戏」(此前无阶段承载,文案是死的) */
-		bridgeApi().setPhase("room_open", { roomCode: hostState.roomCode, signaling: hostState.signaling });
+		/* 上报 room_open(工坊据此把「房号就绪…等朋友加入」换成「客人已连接」),
+		 * 但还有邀请码在等回执时会停在 invite_ready——统一走阶段收口 */
+		settleInvitePhase();
 		bridgeApi().emit("guest_connected", { guests: enteredGuests + 1 });
 	}
 
@@ -437,7 +447,7 @@
 				env.lib.init.connection(b);
 				b._entered = true;
 				emitRoomMembers();
-				bridgeApi().setPhase("room_open", { roomCode: hostState.roomCode, signaling: hostState.signaling });
+				settleInvitePhase();
 				bridgeApi().emit("guest_connected", { guests: enteredGuests + 1 });
 				return;
 			}
@@ -531,20 +541,34 @@
 		hostState.bridges = [];
 	}
 
-	/* 邀请码门(按需生成,一客一张):主机是 offer 方(邀请码→客人回执码→工坊粘贴回执)。
-	 * 通道打通后与房号门走同一套接客流程——共用成员表/容量队列/载入流程 */
+	/* 邀请码门(按需生成,一客一张,可同时挂多张):主机是 offer 方
+	 * (邀请码→客人回执码→工坊把那行的回执码贴回来)。每张码自己一条 pc、
+	 * 自己的状态与看门狗,互不影响——两个朋友可以同时拿码、同时进来。
+	 * 通道打通后与房号门走同一套接客流程(共用成员表/容量队列/载入流程) */
 	function startInvite() {
-		/* 幂等:上一次邀请还挂着就先关掉(重复换码),防泄漏与误应答 */
-		if (hostState.invitePc) {
-			try { hostState.invitePc.close(); } catch (e) { /* 忽略 */ }
-			hostState.invitePc = null;
+		/* 上限:挂满就挤掉最老的那张待用码(它多半已经过期了) */
+		var pending = [];
+		hostState.invites.forEach(function(it) {
+			if (it.status === "pending") {
+				pending.push(it);
+			}
+		});
+		if (pending.length >= MAX_PENDING_INVITES) {
+			retireInvite(pending[0], "挂着太久,已自动作废");
 		}
-		/* 代号:连点两次生成时,先点那张码可能还在收 ICE 候选(还没挂上 invitePc),
-		 * 等它落地就把新的盖掉、自己变成没人认领的野连接——收尾时比对代号,
-		 * 过期的直接关掉(与 startMqtt 的 mqttGen 同款) */
-		var gen = hostState.inviteGen = (hostState.inviteGen || 0) + 1;
+		var entry = {
+			id: ++hostState.inviteSeq,
+			pc: null,
+			code: "",
+			at: Date.now(),
+			status: "pending",   /* pending 等回执 → answering 打通中 → used 已用 / dead 失效 */
+			guest: "",           /* 客人的名字(停车报 hello 时补上) */
+			note: ""             /* 失效原因(列表里给人看) */
+		};
+		hostState.invites.push(entry);
+		pruneInvites();
 		var pc = new RTCPeerConnection(rtc.pcConfig());
-		var settled = false;
+		entry.pc = pc;
 		var channel = pc.createDataChannel("nnk-link", { ordered: true });
 		/* 专用心跳线(主机侧建两条,客人按 label 分流):保温+秒级判死 */
 		var pingChannel = pc.createDataChannel("nnk-ping", { ordered: true });
@@ -555,16 +579,20 @@
 			});
 		};
 		channel.onopen = function() {
-			if (settled) {
+			if (entry.status === "used") {
 				return;
 			}
-			settled = true;
-			/* 这张 pc 已经转为在座客人的承载连接,必须从"待应答"位上摘掉:
-			 * 否则下一次生成邀请码会把它 close 掉,等于踢掉已坐下的客人 */
-			hostState.invitePc = null;
-			/* 与房号门完全同款:停车场/门禁/进引擎都交给公共流程——
-			 * 房满不再是拒收(full),而是进等待队列,空位自动补进 */
+			if (entry.status === "dead") {
+				/* 这张码已被作废(或自动过期),只是通道凑巧抢先打通:不放行
+				 * ——关掉它,客人端按"连接断了"收场 */
+				try { pc.close(); } catch (eD2) { /* 忽略 */ }
+				return;
+			}
+			/* 这张码的使命完成:转"已使用"(列表里留痕),连接交给公共接客流程 */
+			entry.status = "used";
+			entry.note = "";
 			var conn = new rtc.HostBridge(channel);
+			conn._invite = entry;   /* 客人报 hello 时把名字写回这一行 */
 			registerBridge(conn, pc);
 			handleNewBridge(conn);
 		};
@@ -573,41 +601,147 @@
 		}).then(function() {
 			return rtc.waitGather(pc);
 		}).then(function() {
+			if (entry.status === "dead") {
+				return;   /* 生成期间被作废/挤掉:关连接已在 retireInvite 里做了 */
+			}
 			if (!hostState.active) {
-				/* 生成邀请码期间被取消:这张码作废,别把已取消的邀请挂回去 */
-				try { pc.close(); } catch (e) { /* 忽略 */ }
+				/* 生成期间被取消:这张码作废,别把已取消的邀请挂回去 */
+				retireInvite(entry, "房间已解散");
 				return;
 			}
-			if (hostState.inviteGen !== gen) {
-				/* 已被更新的那张码取代(连点两次):这张没人认领,关掉防泄漏 */
-				try { pc.close(); } catch (e2) { /* 忽略 */ }
-				return;
-			}
-			hostState.invitePc = pc;
-			hostState.inviteAt = Date.now();
-			bridgeApi().setPhase("invite_ready", { roomCode: hostState.roomCode });
-			bridgeApi().emit("invite_ready", { code: rtc.encodeCode("offer", pc.localDescription) });
+			entry.code = rtc.encodeCode("offer", pc.localDescription);
+			bridgeApi().emit("invite_ready", { id: entry.id, code: entry.code });
+			settleInvitePhase();
+			/* 自动过期:候选地址本来就活不过几分钟,一张没人用的码挂 10 分钟
+			 * 基本已经死了——标失效留痕并让出端口,免得列表里全是"等回执码" */
+			setTimeout(function() {
+				if (entry.status === "pending") {
+					retireInvite(entry, "放太久已失效,请重新生成");
+				}
+			}, 10 * 60 * 1000);
 		}).catch(function(err) {
-			try { pc.close(); } catch (e) { /* 清理半程 pc,防泄漏 */ }
+			retireInvite(entry, "生成失败");
 			console.error("[联机助手] 生成邀请码失败", err);
 			bridgeApi().emit("error", { message: "生成邀请码失败: " + (err.message || err) });
 		});
 	}
 
-	/* 应答后的连接监视:ICE 打不通时绝不能无声悬挂(实测教训——第一版在
-	 * 协商成功后静默挂死,用户以为没反应反复点连接,只会收到 wrong state 报错)。
-	 * 失败/超时都自动换一张新邀请码,客人重新走一遍即可。 */
-	function watchHostConnection(pc) {
-		var dead = false;
-		var giveUp = function(reason) {
-			if (dead || hostState.invitePc !== pc) {
-				return;   /* 已连上(连接建立时 invitePc 会被摘牌)或已换过码 */
+	/* 作废一张码:关掉它的连接、在列表里标失效留痕。已使用(used)的行不动
+	 * ——那条 pc 就是客人正在用的通道,关掉等于把人踢出房间 */
+	function retireInvite(entry, note) {
+		if (!entry) {
+			return;
+		}
+		if (entry.status === "used") {
+			return;
+		}
+		if (entry.pc) {
+			try { entry.pc.close(); } catch (e) { /* 忽略 */ }
+		}
+		entry.status = "dead";
+		entry.note = note || "已作废";
+		settleInvitePhase();
+	}
+
+	/* 整表清空(解散房间/另建新房时用):未使用的关连接标失效,已使用的只摘册
+	 * ——那条 pc 就是客人正在用的通道,引擎自己管着,内核不能关 */
+	function clearInvites(note) {
+		hostState.invites.forEach(function(it) {
+			if (it.status !== "used" && it.pc) {
+				try { it.pc.close(); } catch (e) { /* 忽略 */ }
 			}
-			dead = true;
-			bridgeApi().emit("error", { message: reason + "。已自动生成新邀请码——常见原因是码放太久(里面的候选地址过期)或防火墙拦 UDP:新码生成后要马上发给朋友马上用,别攒" });
-			hostState.invitePc = null;
+			if (it.status !== "used") {
+				it.status = "dead";
+				it.note = note || "已作废";
+			}
+		});
+		hostState.invites = [];
+	}
+
+	/* 列表行数上限:超了从最老的失效行开始扔(还在用/还在等的行不丢) */
+	function pruneInvites() {		while (hostState.invites.length > MAX_INVITE_ROWS) {
+			var i = 0;
+			while (i < hostState.invites.length && hostState.invites[i].status !== "dead") {
+				i++;
+			}
+			if (i >= hostState.invites.length) {
+				return;
+			}
+			hostState.invites.splice(i, 1);
+		}
+	}
+
+	/* 按行号找码;不带行号(旧客户端的 accept_answer 只有 code)= 最新的那张待用码 */
+	function findInvite(id) {
+		var i;
+		if (id) {
+			for (i = 0; i < hostState.invites.length; i++) {
+				if (hostState.invites[i].id === id) {
+					return hostState.invites[i];
+				}
+			}
+			return null;
+		}
+		for (i = hostState.invites.length - 1; i >= 0; i--) {
+			if (hostState.invites[i].status === "pending") {
+				return hostState.invites[i];
+			}
+		}
+		return null;
+	}
+
+	/* 邀请码的临时阶段收口:只要还有码在等回执/在打通,阶段就停在
+	 * invite_ready/connecting(旧客户端靠这两个阶段渲染码和粘贴框);
+	 * 都收尾了就回到房间本来的阶段(大厅等待/等待房/客人已连接) */
+	function settleInvitePhase() {
+		if (!hostState.active || !hostState.roomCode) {
+			return;   /* 房间没了:由 cancelAll 收尾,这里不抢阶段 */
+		}
+		var hasAnswering = false;
+		var hasPending = false;
+		hostState.invites.forEach(function(it) {
+			if (it.status === "answering") {
+				hasAnswering = true;
+			}
+			if (it.status === "pending") {
+				hasPending = true;
+			}
+		});
+		if (hasAnswering) {
+			bridgeApi().setPhase("connecting", { roomCode: hostState.roomCode });
+			return;
+		}
+		if (hasPending) {
+			bridgeApi().setPhase("invite_ready", { roomCode: hostState.roomCode });
+			return;
+		}
+		if (hostState.stage === "lobby") {
+			bridgeApi().setPhase("mqtt_waiting", { roomCode: hostState.roomCode, stage: "lobby" });
+			return;
+		}
+		var entered = hostState.bridges.some(function(b) { return b._entered; });
+		bridgeApi().setPhase(entered ? "room_open" : "hosting", { roomCode: hostState.roomCode, signaling: hostState.signaling });
+	}
+
+	/* 一张码的连接监视:ICE 打不通时绝不能无声悬挂(实测教训——第一版在协商
+	 * 成功后静默挂死,用户以为没反应反复点连接,只会收到 wrong state 报错)。
+	 * 失败/超时:这一行标失效,并自动补一张新码(落在列表里,位置清楚) */
+	function watchInviteConnection(entry) {
+		var pc = entry.pc;
+		var done = false;
+		var giveUp = function(reason) {
+			if (done || entry.status !== "answering") {
+				return;   /* 已打通(→used)或已收场 */
+			}
+			done = true;
+			entry.status = "dead";
+			entry.note = reason;
 			try { pc.close(); } catch (e) { /* 忽略 */ }
-			startInvite();
+			bridgeApi().emit("error", { message: "第 " + entry.id + " 张邀请码" + reason + "。已自动补一张新码——常见原因是码放太久(里面的候选地址过期)或防火墙拦 UDP:新码要马上发马上用" });
+			if (hostState.active) {
+				startInvite();
+			}
+			settleInvitePhase();
 		};
 		pc.onconnectionstatechange = function() {
 			if (pc.connectionState === "failed") {
@@ -818,8 +952,9 @@
 				return;
 			}
 			/* 大厅路径:瞬间完成,不重载不进游戏。
-			 * 上一次会话停泊的客人(大厅/排队)不带走:通知散场再开新房 */
+			 * 上一次会话停泊的客人(大厅/排队)与旧邀请码都不带走:通知散场再开新房 */
 			closeParkedBridges();
+			clearInvites("房间已重建");
 			hostState.stage = "lobby";
 			hostState.active = true;
 			hostState.roomMode = mode;
@@ -850,9 +985,9 @@
 			emitRoomMembers();
 		},
 
-		/* 一个按钮两种用途:kind==="invite" = 按需生成一张邀请码(可多张、一客一张);
-		 * 不带 kind = 换一个房号(轮换房号门) */
-		refreshInvite: function(kind) {
+		/* 一个按钮多种用途:kind==="invite" = 按需生成一张新邀请码(可多张同时挂);
+		 * kind==="cancel" = 作废指定那一张(id);不带 kind = 换一个房号(轮换房号门) */
+		refreshInvite: function(kind, id) {
 			var env = nnk.env;
 			if (!hostState.roomCode) {
 				bridgeApi().emit("error", { message: "还没有可用的房间,请先创建互联网房间" });
@@ -864,8 +999,20 @@
 				startInvite();
 				return;
 			}
+			if (kind === "cancel") {
+				/* 作废单张码(列表里那行的「作废」):只关它一条 pc,别的码不受影响 */
+				var entry = findInvite(id);
+				if (!entry || entry.status === "used") {
+					bridgeApi().emit("error", { message: "这张邀请码没法作废(已经用过了或不存在)" });
+					return;
+				}
+				retireInvite(entry, "已作废");
+				bridgeApi().emit("info", { message: "第 " + entry.id + " 张邀请码已作废" });
+				return;
+			}
 			/* 换房号:重生成房号并重挂信令(旧房号的心跳随之停止)。
-			 * 大厅阶段不碰引擎随时可换;等待房阶段要求引擎就绪(env_ready) */
+			 * 大厅阶段不碰引擎随时可换;等待房阶段要求引擎就绪(env_ready)。
+			 * 已发出的邀请码不跟着作废——它们自带 SDP,客人进来后拿到的是新房号 */
 			if (hostState.stage === "loaded" && !env_ready()) {
 				bridgeApi().emit("error", { message: "房间还没就绪,稍等一下再换房号" });
 				return;
@@ -877,16 +1024,22 @@
 			startMqtt();
 		},
 
-		acceptAnswer: function(codeText) {
-			var pc = hostState.invitePc;
-			if (!pc) {
+		/* 粘贴某一行的回执码并连接。id = 列表行号(旧客户端不带 id:当最新那张待用码) */
+		acceptAnswer: function(id, codeText) {
+			var entry = findInvite(id);
+			if (!entry) {
 				bridgeApi().emit("error", { message: "没有待应答的邀请——先点「📨 生成邀请码」把码发给朋友" });
 				return;
 			}
+			var pc = entry.pc;
+			if (entry.status !== "pending" || !pc) {
+				bridgeApi().emit("error", { message: "第 " + entry.id + " 张邀请码已经用过或已作废——回执码请贴到还显示「等回执码」的那一行" });
+				return;
+			}
 			/* 一张邀请码只能被应答一次:协商完成后 signalingState 回到 stable,
-			 * 再粘同一条回执码会报 wrong state——正确动作是换一张新邀请码重试 */
+			 * 再粘同一条回执码会报 wrong state——正确动作是作废这张、换一张新码 */
 			if (pc.signalingState !== "have-local-offer") {
-				bridgeApi().emit("error", { message: "这张邀请码已经协商过了(客人没进来说明直连没打通)。点「♻️ 换一张邀请码重试」,让客人用新码重新走一遍" });
+				bridgeApi().emit("error", { message: "第 " + entry.id + " 张邀请码已经协商过了(客人没进来说明直连没打通)。作废它再生成一张新码,让客人重新走一遍" });
 				return;
 			}
 			var data;
@@ -900,14 +1053,15 @@
 				return;
 			}
 			pc.setRemoteDescription(data.sdp).then(function() {
-				bridgeApi().setPhase("connecting", { roomCode: hostState.roomCode });
+				entry.status = "answering";
+				settleInvitePhase();
 				/* 码龄预警:邀请码里的 ICE 候选跟着 NAT 端口映射活,映射几十秒到几
 				 * 分钟就过期——实测放 14 分钟的码必失败。粘码时先报个龄,失败了别懵 */
-				var ageMin = hostState.inviteAt ? Math.round((Date.now() - hostState.inviteAt) / 60000) : 0;
+				var ageMin = entry.at ? Math.round((Date.now() - entry.at) / 60000) : 0;
 				if (ageMin >= 3) {
-					bridgeApi().emit("info", { message: "这张邀请码已生成 " + ageMin + " 分钟——码放太久,里面的候选地址基本过期了,直连大概率失败;失败后点「📨 生成邀请码」换一张,新码要马上发马上用" });
+					bridgeApi().emit("info", { message: "第 " + entry.id + " 张邀请码已生成 " + ageMin + " 分钟——码放太久,里面的候选地址基本过期了,直连大概率失败;失败会自动补一张新码,新码要马上发马上用" });
 				}
-				watchHostConnection(pc);
+				watchInviteConnection(entry);
 			}).catch(function(err) {
 				bridgeApi().emit("error", { message: "回执码无效: " + (err.message || err) });
 			});
@@ -964,10 +1118,8 @@
 			 * 恢复显示(那个房号的信令早已拆掉,朋友加入只会扑空) */
 			hostState.roomCode = null;
 			hostState.roomMode = null;
-			if (hostState.invitePc) {
-				try { hostState.invitePc.close(); } catch (e) { /* 忽略 */ }
-				hostState.invitePc = null;
-			}
+			/* 邀请码整体作废(清表:房间都没了,这些码不该再出现) */
+			clearInvites("房间已解散");
 			/* 大厅/排队的客人收到 nnk_stage=closed 立即散场,不会永远挂在排队页 */
 			closeParkedBridges();
 			cleanupMqtt();

@@ -50,10 +50,13 @@
 				guest.joinByRoomCode(args.code);
 				break;
 			case "invite_refresh":
-				host.refreshInvite(args.kind);   /* kind="invite"=生成一张邀请码,否则换房号 */
+				/* kind="invite"=生成一张新码(可多张);kind="cancel"=作废第 id 张;
+				 * 不带 kind=换房号 */
+				host.refreshInvite(args.kind, args.id);
 				break;
 			case "accept_answer":
-				host.acceptAnswer(args.code);
+				/* id=列表行号(旧客户端不带:当最新那张待用码) */
+				host.acceptAnswer(args.id, args.code);
 				break;
 			case "join_invite":
 				guest.joinByInvite(args.code);
@@ -152,7 +155,21 @@
 						} catch (e2) { /* 忽略 */ }
 						return { version: nnk.version, stage: nnk.state.bootStage || "booting", role: role };
 					})(),
-					state: state,
+					/* 邀请码列表的元数据(id/状态/生成时刻/客人名,不含码正文——正文走
+					 * 事件流,不给 0.7 秒一轮的心跳塞几 KB 的 SDP)。并进 state 下发:
+					 * 工坊读 bridge.state.*,并跟着房间状态一起过期(30 秒宽限) */
+					state: Object.assign({}, state, {
+						invites: (function() {
+							try {
+								var hs = nnk.state.host;
+								return ((hs && hs.invites) || []).map(function(it) {
+									return { id: it.id, status: it.status, at: it.at, guest: it.guest || "", note: it.note || "" };
+								});
+							} catch (e3) {
+								return [];
+							}
+						})()
+					}),
 				cfg: {
 					unlockUIExtensions: !!nnk.modules.config.get("unlockUIExtensions"),
 					autoUnlockExtensions: !!nnk.modules.config.get("autoUnlockExtensions"),
