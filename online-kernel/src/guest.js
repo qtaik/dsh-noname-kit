@@ -313,10 +313,10 @@
 			fake.onDown(function() {
 				if (guestState.session === session) {
 					guestState.session = null;
-					/* 打完一把主机端重组:连接突然断开且对局已结束,自动同房号重进 */
-					if (session.wasIn && session.code && nnk.env._status.over && nnk.env._status.connectMode) {
+					/* 房号房间的通道断开(主机重组/换模式重载/掉线)一律自动重回:
+					 * 主机真退了的话重试穷尽后会给明确提示 */
+					if (session.wasIn && session.code && nnk.env._status.connectMode) {
 						bridgeApi().setPhase("joining", { code: session.code });
-						guestState.rejoinCode = session.code;
 						autoRejoin(session.code, 8);
 						return;
 					}

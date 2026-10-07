@@ -1424,6 +1424,12 @@ window.__ModuleLoader__.load({
                   h('div', { className: 'nnk-cmd', style: { fontSize: '24px', fontWeight: '700', letterSpacing: '6px', padding: '8px 16px' } }, roomCode),
                   h('button', { className: 'nnk-copy', onClick: function () { copyText(roomCode) } }, '📋 复制房号'))
                 : null,
+              roomCode && (phase === 'hosting' || phase === 'mqtt_waiting' || phase === 'room_open') && (bridge.state && bridge.state.signaling) !== 'invite'
+                ? h('div', { style: { marginTop: '10px' } },
+                  e('div', 'nnk-label', '下一把模式(用上面那排单选,点重开生效)'),
+                  h('button', { className: 'nnk-submit', style: { marginTop: '0' }, onClick: function () { sendCmd('restart_room', { mode: mode }) } }, '🔄 按所选模式重开一局'),
+                  e('div', 'nnk-hint', '重开后房号不变,客人自动重回;对局中不可重开。'))
+                : null,
               inviteEv
                 ? h('div', { style: { marginTop: '10px' } },
                   e('div', 'nnk-label', '邀请码(整段复制发给朋友)——备用方式'),

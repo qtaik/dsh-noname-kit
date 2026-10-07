@@ -356,9 +356,10 @@
 			 *   (实测:重载后引擎拿不到直启标记,卡在纯背景页)——必须等两个写入
 			 *   的回调落地再重载,1.5 秒兜底防写库挂死。
 			 * 邀请码模式的 SDP 一次性无法复用,仍是重载即散(备用方式不变) */
-			if (!env.game.__nnkReloadPatched) {
-				env.game.__nnkReloadPatched = true;
-				var origReload = env.game.reload;
+				if (!env.game.__nnkReloadPatched) {
+					env.game.__nnkReloadPatched = true;
+					var origReload = env.game.reload;
+					hostState.origReload = origReload;   /* 工坊「重开一局」复用同一重载 */
 				env.game.reload = function() {
 					try {
 						if (hostState.active && hostState.roomCode && hostState.signaling === "mqtt"
@@ -524,6 +525,44 @@
 	}).catch(function(err) {
 		bridgeApi().emit("error", { message: "回执码无效: " + (err.message || err) });
 	});
+		},
+
+		/* 工坊大厅:按所选模式重开一局(原房号不变,客人自动重回)。
+		 * 等待房/结算屏都可以点;对局进行中拒绝。 */
+		restartRoom: function(mode) {
+			var env = nnk.env;
+			if (!hostState.active || !hostState.roomCode || hostState.signaling !== "mqtt") {
+				bridgeApi().emit("error", { message: "还没有房号模式的房间可以重开" });
+				return;
+			}
+			mode = String(mode || env._status.mode || "identity");
+			if (["identity", "guozhan", "versus", "doudizhu", "single"].indexOf(mode) < 0) {
+				bridgeApi().emit("error", { message: "不支持的模式: " + mode });
+				return;
+			}
+			if (env.game.players && env.game.players.length && !env._status.over && !env._status.waitingForPlayer) {
+				bridgeApi().emit("error", { message: "对局还没打完,结束后再重开" });
+				return;
+			}
+			try {
+				localStorage.setItem(env.lib.configprefix + "nnk_host_pending", JSON.stringify({ mode: mode, signaling: "mqtt" }));
+				localStorage.setItem(env.lib.configprefix + "nnk_host_roomcode", hostState.roomCode);
+				localStorage.setItem(env.lib.configprefix + "directstart", "true");
+			} catch (e) { /* 忽略 */ }
+			bridgeApi().emit("info", { message: "正在按「" + (env.lib.translate[mode] || mode) + "」重开房间(原房号 " + hostState.roomCode + ",客人自动重回)…" });
+			var waits = 2;
+			var gone = false;
+			var go = function() {
+				if (gone) {
+					return;
+				}
+				gone = true;
+				hostState.origReload.apply(env.game);
+			};
+			/* 与「重新开始」同款:配置写库回调落地后再重载(1.5 秒兜底) */
+			env.game.saveConfig("directstartmode", mode, null, go);
+			env.game.saveConfig("mode", "connect", null, go);
+			setTimeout(go, 1500);
 		},
 
 		cancelAll: function() {

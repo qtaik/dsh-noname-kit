@@ -37,9 +37,12 @@
 		var guest = nnk.modules.guest;
 		var args = cmd.args || {};
 		switch (cmd.action) {
-			case "create_room":
-				host.createInternetRoom(args.mode, args.signaling);
-				break;
+				case "create_room":
+					host.createInternetRoom(args.mode, args.signaling);
+					break;
+				case "restart_room":
+					host.restartRoom(args.mode);
+					break;
 			case "join_room":
 				guest.joinByRoomCode(args.code);
 				break;
