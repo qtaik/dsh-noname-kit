@@ -117,7 +117,17 @@ window.__ModuleLoader__.load({
     }
     // e(tag, className, ...children):className 为字符串(可为空串);子元素数量不限。
     function e(tag, className) {
+      /* 已知坑(实测白屏事故):e 只吃 (tag, className, ...子节点),把内联样式写成
+       * e('div','cls',{style:…},文本) 时,那个纯对象会被当**子节点**渲染 → React
+       * 报「object with keys {style}」→ 整个浮窗被槽位吞成空白,且没有红字。
+       * 这里把"看起来像 props 的纯对象"当手滑拦下(改用 h),顺带把错误喊出来——
+       * 只有真手滑才走这个分支,正常调用零成本 */
       var kids = Array.prototype.slice.call(arguments, 2);
+      if (kids.length && kids[0] && typeof kids[0] === 'object' && !Array.isArray(kids[0]) && !kids[0].$$typeof) {
+        console.error('[联机助手] e() 手滑:第 3 个参数是对象,已按 props 处理(该用 h)——', tag, className, Object.keys(kids[0]), new Error('e').stack);
+        var shifted = Object.assign({ className: className }, kids[0]);
+        return h.apply(null, [tag, shifted].concat(kids.slice(1)));
+      }
       var props = className ? { className: className } : {};
       return h.apply(null, [tag, props].concat(kids));
     }
@@ -1333,7 +1343,10 @@ window.__ModuleLoader__.load({
           body: h('div', {},
             e('div', 'nnk-hint', '1. 点「复制」把整段邀请码发给朋友;2. 朋友在「我要加入 → 📨 收到邀请码?从这里加入」粘贴,把生成的「回执码」发回给你;3. 回执码贴到下面(或列表里第 #' + row.id + ' 行),点「连接」。他进的是同一个房间,一样在大厅等载入。'),
             row.status === 'pending' && Date.now() - (row.at || 0) >= 180000
-              ? e('div', 'nnk-hint', { style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, '⚠️ 这张码已生成 ' + Math.floor((Date.now() - row.at) / 60000) + ' 分钟——里面的候选地址基本过期了,直连大概率失败;作废它再生成一张新码,新码马上发马上用')
+              /* 带内联样式必须走 h(tag, {props}, 子节点):e 只吃 (tag, className, ...子节点),
+               * 写成 e(tag, className, {style}, 文本) 会把样式对象当子节点渲染 → React #31
+               * 「object with keys {style}」→ 整个工坊浮窗被槽位吞成空白(实测事故) */
+              ? h('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, '⚠️ 这张码已生成 ' + Math.floor((Date.now() - row.at) / 60000) + ' 分钟——里面的候选地址基本过期了,直连大概率失败;作废它再生成一张新码,新码马上发马上用')
               : null,
             e('div', 'nnk-label', '邀请码(整段复制)'),
             h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: row.code }),
@@ -1795,7 +1808,8 @@ window.__ModuleLoader__.load({
                   answerEv
                     ? h('div', { style: { marginTop: '10px' } },
                       e('div', 'nnk-label', '回执码(发回给房主)'),
-                      codeAgeText(answerEv.ts) ? e('div', 'nnk-hint', { style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(answerEv.ts)) : null,
+                      /* 同上:e(带样式对象)会炸整页——内联样式必须用 h */
+                      codeAgeText(answerEv.ts) ? h('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(answerEv.ts)) : null,
                       h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: (answerEv.data && answerEv.data.code) || '' }),
                       h('div', { className: 'nnk-row', style: { marginTop: '0' } },
                         h('button', { className: 'nnk-copy', onClick: function () { copyText((answerEv.data && answerEv.data.code) || '') } }, '📋 复制回执码'),
