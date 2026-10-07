@@ -1057,7 +1057,9 @@ window.__ModuleLoader__.load({
       var statusState = React.useState(null);
       var status = statusState[0], setStatus = statusState[1];
       var modeState = React.useState('identity');
-      var mode = modeState[0], setMode = modeState[1];
+      var roomMode = modeState[0], setRoomMode = modeState[1];
+      var roomPopState = React.useState(false);
+      var roomPopupOpen = roomPopState[0], setRoomPopupOpen = roomPopState[1];
       var answerIn = React.useState('');
       var answerText = answerIn[0], setAnswerText = answerIn[1];
       var offerIn = React.useState('');
@@ -1172,7 +1174,7 @@ window.__ModuleLoader__.load({
       var inviteEv = (phase === 'invite_ready' || phase === 'connecting') ? onlinePickEvent(evs, 'invite_ready') : null;
       var answerEv = (phase === 'joining' || phase === 'answer_ready' || phase === 'entering') ? onlinePickEvent(evs, 'answer_ready') : null;
       /* bridge.state 在内核首次心跳前是 null——房号一律走安全局部变量 */
-      var roomCode = (bridge.state && bridge.state.roomCode) || null;
+      var roomCode = (bridge.state && (bridge.state.roomCode || bridge.state.code)) || null;
       /* 渲染层任何异常都会被 slot 系统吞成空白(记忆坑),这里兜底把错误亮出来 */
       try {
         return renderOnlinePanel();
@@ -1364,6 +1366,51 @@ window.__ModuleLoader__.load({
           txEv ? e('div', { className: 'nnk-break', style: { marginTop: '6px' } }, onlineEventText(txEv)) : null);
       }
 
+      /* P2P 房间大厅弹窗:①模式+载入 ②成员 ③进入状态。客人=只读视角 */
+      function renderRoomModal() {
+        var membersEv = onlinePickEvent(evs, 'room_members');
+        var members = (membersEv && membersEv.data && membersEv.data.list) || [];
+        var MODE_COUNT = { identity: '2~8 人', guozhan: '2~8 人', versus: '2~8 人', doudizhu: '3~4 人', single: '2 人' };
+        return h('div', { className: 'nnk-modal-mask', onClick: function (ev) { if (ev.target === ev.currentTarget) setRoomPopupOpen(false) } },
+          h('div', { className: 'nnk-modal' },
+            e('div', 'nnk-modal-title', '🏛 P2P 房间大厅(房号 ' + (roomCode || '…') + ')'),
+            /* 块 1:模式 + 载入(主机专属;客人只读提示) */
+            hostFlow
+              ? h('div', {},
+                e('div', 'nnk-label', '① 模式(主机可随时换,应用到下一次载入)'),
+                h('div', { className: 'nnk-radios' },
+                  ONLINE_MODES.map(function (m) {
+                    return h('label', { key: m.id, className: 'nnk-radio' + (roomMode === m.id ? ' nnk-radio-on' : '') },
+                      h('input', { type: 'radio', name: 'nnk-room-mode', checked: roomMode === m.id, onChange: function () { setRoomMode(m.id) } }),
+                      m.name + '(' + (MODE_COUNT[m.id] || '?') + ')');
+                  })),
+                h('button', { className: 'nnk-submit', style: { marginTop: '10px' }, onClick: function () { sendCmd('restart_room', { mode: roomMode }); setNote('🚀 载入中——主机游戏重载一次,成员自动跟随进入'); } }, '🚀 载入到游戏(按所选模式)'))
+              : e('div', 'nnk-hint', '① 模式选择与载入由主机操作,你会在下方看到进入状态。'),
+            e('div', 'nnk-hint', '载入时主机的游戏会重载一次,成员自动重连进入,无需任何操作。开局/禁将在游戏内进行。'),
+            /* 块 2:成员 */
+            e('div', 'nnk-label', '② 房间成员'),
+            hostFlow
+              ? h('div', {},
+                e('div', 'nnk-hint', '👑 房主(你)'),
+                members.length
+                  ? members.map(function (mm, i) {
+                    return e('div', { key: i, className: 'nnk-hint' }, '👤 ' + mm.name + (mm.avatar ? '(' + mm.avatar + ')' : ''));
+                  })
+                  : e('div', 'nnk-hint', '暂无客人加入——把房号发给朋友。'))
+              : e('div', 'nnk-hint', '👤 你(客人)——已加入该房间。'),
+            /* 块 3:进入状态 */
+            e('div', 'nnk-label', '③ 进入状态'),
+            hostFlow
+              ? (members.length
+                ? members.map(function (mm, i) {
+                  return e('div', { key: i, className: 'nnk-hint' }, (mm.entered ? '✅ 已进入游戏房间:' : '⏳ 等待载入:') + mm.name);
+                })
+                : e('div', 'nnk-hint', '还没有成员,谈不上进入。'))
+              : e('div', 'nnk-hint', phase === 'connected' || phase === 'entering' ? '✅ 已进入游戏房间' : '⏳ 等待主机载入到游戏…'),
+            h('div', { className: 'nnk-modal-actions' },
+              h('button', { className: 'nnk-copy', onClick: function () { setRoomPopupOpen(false) } }, '收起(连接继续保持,可随时再打开)'))));
+      }
+
       function renderOnlinePanel() {
         return h('div', { className: 'nnk-dash' },
         h('div', { className: 'nnk-card nnk-dash-full' },
@@ -1400,35 +1447,20 @@ window.__ModuleLoader__.load({
             h('div', { key: 'col-host', className: 'nnk-col' },
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '🏠 我要当主机')),
-              e('div', 'nnk-hint', '选玩法 → 创建房间 → 房号发给朋友。开局在游戏里点「开始游戏」。'),
-              h('div', { className: 'nnk-radios', style: { marginTop: '8px' } },
-                ONLINE_MODES.map(function (m) {
-                  return h('label', { key: m.id, className: 'nnk-radio' + (mode === m.id ? ' nnk-radio-on' : '') },
-                    h('input', { type: 'radio', name: 'nnk-online-mode', checked: mode === m.id, onChange: function () { setMode(m.id) } }),
-                    m.name);
-                })),
+              e('div', 'nnk-hint', '创建 P2P 房间 → 房间大厅里选模式、载入到游戏,大家自动进入。开局/禁将在游戏里点。'),
               h('div', { className: 'nnk-row' },
-                h('button', { className: 'nnk-submit', style: { marginTop: '0' }, disabled: !bridgeOnline || guestFlow, onClick: function () { setAnswerText(''); setOfferText(''); sendCmd('create_room', { mode: mode, signaling: 'mqtt' }) } }, '🚀 创建互联网房间'),
+                h('button', { className: 'nnk-submit', style: { marginTop: '0' }, disabled: !bridgeOnline || guestFlow || hostFlow, onClick: function () { setAnswerText(''); setOfferText(''); sendCmd('create_room', { mode: roomMode }); setRoomPopupOpen(true) } }, '🏛 创建 P2P 房间'),
                 phase === 'room_open' && (bridge.state && bridge.state.signaling) === 'mqtt' ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一个房号')
                   : phase === 'room_open' ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '➕ 再邀请一位')
                   : phase === 'mqtt_waiting' ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一个房号')
                   : (phase === 'invite_ready' || phase === 'connecting') ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一张邀请码重试')
                   : null),
               !hostFlow && !guestFlow
-                ? h('button', { className: 'nnk-copy', disabled: !bridgeOnline, onClick: function () { setAnswerText(''); setOfferText(''); sendCmd('create_room', { mode: mode, signaling: 'invite' }) } }, '📨 房号反复连不上?改用邀请码方式建房(备用)')
+                ? h('button', { className: 'nnk-copy', disabled: !bridgeOnline, onClick: function () { setAnswerText(''); setOfferText(''); sendCmd('create_room', { mode: roomMode, signaling: 'invite' }) } }, '📨 房号反复连不上?改用邀请码方式建房(备用)')
                 : null,
               !bridgeOnline ? e('div', 'nnk-hint', '内核离线(先启动游戏)') : null,
-              roomCode && (phase === 'hosting' || phase === 'mqtt_waiting' || phase === 'connecting' || phase === 'room_open') && !inviteEv && (bridge.state && bridge.state.signaling) !== 'invite'
-                ? h('div', { style: { marginTop: '10px' } },
-                  e('div', 'nnk-label', '房号(就这 6 位,发给朋友)'),
-                  h('div', { className: 'nnk-cmd', style: { fontSize: '24px', fontWeight: '700', letterSpacing: '6px', padding: '8px 16px' } }, roomCode),
-                  h('button', { className: 'nnk-copy', onClick: function () { copyText(roomCode) } }, '📋 复制房号'))
-                : null,
-              roomCode && (phase === 'hosting' || phase === 'mqtt_waiting' || phase === 'room_open') && (bridge.state && bridge.state.signaling) !== 'invite'
-                ? h('div', { style: { marginTop: '10px' } },
-                  e('div', 'nnk-label', '下一把模式(用上面那排单选,点重开生效)'),
-                  h('button', { className: 'nnk-submit', style: { marginTop: '0' }, onClick: function () { sendCmd('restart_room', { mode: mode }) } }, '🔄 按所选模式重开一局'),
-                  e('div', 'nnk-hint', '重开后房号不变,客人自动重回;对局中不可重开。'))
+              roomCode && !roomPopupOpen
+                ? h('button', { className: 'nnk-copy', style: { marginTop: '8px' }, onClick: function () { setRoomPopupOpen(true) } }, '🏛 打开房间大厅(房号 ' + roomCode + ')')
                 : null,
               inviteEv
                 ? h('div', { style: { marginTop: '10px' } },
@@ -1445,6 +1477,9 @@ window.__ModuleLoader__.load({
               e('div', 'nnk-hint', '输入 6 位房号,点「加入」,房主同意后自动进房。'),
               h('input', { className: 'nnk-input', value: roomText, maxLength: 6, onChange: function (ev) { setRoomText(ev.target.value.toUpperCase()) }, placeholder: '输入 6 位房号,如 AB2C9X', style: { textTransform: 'uppercase', letterSpacing: '4px', fontSize: '16px' } }),
               h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow || guestFlow, onClick: function () { sendCmd('join_room', { code: roomText }) } }, '🚪 加入房间'),
+              (guestFlow || phase === 'connected') && roomCode
+                ? h('button', { className: 'nnk-copy', style: { marginTop: '8px' }, onClick: function () { setRoomPopupOpen(true) } }, '🏛 打开房间大厅')
+                : null,
               showInviteFallback
                 ? h('div', {},
                   e('div', 'nnk-label', '备用:粘贴房主的邀请码'),
@@ -1466,7 +1501,7 @@ window.__ModuleLoader__.load({
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '📡 动态')),
               h('div', { className: 'nnk-log' }, evs.length
-                ? evs.slice(-20).reverse().map(function (ev, i) {
+                ? evs.filter(function (ev2) { return ev2.type !== 'room_members'; }).slice(-20).reverse().map(function (ev, i) {
                   return e('div', { key: i, className: 'nnk-break' }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
                 })
                 : e('div', { className: 'nnk-hint' }, '暂无动态。'))),
@@ -1480,6 +1515,7 @@ window.__ModuleLoader__.load({
               e('div', 'nnk-hint', '连接信息经加密信令交换,游戏数据点对点直连。个别网络连不上就换邀请码方式。')) }))]
           : null,
         note ? e('div', { className: 'nnk-dash-full ' + (note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err') }, note) : null,
+        roomPopupOpen && roomCode ? renderRoomModal() : null,
         phase === 'invite_ready' && inviteEv && (inviteEv.data && inviteEv.data.code) && invitePopupDismissed !== inviteEv.data.code
           ? renderInviteModal(inviteEv) : null,
         phase === 'answer_ready' && answerEv && (answerEv.data && answerEv.data.code) && answerPopupDismissed !== answerEv.data.code

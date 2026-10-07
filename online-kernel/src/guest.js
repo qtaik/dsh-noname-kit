@@ -306,9 +306,26 @@
 			session.fake = fake;
 			fake.onUp(function() {
 				session.wasIn = true;
-				if (session.autoConnect) {
-					connectNow();
-				}
+				/* 大厅停车:先不接引擎,等主机的 stage 指令——loaded=进引擎,
+				 * lobby=停车并报身份(hello)。tap 先收内核协议,进引擎时被
+				 * connectNow 换成引擎 handler,暂存的引擎消息由 replay 回放 */
+				fake.onmessage = function(ev) {
+					try {
+						var msg = JSON.parse(ev.data);
+						if (msg && msg.nnk_stage === "loaded" && session.autoConnect) {
+							connectNow();
+						} else if (msg && msg.nnk_stage === "lobby") {
+							fake.send(JSON.stringify({ nnk_hello: {
+								name: nnk.env.get.connectNickname(),
+								avatar: nnk.env.lib.config.connect_avatar || ""
+							} }));
+						}
+					} catch (e2) {
+						/* 引擎消息(非内核协议):暂存回放,防丢 */
+						fake._buffer.push(ev.data);
+					}
+				};
+				fake.replay();
 			});
 			fake.onDown(function() {
 				if (guestState.session === session) {
@@ -342,6 +359,18 @@
 					function(topic, msg) {
 						if (/\/host$/.test(topic)) {
 							session.hostSeen = Date.now();
+							if (msg && msg.nnk_loading && !session.loadingSeen) {
+								/* 主机点「载入到游戏」:进 connect 模式接力重载,
+								 * 回来后 autoRejoin 重连,按 stage 进引擎 */
+								session.loadingSeen = true;
+								try {
+									localStorage.setItem(env.lib.configprefix + "nnk_guest_pending", JSON.stringify({ kind: "room", code: code }));
+									env.game.saveConfig("mode", "connect");
+								} catch (e2) { /* 忽略 */ }
+								bridgeApi().emit("info", { message: "主机正在载入游戏,自动跟随…" });
+								env.game.reload();
+								return;
+							}
 							return;
 						}
 						if (/\/answer\//.test(topic) && !answered && msg && msg.sdp) {
