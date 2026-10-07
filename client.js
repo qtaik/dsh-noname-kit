@@ -28,6 +28,11 @@ window.__ModuleLoader__.load({
       '.nnk-modal{background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:var(--nnk-r);box-shadow:0 12px 48px rgba(0,0,0,.35);width:580px;max-width:100%;max-height:88vh;overflow:auto;padding:18px 20px}',
       '.nnk-modal-title{font-size:16px;font-weight:700;margin-bottom:4px}',
       '.nnk-modal-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}',
+      '.nnk-dash{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px;align-items:start}',
+      '.nnk-dash .nnk-card{margin-bottom:0}',
+      '.nnk-dash .nnk-log{max-height:280px}',
+      '.nnk-dash-full{grid-column:1/-1}',
+      '.nnk-fold-head{cursor:pointer;user-select:none;font-size:14px}',
       '.nnk-radio{display:inline-flex;align-items:center;gap:6px;margin:0;padding:6px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:13px;cursor:pointer;transition:border-color var(--nnk-t),color var(--nnk-t),background var(--nnk-t);user-select:none}',
       '.nnk-radio:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary)}',
       '.nnk-radio.nnk-radio-on{border-color:transparent;background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary));color:var(--dsw-alias-label-primary-foreground,var(--dsw-alias-bg-layer-1))}',
@@ -1079,6 +1084,9 @@ window.__ModuleLoader__.load({
       var invitePopupDismissed = invPopState[0], setInvitePopupDismissed = invPopState[1];
       var ansPopState = React.useState('');
       var answerPopupDismissed = ansPopState[0], setAnswerPopupDismissed = ansPopState[1];
+      /* 仪表盘折叠块:配置/帮助类默认收起,点标题展开 */
+      var foldsState = React.useState({ identity: false, signaling: false, help: false });
+      var folds = foldsState[0], setFolds = foldsState[1];
       /* 头像列表:插件直接扫游戏目录(自带包+扩展包),开不开游戏都有;
        * null=加载中,字符串=失败原因 */
       var avListState = React.useState(null);
@@ -1224,10 +1232,18 @@ window.__ModuleLoader__.load({
         });
       }
 
+      function renderFoldCard(key, title, content, full) {
+        var next = Object.assign({}, folds);
+        next[key] = !folds[key];
+        return h('div', { className: 'nnk-card' + (full ? ' nnk-dash-full' : '') },
+          h('div', { className: 'nnk-fold-head', onClick: function () { setFolds(next) } },
+            h('b', null, (folds[key] ? '▾ ' : '▸ ') + title)),
+          folds[key] ? content : null);
+      }
+
       function renderSignalingCard() {
         var effective = (bridge.cfg && bridge.cfg.mqttUrl) || '';
-        return h('div', { className: 'nnk-card' },
-          e('div', null, h('b', null, '📡 信令服务器(可选)')),
+        return h('div', {},
           e('div', 'nnk-hint', '房号方式的牵线中转(只过加密后的连接信息,游戏数据仍是点对点直连)。双方必须用同一个信令服务器才能互相看到——都不填即用同一个默认公共服务器;默认服务器连不上时可换成自建或其它公共 MQTT 的 ws 地址。改完下次建房生效。'),
           h('div', { style: { marginTop: '8px' } },
             e('div', 'nnk-label', 'MQTT over WebSocket 地址(ws:// 或 wss:// 开头,留空用默认)'),
@@ -1250,8 +1266,7 @@ window.__ModuleLoader__.load({
           return a.name.toLowerCase().indexOf(kw) >= 0 || a.id.toLowerCase().indexOf(kw) >= 0;
         }) : avatars;
         var known = avatars.some(function (a) { return a.id === idAvatar; });
-        return h('div', { className: 'nnk-card' },
-          e('div', null, h('b', null, '👤 人物标识')),
+        return h('div', {},
           e('div', 'nnk-hint', '用户名 = 朋友看到的名字,也是游戏内联机昵称;头像下拉选一个武将形象(列表直接读游戏目录,不用开游戏)。保存后游戏内即时生效(对方屏幕上的头像下一局生效)。'),
           h('div', { style: { marginTop: '8px' } },
             e('div', 'nnk-label', '用户名(最长 12 字,留空用游戏内设置)'),
@@ -1348,8 +1363,8 @@ window.__ModuleLoader__.load({
       }
 
       function renderOnlinePanel() {
-        return h('div', {},
-        h('div', { className: 'nnk-card' },
+        return h('div', { className: 'nnk-dash' },
+        h('div', { className: 'nnk-card nnk-dash-full' },
           e('div', null, h('b', null, '🌐 联机助手')),
           !status.active
             ? e('div', 'nnk-hint', status.savedDir
@@ -1374,8 +1389,7 @@ window.__ModuleLoader__.load({
                   ? e('div', 'nnk-hint', '当前状态:' + phaseText + (bridge.state && bridge.state.roomCode ? '(房号 ' + bridge.state.roomCode + ')' : ''))
                   : null)),
         status.active && kernel && kernel.state === 'ok'
-          ? h('div', {},
-            renderIdentityCard(),
+          ? [
             h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '🏠 我要当主机')),
               e('div', 'nnk-hint', '选玩法 → 创建房间 → 把 6 位房号发给朋友,朋友在「我要加入」输房号即可。开局(开始游戏/选将)在游戏里点。建房会自动关闭「禁止不同版本玩家进房」,不同游戏版本的朋友也能进。'),
@@ -1413,6 +1427,13 @@ window.__ModuleLoader__.load({
                   h('button', { className: 'nnk-copy', onClick: function () { sendCmd('accept_answer', { code: answerText }) } }, '🔗 连接'))
                 : null),
             h('div', { className: 'nnk-card' },
+              e('div', null, h('b', null, '📡 动态')),
+              h('div', { className: 'nnk-log' }, evs.length
+                ? evs.slice(-8).reverse().map(function (ev, i) {
+                  return e('div', { key: i, className: 'nnk-break' }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
+                })
+                : e('div', { className: 'nnk-hint' }, '暂无动态——建房/加入/扩展报错都会显示在这里。'))),
+            h('div', { className: 'nnk-card' },
               e('div', null, h('b', null, '🔗 我要加入')),
               e('div', 'nnk-hint', '输入房主发给你的 6 位房号,点「加入」;房主应答后自动进房。'),
               h('input', { className: 'nnk-input', value: roomText, maxLength: 6, onChange: function (ev) { setRoomText(ev.target.value.toUpperCase()) }, placeholder: '输入 6 位房号,如 AB2C9X', style: { textTransform: 'uppercase', letterSpacing: '4px', fontSize: '16px' } }),
@@ -1430,26 +1451,18 @@ window.__ModuleLoader__.load({
                       h('button', { className: 'nnk-copy', onClick: function () { copyText((answerEv.data && answerEv.data.code) || '') } }, '📋 复制回执码'))
                     : null)
                 : h('button', { className: 'nnk-copy', onClick: function () { setShowInviteFallback(true) } }, '房号连不上?换邀请码方式(备用)…')),
-            renderManifestCard(evs, hostFlow),
-            renderSignalingCard(),
-            h('div', { className: 'nnk-card' },
-              e('div', null, h('b', null, '📡 动态')),
-              h('div', { className: 'nnk-log' }, evs.length
-                ? evs.slice(-8).reverse().map(function (ev, i) {
-                  return e('div', { key: i, className: 'nnk-break' }, new Date(ev.ts).toLocaleTimeString() + ' · ' + onlineEventText(ev));
-                })
-                : e('div', { className: 'nnk-hint' }, '暂无动态——建房/加入/扩展报错都会显示在这里。'))))
+            renderManifestCard(evs, hostFlow)]
           : null,
-        h('div', { className: 'nnk-card' },
-          e('div', null, h('b', null, '📖 怎么用(四步)')),
-          e('div', 'nnk-hint',
+        status.active && kernel && kernel.state === 'ok' ? renderFoldCard('identity', '👤 人物标识(联机昵称+头像)', renderIdentityCard()) : null,
+        status.active && kernel && kernel.state === 'ok' ? renderFoldCard('signaling', '📡 信令服务器(可选)', renderSignalingCard()) : null,
+        renderFoldCard('help', '📖 怎么用(四步)', h('div', {},          e('div', 'nnk-hint',
             '0.【官方版一次性】进游戏:设置 → 通用(部分版本在「不常用选项」)→ 打开「自动导入扩展」→ 按提示重载。不开它,「扩展」菜单里根本不会出现「联机助手」;装完内核的游戏都要过这一步。\n' +
             '1. 双方或多方都装本插件(dsh plugin --profile web add dsh-noname-kit,桌面版用 --profile desktop)并配好各自的游戏目录;然后各自在本页点「📦 安装内核」→ 进游戏在主菜单「扩展」里给「联机助手」点「启」开启(新扩展默认不启用;列表里没有它就回第 0 步)→ 按游戏提示重载生效。内核没有操作界面,联机操作都在本页,所以每个人都要装插件。\n' +
             '2. 主机:创建房间 → 把 6 位房号发给朋友;朋友:输入房号加入。房号走不通时,主机可改用「邀请码方式建房」(备用)。打完一把点「重新开始」会自动用原房号重开,不用重新发码。\n' +
             '3. 游戏里出现等待房间(房主座位已就位),朋友进房后主机在游戏里点「开始游戏」。\n' +
             '禁将/武将包/卡牌包/人数:游戏内等待房间右上角点「房间设置」打开模式菜单,改完点「启」自动广播到全房。'),
-          e('div', 'nnk-hint', '房号模式经国内可达的公共信令服务器交换连接信息(载荷按房号加密,点对点直连、无需公网 IP);个别网络(如手机热点)打不通时换个网络再试,或改用邀请码兜底。无人大厅在后续版本。')),
-        note ? e('div', { className: note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err' }, note) : null,
+          e('div', 'nnk-hint', '房号模式经国内可达的公共信令服务器交换连接信息(载荷按房号加密,点对点直连、无需公网 IP);个别网络(如手机热点)打不通时换个网络再试,或改用邀请码兜底。无人大厅在后续版本。')), true),
+        note ? e('div', { className: 'nnk-dash-full ' + (note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err') }, note) : null,
         phase === 'invite_ready' && inviteEv && (inviteEv.data && inviteEv.data.code) && invitePopupDismissed !== inviteEv.data.code
           ? renderInviteModal(inviteEv) : null,
         phase === 'answer_ready' && answerEv && (answerEv.data && answerEv.data.code) && answerPopupDismissed !== answerEv.data.code
