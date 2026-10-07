@@ -466,9 +466,32 @@
 		}
 	}
 
-	/* 应答一条客人的连接提议(客人=offer 方) */
+	/* 应答一条客人的连接提议(客人=offer 方)。
+	 * 提议是公共 broker 上人人可发的明文结构:这里的加固=guestId 白名单
+	 * (会拼进主题名,非法字符能让 broker 断开本机连接)+ 同一 guestId 限流
+	 * (防伪造提议刷爆 pc 创建),以及每条提议前校验房号未换。 */
+	var offerSeen = {};   /* guestId -> 最近受理时间 */
+	var OFFER_MIN_GAP = 1500;
 	function answerMqttOffer(code, msg) {
 		var env = nnk.env;
+		var guestId = msg && typeof msg.guestId === "string" ? msg.guestId : "";
+		if (!/^[0-9a-z]{4,12}$/.test(guestId)) {
+			return;   /* 形状不对:静默丢弃(公共频道上什么垃圾都可能来) */
+		}
+		var now = Date.now();
+		if (offerSeen[guestId] && now - offerSeen[guestId] < OFFER_MIN_GAP) {
+			return;   /* 同一客人的重复提议:限流 */
+		}
+		offerSeen[guestId] = now;
+		/* 清一下过期的记录,免得无限增长 */
+		var keys = Object.keys(offerSeen);
+		if (keys.length > 50) {
+			keys.forEach(function(k) {
+				if (now - offerSeen[k] > 60000) {
+					delete offerSeen[k];
+				}
+			});
+		}
 		var pc = new RTCPeerConnection(rtc.pcConfig());
 		pc.ondatachannel = function(e) {
 			if (e.channel.label === "nnk-ping") {
@@ -506,7 +529,7 @@
 		}).then(function() {
 			if (hostState.mqttSession && hostState.roomCode === code) {
 				return hostState.mqttSession.publish(
-					signaling.roomTopic(code, "answer/" + msg.guestId),
+					signaling.roomTopic(code, "answer/" + guestId),
 					{ k: "answer", sdp: pc.localDescription }
 				);
 			}

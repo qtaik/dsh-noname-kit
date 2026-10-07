@@ -17,6 +17,14 @@ const FULLWIDTH = /[，。；：？！“”‘’【】（）〈〉《》、※
  * 支持单引号/双引号/模板串、行注释、块注释;不处理转义以外的怪癖,足够用于标点扫描。
  * @param {string} code
  */
+/* '/' 是正则起点还是除号:看前一个有效字符(运算符/开括号/行首 = 正则起点) */
+function isRegexStart(code, i) {
+  let k = i - 1
+  while (k >= 0 && (code[k] === ' ' || code[k] === '	')) k--
+  if (k < 0) return true
+  return code[k] === '\n' || '(,=:[!&|?{};+-*%<>~^'.indexOf(code[k]) >= 0
+}
+
 function buildCodeMask(code) {
   const mask = new Uint8Array(code.length) // 1 = 字符串或注释内
   let i = 0
@@ -29,6 +37,21 @@ function buildCodeMask(code) {
       mask[i++] = 1; mask[i++] = 1
       while (i < code.length && !(code[i] === '*' && code[i + 1] === '/')) mask[i++] = 1
       if (i < code.length) { mask[i++] = 1; mask[i++] = 1 }
+    } else if (c === '/' && isRegexStart(code, i)) {
+      /* 正则字面量也要遮罩:正则里的全角标点(如 s.replace(/，/g, ',') )此前会
+       * 被当作"代码里的全角标点"硬拦写;反过来正则里的引号会让掩码错位、
+       * 漏报后面真正的全角错误。 */
+      mask[i++] = 1
+      let cls = false
+      while (i < code.length) {
+        const rc = code[i]
+        if (rc === '\\') { mask[i++] = 1; if (i < code.length) mask[i++] = 1; continue }
+        if (rc === '[') cls = true
+        else if (rc === ']') cls = false
+        else if (rc === '/' && !cls) { mask[i++] = 1; break }
+        else if (rc === '\n') break
+        mask[i++] = 1
+      }
     } else if (c === '"' || c === "'" || c === '`') {
       const quote = c
       mask[i++] = 1

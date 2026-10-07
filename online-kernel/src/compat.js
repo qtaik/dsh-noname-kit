@@ -257,6 +257,16 @@
 		if (!enabled()) {
 			return;
 		}
+		/* 只在联机语境下解锁:这三处注册里 config.characters/cards 就是**离线模式**
+		 * 的启用列表,单机时把用户关掉的包全打开会污染设置(用户在菜单里动过包
+		 * 开关就会被引擎把这份被改的表 saveConfig 落库)。 */
+		var connectMode = false;
+		try {
+			connectMode = !!(nnk.env._status && nnk.env._status.connectMode) || nnk.env.lib.config.mode === "connect";
+		} catch (e0) { connectMode = false; }
+		if (!connectMode) {
+			return;
+		}
 		var lib = nnk.env.lib;
 		/* 自定义包要进房间设置,需要三处注册(真机逐层实证):
 		 * 1. connectCharacterPack/connectCardPack——联机资格池;
@@ -458,17 +468,37 @@
 	 * 设置页姿势一致。留空 = 完全不动,游戏内自己的设置照常生效。
 	 */
 	function applyIdentity() {
+		/* 口径:工坊值 = 唯一真源,但**不覆盖用户在游戏内的改动**。
+		 * 判据(两值都比较引擎当前生效值):
+		 *   - 工坊值和上次内核写下去的值一样 → 用户没在工坊改过:只在引擎值仍等于
+		 *     上次内核写的值(说明用户也没在游戏里改)时才重写;
+		 *   - 工坊值和上次写的不一样 → 工坊改过了:直接写入并记录新值。
+		 * 此前是无条件双写,用户在游戏里改的昵称/头像下次开机被悄悄改回去。 */
 		try {
 			var game = nnk.env.game;
-			var name2 = String(nnk.modules.config.get("onlineName") || "").slice(0, 12);
-			if (name2) {
-				game.saveConfig("connect_nickname", name2);
-				game.saveConfig("connect_nickname", name2, "connect");
+			var lib = nnk.env.lib;
+			var curName = "";
+			var curAvatar = "";
+			try { curName = String(lib.config.connect_nickname || ""); } catch (e0) { curName = ""; }
+			try { curAvatar = String(lib.config.connect_avatar || ""); } catch (e1) { curAvatar = ""; }
+			var nextName = String(nnk.modules.config.get("onlineName") || "").slice(0, 12);
+			var last = String(nnk.modules.config.get("identityStamped") || "");
+			if (nextName && nextName !== curName && (nextName !== last || curName === last)) {
+				game.saveConfig("connect_nickname", nextName);
+				game.saveConfig("connect_nickname", nextName, "connect");
+				curName = nextName;
 			}
-			var avatar2 = String(nnk.modules.config.get("onlineAvatar") || "").slice(0, 24);
-			if (avatar2) {
-				game.saveConfig("connect_avatar", avatar2);
-				game.saveConfig("connect_avatar", avatar2, "connect");
+			if (nextName) {
+				nnk.modules.config.set("identityStamped", nextName);
+			}
+			var nextAvatar = String(nnk.modules.config.get("onlineAvatar") || "").slice(0, 24);
+			var lastA = String(nnk.modules.config.get("avatarStamped") || "");
+			if (nextAvatar && nextAvatar !== curAvatar && (nextAvatar !== lastA || curAvatar === lastA)) {
+				game.saveConfig("connect_avatar", nextAvatar);
+				game.saveConfig("connect_avatar", nextAvatar, "connect");
+			}
+			if (nextAvatar) {
+				nnk.modules.config.set("avatarStamped", nextAvatar);
 			}
 		} catch (e) { /* 身份写不进去不致命,引擎默认值(无名玩家/caocao)兜底 */ }
 	}

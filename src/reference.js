@@ -202,6 +202,7 @@ export async function searchReference(nonameDir, { query, type = 'any', limit = 
 
   const maxMatches = Math.max(1, Math.min(limit, 10))
   const matches = []
+  let simHitsTruncated = 0
 
   // ── 阶段 1:目录索引命中(中文名/描述/ID)→ 提取完整定义块 ──
   const candidates = []
@@ -299,8 +300,17 @@ export async function searchReference(nonameDir, { query, type = 'any', limit = 
       if (ratio >= 0.5) simHits.push({ id, entry, ratio })
     }
     simHits.sort((a, b) => b.ratio - a.ratio)
-    // 全部以紧凑行列出(ID/名称/相似度/位置),不提取完整定义——
-    // AI 看中哪个,用该 ID 再精确搜索一次即可获取完整代码(防止几百段代码撑爆上下文)。
+    /* 按 limit 截断:相似度阶段此前整段列出(实测 limit:1 仍回 6 条、整句查询可能
+     * 回几百行紧凑结果 → 撑爆上下文)。精确命中(前两阶段)优先占额度,
+     * 这里补满到 limit 为止;确实被截掉时在结果里说清楚,便于 AI 收窄查询。 */
+    const room = Math.max(0, maxMatches - matches.length)
+    if (room > 0) {
+      simHitsTruncated = Math.max(0, simHits.length - room)
+      simHits = simHits.slice(0, room)
+    } else {
+      simHitsTruncated = simHits.length
+      simHits = []
+    }
     for (const hit of simHits) {
       const score = Math.round(hit.ratio * 100) / 100
       const info = (hit.entry.info || '(索引中无描述)').replace(/<[^>]+>/g, '')
@@ -318,6 +328,9 @@ export async function searchReference(nonameDir, { query, type = 'any', limit = 
 
   // 无损 JSON 要求:不得携带显式 undefined 字段(序列化会丢键,被判为有损)
   const result = { ok: matches.length > 0, matches, scanned: index.loaded.length, query: raw }
+  if (simHitsTruncated > 0) {
+    result.truncated = `${simHitsTruncated} 条相似度结果因 limit=${maxMatches} 被截断——收窄关键词,或传更大的 limit(上限 10)。`
+  }
   if (matches.length === 0) {
     result.error = '未命中:可尝试——①中文技能名;②技能/卡牌 ID;③空格分隔的效果关键词;④整句效果描述(相似度≥50% 才列出,条数可能很多)。'
   }

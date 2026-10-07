@@ -54,7 +54,8 @@ export async function archiveTask(nonameDir, { folder, taskId, kind, summary, no
       id: 'task-' + Date.now(),
       taskId: taskId || null,
       folder,
-      kind: kind === 'card' ? 'card' : 'character',
+      /* 三值映射:此前 mode 任务一律归档成 character,历史页分类/徽标与实际不符 */
+      kind: kind === 'card' || kind === 'mode' ? kind : 'character',
       summary: '',
       notes: [],
       rounds: 1,
@@ -113,7 +114,9 @@ export async function pruneBackupRecords(nonameDir, folder, removedFiles) {
 export async function deleteNote(nonameDir, folder, index) {
   const full = folderPath(nonameDir, folder)
   const history = await readHistory(nonameDir, folder)
-  if (!Array.isArray(history.notes) || index < 0 || index >= history.notes.length) {
+  /* NaN/小数会穿过 range 检查:Number(undefined)=NaN,splice(NaN,1) 等价于删第 0 条
+   * ——实测"删注意点"传 undefined 会把第一条悄悄删掉。必须整数校验 */
+  if (!Number.isInteger(index) || !Array.isArray(history.notes) || index < 0 || index >= history.notes.length) {
     return { ok: false, error: '注意点不存在' }
   }
   history.notes.splice(index, 1)

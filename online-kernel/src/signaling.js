@@ -1,13 +1,16 @@
 /*
  * 房号信令(M2):公共 MQTT broker 上的加密信令通道。
  *
- * 主题结构(nnk2/room/<房号>/…):
+ * 主题结构(nnk2/room/<房号指纹>/…):房号本身**不进主题**(公共 broker 上
+ * 任何人都能通配符订阅;房号明文曾等于把密钥一起送出去——密文+房号即可解密),
+ * 主题里用的是 FNV-1a 指纹(定宽、单向)。
  *   host            —— 主机在线心跳(retained,10s 一跳,客人用于判房主是否在线)
  *   offer           —— 客人发布连接提议 {guestId, sdp}(房主订阅)
  *   answer/<guestId>—— 主机按 guestId 定向回应答 {sdp}
  *
- * 载荷一律 AES-GCM 加密,密钥 = SHA-256("nnk-room|<房号>"):
- * 公共频道上任何人都能订阅主题,但拿不到房号就解不开载荷(内含双方 IP 候选)。
+ * 载荷一律 AES-GCM 加密,密钥 = SHA-256("nnk-room|<房号>")。
+ * ⚠️ 诚实口径:房号只有 6 位(≈31 bit),拿到指纹也解不开,但指纹可枚举——
+ * 真正的防线是"房号只在两端私下交换";要更强需上 HMAC 挑战握手(待办)。
  * ICE 候选随 SDP 一次性交换(非 trickle),一条 offer / 一条 answer 完成牵线。
  */
 (function() {
@@ -140,8 +143,23 @@
 	var api = {
 		/* deriveKey/seal/unseal 仅服务上方会话逻辑,不对外导出 */
 		randomId: randomId,
+		/* 房号指纹:FNV-1a → base36(定宽 7 位)。两边算法一致即得到同一主题;
+		 * 公共 broker 上不再出现房号明文(订阅者无法据此推导密钥/冒充房间) */
+		roomHash: function(code) {
+			var h = 0x811c9dc5;
+			var str = String(code || "");
+			for (var i = 0; i < str.length; i++) {
+				h ^= str.charCodeAt(i);
+				h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+			}
+			var out = h.toString(36);
+			while (out.length < 7) {
+				out = "0" + out;
+			}
+			return out;
+		},
 		roomTopic: function(code, leaf) {
-			return "nnk2/room/" + code + (leaf ? "/" + leaf : "");
+			return "nnk2/room/" + api.roomHash(code) + (leaf ? "/" + leaf : "");
 		},
 		openRoomSession: openRoomSession
 	};

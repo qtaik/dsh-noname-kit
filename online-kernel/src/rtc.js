@@ -203,6 +203,9 @@
 	function HostBridge(channel) {
 		var self = this;
 		this.channel = channel;
+		/* 通道实例的唯一代号:label 两端都叫 "nnk-link"(RTCDataChannel 协议名),
+		 * 做定向发送/回执归属必须用实例级 id */
+		this.bridgeId = "b" + (++HOST_BRIDGE_SEQ);
 		this._downHooks = [];
 		channel.onmessage = function(e) {
 			if (self.onmessage) {
@@ -217,6 +220,7 @@
 		};
 		channel.onerror = function() { /* 引擎侧无对应处理,忽略 */ };
 	}
+	var HOST_BRIDGE_SEQ = 0;
 	HostBridge.prototype.send = function(data) {
 		if (this.channel.readyState === "open") {
 			this.channel.send(data);

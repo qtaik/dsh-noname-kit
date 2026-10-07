@@ -73,10 +73,16 @@ export async function listPackageJsFiles(nonameDir, folder) {
   return out.sort((a, b) => (a === 'extension.js' ? -1 : b === 'extension.js' ? 1 : a.localeCompare(b)))
 }
 
+let lastStampSeq = 0
+/* 备份名时间戳:精确到毫秒 + 进程内递增。此前只到秒——同一秒内连写两次
+ * (AI 一轮里"写入→改一处→再写"很常见)备份名完全相同,后一次把前一次的
+ * 备份直接覆盖掉,BACKUP_KEEP=3 名不副实、可回滚的历史只剩最后一次。 */
 function timestamp() {
   const d = new Date()
   const p = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+  const ms = String(d.getMilliseconds()).padStart(3, '0')
+  lastStampSeq = (lastStampSeq + 1) % 1000
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${ms}${String(lastStampSeq).padStart(3, '0')}`
 }
 
 /** 每个备份目录保留的最新备份数(超出按文件修改时间从旧到新删除)。 */
@@ -229,7 +235,7 @@ export async function writeExtension(nonameDir, { folder, file, code, blocks, ed
   if (oldCode) {
     const backupDir = join(dirname(target), 'backup')
     await mkdir(backupDir, { recursive: true })
-    backup = join(relative(nonameDir, backupDir), `extension.${timestamp()}.js`).split(sep).join('/')
+    backup = join(relative(nonameDir, backupDir), `${basename(target, '.js')}.${timestamp()}.js`).split(sep).join('/')
     await copyFile(target, join(backupDir, basename(backup)))
     await pruneHistoryBackups(nonameDir, folder, await pruneBackups(backupDir, relative(nonameDir, backupDir)))
   }
@@ -394,28 +400,69 @@ function virtualEntryCount(code) {
 /** 列出某扩展的备份文件(新→旧)。 */
 export async function listBackups(nonameDir, folder) {
   const { full } = safeFolderPath(nonameDir, folder)
-  const backupDir = join(full, 'backup')
-  try {
-    const names = (await readdir(backupDir)).filter((n) => n.endsWith('.js')).sort().reverse()
-    return names.map((n) => basename(n))
-  } catch { return [] }
+  const out = []
+  /* 递归:多文件包的模块文件各自备份在自己的 backup/(character/backup/…),
+   * 只读包根的 backup/ 会让子目录备份"看不见、也回滚不了"(实测)。 */
+  const walk = async (dir, prefix) => {
+    let entries = []
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      const abs = join(dir, e.name)
+      if (e.isDirectory()) {
+        if (e.name === 'backup') {
+          try {
+            for (const n of (await readdir(abs)).filter((x) => x.endsWith('.js')).sort().reverse()) {
+              out.push(prefix ? prefix + '/' + n : n)
+            }
+          } catch { /* 忽略 */ }
+        } else if (e.name !== 'image' && e.name !== 'audio' && e.name !== 'node_modules' && !e.name.startsWith('.')) {
+          await walk(abs, prefix ? prefix + '/' + e.name : e.name)
+        }
+      }
+    }
+  }
+  await walk(full, '')
+  return out.sort().reverse()
 }
 
 /** 回滚:把指定备份覆盖回 extension.js。返回旧内容备份名。 */
 export async function rollbackExtension(nonameDir, folder, backupName) {
-  if (!/^[\w.-]+\.js$/.test(backupName) || backupName.includes('..')) {
+  /* 接受两种形态:
+   *   "extension.20261007-...js"                —— 包根 backup/ 里的(旧客户端)
+   *   "character/backup/character.2026...js"    —— 子目录模块的备份(多文件包)
+   * 子目录形态写回集 / 必须有 /backup/ 段,其余按包内相对路径定位。 */
+  const rel = String(backupName || '').split('\\').join('/')
+  if (rel.includes('..') || rel.startsWith('/') || !/\.js$/.test(rel)) {
     throw new Error('非法的备份文件名。')
   }
   const { full } = safeFolderPath(nonameDir, folder)
-  const backupPath = join(full, 'backup', backupName)
-  const target = join(full, 'extension.js')
+  let backupPath
+  let target
+  const segs = rel.split('/')
+  if (segs.length === 1) {
+    if (!/^[\w.-]+\.js$/.test(segs[0])) throw new Error('非法的备份文件名。')
+    backupPath = join(full, 'backup', segs[0])
+    target = join(full, 'extension.js')
+  } else {
+    const backupIdx = segs.lastIndexOf('backup')
+    if (backupIdx <= 0 || backupIdx === segs.length - 1) throw new Error('非法的备份路径。')
+    const backupFile = segs[backupIdx + 1]
+    if (!/^[\w.-]+\.js$/.test(backupFile)) throw new Error('非法的备份文件名。')
+    const dirSegs = segs.slice(0, backupIdx)
+    const nameSegs = segs.slice(backupIdx + 1)
+    if (dirSegs.some((x) => !/^[\w.-]+$/.test(x)) || nameSegs.some((x) => !/^[\w.-]+\.js$/.test(x))) {
+      throw new Error('非法的备份路径。')
+    }
+    backupPath = join(full, ...dirSegs, 'backup', ...nameSegs)
+    target = join(full, ...dirSegs, ...nameSegs)
+  }
   await readFile(backupPath, 'utf8') // 存在性检查
   // 回滚前把当前版本也备份一份,保证不丢
   try {
     await readFile(target, 'utf8')
-    const backupDir = join(full, 'backup')
+    const backupDir = join(dirname(target), 'backup')
     await mkdir(backupDir, { recursive: true })
-    await copyFile(target, join(backupDir, `extension.pre-rollback.${timestamp()}.js`))
+    await copyFile(target, join(backupDir, `${basename(target, '.js')}.pre-rollback.${timestamp()}.js`))
     await pruneHistoryBackups(nonameDir, folder, await pruneBackups(backupDir, relative(nonameDir, backupDir)))
   } catch { /* 当前不存在 */ }
   await copyFile(backupPath, target)

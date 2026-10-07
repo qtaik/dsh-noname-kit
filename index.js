@@ -3,7 +3,7 @@
  *
  * 无名杀(Noname)扩展开发工坊:AI 写扩展代码的受限开发套件。
  * - 注入规范知识(systemPrompt 常驻),取代用户手动喂知识库
- * - 注册 6 个工具:搜官方参考 / 校验 / 读扩展 / 写扩展(校验门禁) / 复制图片 / 任务收口
+ * - 注册 7 个工具:搜官方参考 / 校验 / 读扩展 / 写扩展(校验门禁) / 复制图片 / 复制配音 / 任务收口
  * - 守卫:拦截通用 write/edit/bash 对游戏 extension 目录的写入(防绕过校验)
  * - HTTP API:历史记录与备份回滚(浏览器工坊面板用)
  *
@@ -31,6 +31,8 @@ import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus
 import { bundledPresetDir, hostHasDeclarativePreset, installPreset, presetDirOf, presetStatus } from './src/preset.js'
 import { bundledKernelVersion, createBridgeSession, installKernel, kernelStatus } from './src/online.js'
 import { cachedUpdate, checkForUpdate, detectInstall, installHint } from './src/update.js'
+import { bashGuardReason, guardMessage, pathHitsProtected } from './src/guard.js'
+import { readJsonSafeSync, writeJsonAtomicSync } from './src/store.js'
 import pkg from './package.json' with { type: 'json' }
 
 /** bash 单次输出上限的出厂默认与允许范围(与 custom-bash.mjs 保持一致)。
@@ -85,9 +87,9 @@ export function apply(ctx, config) {
   const homeBase = typeof ctx.dshHomePath === 'function' ? ctx.dshHomePath() : (ctx.dshHomePath || join(homedir(), '.dsh'))
   const dshHomeDir = resolve(homeBase)
   const settingsPath = join(dshHomeDir, 'noname-kit.json')
-  const readSettingsFile = () => {
-    try { return JSON.parse(readFileSync(settingsPath, 'utf8')) } catch { return {} }
-  }
+  /* 安全读:解析失败先把原文件留档为 .corrupt-<ts> 再按空处理——以前的
+   * `catch → {}` 会让"下次保存整份覆盖"把用户设置静默抹掉(实测数据丢失面)。 */
+  const readSettingsFile = () => readJsonSafeSync(settingsPath, {})
   const saved = readSettingsFile()
 
   // 取第一个"有效"的来源:行配置 > 向导保存值;行配置无效时回落到向导值,
@@ -193,7 +195,7 @@ export function apply(ctx, config) {
     const token = randomUUID()
     const next = readSettingsFile()
     next.onlineBridgeToken = token
-    try { writeFileSync(settingsPath, JSON.stringify(next, null, 2), 'utf8') } catch { /* 只影响重启用,不阻塞 */ }
+    try { writeJsonAtomicSync(settingsPath, next) } catch { /* 只影响重启用,不阻塞 */ }
     return token
   })()
   // 人物标识:工坊「👤 人物标识」保存的联机身份(内存缓存 + 落盘 noname-kit.json,
@@ -473,6 +475,11 @@ export function apply(ctx, config) {
         // 与工坊补图路由同语义:复制成功 → 登记 image/<名> → 满足条件自动完成+归档
         const firstTarget = String((args.images && args.images[0] && args.images[0].target) || '').replace(/^image\//, '')
         const done = await setTaskImage(dshHomeDir, { taskId: args.taskId, image: firstTarget ? 'image/' + firstTarget : '' })
+        if (!done.ok) {
+          /* 图片已复制但登记失败(任务不存在/taskId 写错)时不能静默:
+           * 此前被无视,工具照样回 ok,任务永远卡在"缺图"上。 */
+          result.warning = `图片已复制,但任务登记失败:${done.error || '未知原因'}——请核对 taskId 是否与任务列表一致`
+        }
         if (done.autoCompleted) {
           result.autoCompleted = true
           await archiveTask(nonameDir, {
@@ -619,28 +626,32 @@ export function apply(ctx, config) {
             : '任务更新失败。')
         return { ok: false, error: detail }
       }
-      return { ok: true, marked: result.marked, missing: result.missing, notesStored: result.notesStored || 0, confirmed: result.task.skills.filter((s) => s.status === 'confirmed').length, total: result.task.skills.length, autoCompleted: false }
+      return { ok: true, marked: result.marked, missing: result.missing, reopened: Boolean(result.reopened), notesStored: result.notesStored || 0, confirmed: result.task.skills.filter((s) => s.status === 'confirmed').length, total: result.task.skills.length, autoCompleted: false }
     },
   }))
 
   // ── 3) 守卫:extension 目录的写操作必须走专用工具 ─────────────
   // 始终注册,内部动态判断 active:工坊向导热初始化后立即生效。
+  // 判定逻辑在 src/guard.js(纯函数、有单测):路径归一化(反斜杠/正斜杠/
+  // git-bash 盘符/.. 折叠)→ 归属判断;bash 另做"先 cd 进保护目录再相对写"
+  // 的组合判定,并区分读写(纯读命令照旧放行)。
   ctx.tools.guard((exec) => {
     if (!active || !GUARDED_TOOLS.has(exec.name)) return undefined
-    const extRootLower = extRootOf(nonameDir).toLowerCase()
+    const protectRoot = extRootOf(nonameDir)
+    // 相对路径的解析基准:会话工作目录(DSH 写工具用的就是它)→ 进程 cwd → 游戏目录
+    const baseDirs = []
+    try {
+      const sessionCwd = exec.agent?.session?.header?.cwd
+      if (typeof sessionCwd === 'string' && sessionCwd) baseDirs.push(sessionCwd)
+    } catch { /* 非 agent 调用没有 agent 字段 */ }
+    baseDirs.push(process.cwd(), nonameDir)
     if (exec.name === 'bash') {
-      const command = String(exec.arguments?.command ?? '')
-      if (command.toLowerCase().includes(extRootLower)) {
-        return 'noname-kit:游戏 extension 目录受保护——写入扩展请使用 noname_write_extension(先 noname_validate 校验),不要用 bash 直接改文件。'
-      }
-      return undefined
+      const reason = bashGuardReason(String(exec.arguments?.command ?? ''), protectRoot, baseDirs)
+      return reason ? guardMessage(reason) : undefined
     }
     const path = pathArgOf(exec)
-    if (path) {
-      const r = resolve(String(path)).toLowerCase()
-      if (r === extRootLower || r.startsWith(extRootLower + '\\') || r.startsWith(extRootLower + '/')) {
-        return 'noname-kit:游戏 extension 目录受保护——写入扩展请使用 noname_write_extension(内部先校验,覆盖前自动备份)。'
-      }
+    if (path && pathHitsProtected(path, protectRoot, baseDirs)) {
+      return guardMessage(`写入目标落在游戏 extension 目录内(${path})`)
     }
     return undefined
   })
@@ -653,6 +664,31 @@ export function apply(ctx, config) {
     path: '/noname-kit-api',
     handler: async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://x')
+      /* 同源防护(CSRF / DNS rebinding):本接口能改游戏目录、删任务、回滚文件、
+       * 往游戏内核下发命令,却只监听回环——浏览器里打开的任何恶意页面都能用
+       * 简单请求(表单/text-plain)打到 127.0.0.1:<端口>。这里对**所有非 GET**
+       * 请求要求 Origin 为空(非浏览器)或为回环来源;来源可疑直接 403。
+       * 注意:内核的 /online/bridge 轮询来自游戏页(location.origin 是游戏服务),
+       * 不是普通网页——它带 token,单独放行在下面的分支里。 */
+      if (req.method !== 'GET' && url.pathname !== '/noname-kit-api/online/bridge') {
+        const origin = String(req.headers.origin || '')
+        const host = String(req.headers.host || '')
+        const allowed = (o) => {
+          if (!o) return true
+          try {
+            const u = new URL(o)
+            return (u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]') && u.host === host
+          } catch { return false }
+        }
+        if (!allowed(origin)) {
+          return json(403, { ok: false, error: '仅接受来自本机工坊页面的请求(Origin 校验未通过)' })
+        }
+        /* 简单请求绕过预检的另一个口子:content-type 不是 JSON 的 POST 也拒 */
+        const ctype = String(req.headers['content-type'] || '')
+        if (ctype && !ctype.includes('application/json')) {
+          return json(415, { ok: false, error: '请求必须是 application/json' })
+        }
+      }
       const json = (status, body) => {
         const bodyText = JSON.stringify(body)
         res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
@@ -684,7 +720,7 @@ export function apply(ctx, config) {
           if (result.error) return json(400, { ok: false, error: result.error })
           const next = readSettingsFile()
           next.nonameDir = nonameDir
-          writeFileSync(settingsPath, JSON.stringify(next, null, 2), 'utf8')
+          writeJsonAtomicSync(settingsPath, next)
           console.log(`[noname-kit] 工坊向导已启用游戏目录: ${nonameDir}`)
           return json(200, { ok: true, nonameDir, adjustedFrom: result.adjustedFrom || null })
         }
@@ -717,7 +753,7 @@ export function apply(ctx, config) {
             applied.push(`启动时检查更新 ${next.updateCheck ? '开' : '关'}`)
           }
           if (!applied.length) return json(400, { ok: false, error: '没有可保存的设置项' })
-          writeFileSync(settingsPath, JSON.stringify(next, null, 2), 'utf8')
+          writeJsonAtomicSync(settingsPath, next)
           console.log(`[noname-kit] 设置已保存:${applied.join(' / ')}(新会话生效)`)
           return json(200, {
             ok: true,
@@ -885,7 +921,13 @@ export function apply(ctx, config) {
         // 联机助手:内核安装与命令下发(要写游戏目录,必须在 503 闸门之后)
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/online/kernel/install') {
           // baseUrl 供游戏内核回连本插件:同机回环,取本请求的 host 端口最准
+          /* baseUrl 是写进内核、由游戏回连本插件的地址:取 Host 的端口,但只认
+           * 回环(伪造的 Host 头会把内核指到别处,让状态永远显示离线) */
           const hostHeader = String(req.headers.host || '')
+          const hostName = hostHeader.includes(':') ? hostHeader.slice(0, hostHeader.lastIndexOf(':')) : hostHeader
+          if (hostName && !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(hostName)) {
+            return json(400, { ok: false, error: `Host 必须是本机回环地址,收到「${hostHeader}」` })
+          }
           const port = hostHeader.includes(':') ? hostHeader.slice(hostHeader.lastIndexOf(':') + 1) : '80'
           const baseUrl = `http://127.0.0.1:${port}/noname-kit-api`
           const result = installKernel({ nonameDir, baseUrl, token: bridgeToken })
@@ -923,7 +965,7 @@ export function apply(ctx, config) {
             const next = readSettingsFile()
             if (savedSignaling) next.onlineSignaling = savedSignaling
             else delete next.onlineSignaling
-            try { writeFileSync(settingsPath, JSON.stringify(next, null, 2), 'utf8') } catch { /* 写不进只影响跨目录补发 */ }
+            try { writeJsonAtomicSync(settingsPath, next) } catch { /* 写不进只影响跨目录补发 */ }
             console.log(`[noname-kit] 联机信令服务器已保存: ${url || '(恢复默认)'}`)
             body.args = { key: 'mqttUrl', value: url }
           }
@@ -934,7 +976,7 @@ export function apply(ctx, config) {
             savedIdentity = { name, avatar }
             const next = readSettingsFile()
             next.onlineIdentity = savedIdentity
-            try { writeFileSync(settingsPath, JSON.stringify(next, null, 2), 'utf8') } catch { /* 写不进只影响跨目录补发 */ }
+            try { writeJsonAtomicSync(settingsPath, next) } catch { /* 写不进只影响跨目录补发 */ }
             console.log(`[noname-kit] 联机人物标识已保存: ${name || '(空)'} / ${avatar || '(空)'}`)
             body.args = { name, avatar }
           }

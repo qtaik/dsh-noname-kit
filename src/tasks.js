@@ -21,7 +21,7 @@
  * 反馈把技能打回 open 并记录日志。全部技能 confirmed 且图片/配音就位 → 任务自动 done。
  * 删除任务 = 从登记处移除整树;不动扩展代码/备份/history 归档。
  */
-import { readFile, writeFile } from 'node:fs/promises'
+import { readJsonSafe, writeJsonAtomic } from './store.js'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -42,17 +42,17 @@ export function emptyRegistry() {
 }
 
 export async function readRegistry(dshHome) {
-  try {
-    const raw = await readFile(tasksPath(dshHome), 'utf8')
-    const parsed = JSON.parse(raw)
-    return { ...emptyRegistry(), ...parsed }
-  } catch {
-    return emptyRegistry()
-  }
+  /* 安全读(损坏留档,不静默清零)+ 形状兜底:tasks 必须是数组。此前
+   * `{"tasks":null}` 会让 listTasks/createTask 直接 TypeError → 所有任务接口
+   * 永久 500,且下一次保存把整个登记处覆盖成空(实测数据丢失面)。 */
+  const parsed = await readJsonSafe(tasksPath(dshHome), emptyRegistry())
+  const registry = { ...emptyRegistry(), ...parsed }
+  if (!Array.isArray(registry.tasks)) registry.tasks = []
+  return registry
 }
 
 async function writeRegistry(dshHome, registry) {
-  await writeFile(tasksPath(dshHome), JSON.stringify(registry, null, 2), 'utf8')
+  await writeJsonAtomic(tasksPath(dshHome), registry)
 }
 
 const SKILL_STATUS = new Set(['open', 'written', 'confirmed'])
@@ -245,6 +245,14 @@ export async function markSkillsWritten(dshHome, { taskId, skills, notes }) {
   const task = registry.tasks.find((t) => t.id === taskId)
   if (!task) return { ok: false, error: `找不到任务「${taskId}」` }
   const dynamic = task.dynamicSkills === true
+  /* 已归档(done)的任务又被 AI 标记写入:说明它其实还在改。此前 status 留在 done,
+   * 后续用户确认技能时 autoCompleted 恒 false → 永远不触发归档,历史摘要停在旧值,
+   * 界面上毫无提示(实测死角)。这里自动重开,并让返回里带 reopened 供调用方提醒。 */
+  let reopened = false
+  if (task.status === 'done') {
+    task.status = 'open'
+    reopened = true
+  }
   const names = Array.isArray(skills) ? skills : []
   const missing = []
   for (const name of names) {
@@ -269,7 +277,7 @@ export async function markSkillsWritten(dshHome, { taskId, skills, notes }) {
   }
   touch(task)
   await writeRegistry(dshHome, registry)
-  return { ok: missing.length === 0, missing, marked: names.length - missing.length, notesStored, task }
+  return { ok: missing.length === 0, missing, marked: names.length - missing.length, notesStored, reopened, task }
 }
 
 /**
