@@ -977,12 +977,13 @@ window.__ModuleLoader__.load({
       { id: 'doudizhu', name: '斗地主' },
       { id: 'single', name: '单挑' }
     ];
-    /* 模式人数上限兜底(引擎真值:身份 2~10/国战 2~12/对决 1v1~4v4=2~8/
-     * 斗地主固定 3/单挑 2;内核随 room_members 的 caps 字段上报同值,
-     * 这里只作旧内核兜底)。必须放模块层:面板组件里这条赋值曾写在
-     * `return renderOnlinePanel()` 之后,组件体永远执行不到——刚建房、
-     * 还没有成员事件时弹窗一开就 TypeError(实测事故,已修) */
-    var MODE_MAX = { identity: 10, guozhan: 12, versus: 8, doudizhu: 3, single: 2 };
+    /* 模式人数上限兜底(实战口径:身份/国战 8/对决 8/斗地主 3/单挑 2——
+     * 引擎选项列表虽到 10/12,但实机可用上限是 8,用户校准;内核随
+     * room_members 的 caps 字段上报同值,这里只作旧内核兜底)。
+     * 必须放模块层:面板组件里这条赋值曾写在 `return renderOnlinePanel()`
+     * 之后,组件体永远执行不到——刚建房、还没有成员事件时弹窗一开就
+     * TypeError(实测事故,已修) */
+    var MODE_MAX = { identity: 8, guozhan: 8, versus: 8, doudizhu: 3, single: 2 };
     /* 流程互斥:同一游戏实例要么在主机流程要么在客人流程,进行中时另一侧禁用 */
     var HOST_PHASES = ['host_booting', 'hosting', 'invite_ready', 'connecting', 'room_open'];
     var GUEST_PHASES = ['guest_booting', 'joining', 'answer_ready', 'entering', 'connected', 'queued'];

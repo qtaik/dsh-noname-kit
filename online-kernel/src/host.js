@@ -121,11 +121,15 @@
 		});
 	}
 
-	/* 模式人数上限:优先读引擎的模式配置(lib.mode[模式].config.player_number.item,
-	 * 动态 getter——身份 2~10、国战 2~12),读不到用兜底表。
-	 * 兜底表按引擎真值:对决 1v1~4v4=2/4/6/8、斗地主固定 3、单挑 2 */
+	/* 模式人数上限:引擎的 player_number.item 选项列表理论上开到 10/12
+	 * (_status.maximumNumberOfPlayers 全库无赋值处,恒走默认),但实战口径的
+	 * 可用上限是 8(用户实机校准:身份/国战 9+ 人的局不实用)——取「引擎
+	 * 读取」与「实战上限」的较小者,引擎哪天改小了也跟随。
+	 * 对决按 1v1~4v4=2/4/6/8、斗地主固定 3、单挑 2。
+	 * 载入后房间真值仍以 configOL 为准(房间设置真开了 9 人局,座位显示 9) */
 	function modeMaxPlayers(mode) {
-		var fallback = { identity: 10, guozhan: 12, versus: 8, doudizhu: 3, single: 2 };
+		var practical = { identity: 8, guozhan: 8, versus: 8, doudizhu: 3, single: 2 };
+		var cap = practical[mode] || 8;
 		try {
 			var pn = nnk.env.lib.mode[mode] && nnk.env.lib.mode[mode].config && nnk.env.lib.mode[mode].config.player_number;
 			var nums = (pn && pn.item ? Object.keys(pn.item) : []).map(function(k) {
@@ -134,10 +138,10 @@
 				return !isNaN(n);
 			});
 			if (nums.length) {
-				return Math.max.apply(null, nums);
+				return Math.min(Math.max.apply(null, nums), cap);
 			}
 		} catch (e) { /* 忽略 */ }
-		return fallback[mode] || 10;
+		return cap;
 	}
 
 	/* 房间真实容量:载入后读引擎房间配置。取值顺序对齐引擎口径——
