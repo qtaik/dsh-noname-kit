@@ -6,9 +6,14 @@
 静态校验、任务管理都有插件兜底;游戏扩展目录只认专用写入通道,AI 抄错或删错
 代码会被工具层拦下,覆盖前自动备份。
 
+另外还带一个跨网络联机助手:双方装本插件,就能开 P2P 房间一起玩(免公网 IP),
+客人缺的扩展包自动补传。
+
 ![工坊:任务表单与任务列表](https://cdn.jsdelivr.net/npm/dsh-noname-kit/docs/screenshots/workshop.png)
 
-![历史页:备份回滚与注意点清单](https://cdn.jsdelivr.net/npm/dsh-noname-kit/docs/screenshots/history.png)
+![历史页:扩展总览、备份回滚与注意点清单](https://cdn.jsdelivr.net/npm/dsh-noname-kit/docs/screenshots/history.png)
+
+![联机助手:P2P 房间、内核心跳状态与扩展体检](https://cdn.jsdelivr.net/npm/dsh-noname-kit/docs/screenshots/online.png)
 
 ## 安装
 
@@ -104,7 +109,24 @@ AI 会先探测引擎版本、把描述逐条拆成规则再给确认单。提�
 | noname_copy_audio | 把本地配音 mp3 复制进扩展包 audio/skill、audio/die 目录(不碰本体) |
 
 普通 write/edit/bash 对游戏 extension 目录的写入会被守卫拒绝,不用担心
-AI 绕过校验直接改文件。
+AI 绕过校验直接改文件(读、搜、看目录完全不受限)。
+
+## 🌐 联机助手
+
+工坊「🌐 联机」页签里的另一个功能:跨网络开 P2P 房间一起玩,免公网 IP。双方都
+装本插件即可——游戏里装一个无头的「内核」负责联机(联机页一键安装)。
+
+- **建房**:选模式建房间拿 6 位房号,朋友输房号加入;房号连不上的朋友,房主点
+  「生成邀请码」发他一张,从另一道门进同一个房间。人满自动排队,有人退出自动补进。
+- **打完一把回大厅**:房号不变,点「载入到游戏」开下一局;掉线会自动重回。
+- **包体检与补传**:进房自动对比双方扩展清单,客人缺的扩展由房主自动补传,
+  保证两边选将池一致。
+- **内核**:联机页点「📦 安装内核」装进游戏 extension/ 目录,再到游戏「扩展」菜单
+  给「联机助手」点「启」并重载。升级插件后记得点「⬆️ 升级内核」——两端内核版本
+  要一致(房号通过信令服务器牵线,版本不同会互相连不上)。
+
+联机以官方版无名杀为准(第三方套壳尽力而为);对局数据是点对点直连,信令服务器
+只负责牵线。
 
 ## 「无名杀开发模式」preset
 
@@ -186,5 +208,8 @@ node scripts/test-ui-calls.mjs   # 界面代码调用形态静态扫描(e()/h() 
 ```sh
 dsh plugin --profile web remove dsh-noname-kit
 ```
+
+联机内核(游戏 extension/ 目录里的「联机助手」)不会被自动删除,不用了在游戏
+「扩展」菜单里删掉即可。
 
 MIT License
