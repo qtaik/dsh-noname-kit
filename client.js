@@ -212,43 +212,54 @@ window.__ModuleLoader__.load({
       };
 
       // 「编辑已有武将/卡牌」:列出目标包内条目(锚点/无锚老包通吃)。
-      // seq 守卫防竞态:快速连点时先发后至的旧响应不得覆盖新状态
-      var entrySeq = 0, entrySkillSeq = 0;
+      // 竞态守卫:快速连切(包/类型/条目)时,先发后至的旧响应必须丢弃。
+      // 判定写在函数式更新里比对「当前状态 vs 请求参数」——组件体重渲染会重建
+      // 局部变量,靠 ++seq 计数守不住(第 1 轮审计实测:切包 A→B 后 A 的迟到响应
+      // 把条目列表整个换成 A 的);比对状态天然跨渲染有效。
       var loadEntries = function (folder, kind) {
-        var seq = ++entrySeq;
         // mode 类型没有条目下拉(服务端 /entries 只认 character/card),不发必败请求、不清包信息提示
         if (!folder || (kind !== 'character' && kind !== 'card')) { patch({ entryList: [], entryId: '', entryLoading: false, entrySkills: [], pickedSkills: [] }); return }
         patch({ entryLoading: true });
         fetch('/noname-kit-api/entries?folder=' + encodeURIComponent(folder) + '&kind=' + kind).then(function (r) { return r.json() }).then(function (b) {
-          if (seq !== entrySeq) return;
-          setForm(function (prev) { return Object.assign({}, prev, {
-            entryLoading: false,
-            entryList: b.ok ? (b.entries || []) : [],
-            entryId: '',
-            entrySkills: [], pickedSkills: [],
-            currentInfo: b.ok ? '' : '❌ ' + (b.error || '条目列表加载失败')
-          }) });
+          setForm(function (prev) {
+            if (prev.folder !== folder || prev.type !== kind || prev.goal !== 'edit') return prev; // 该响应已过期
+            return Object.assign({}, prev, {
+              entryLoading: false,
+              entryList: b.ok ? (b.entries || []) : [],
+              entryId: '',
+              entrySkills: [], pickedSkills: [],
+              currentInfo: b.ok ? '' : '❌ ' + (b.error || '条目列表加载失败')
+            });
+          });
         }, function () {
-          if (seq !== entrySeq) return;
-          setForm(function (prev) { return Object.assign({}, prev, { entryLoading: false, entryList: [], entryId: '', entrySkills: [], pickedSkills: [], currentInfo: '❌ 条目列表加载失败' }) });
+          setForm(function (prev) {
+            if (prev.folder !== folder || prev.type !== kind || prev.goal !== 'edit') return prev;
+            return Object.assign({}, prev, { entryLoading: false, entryList: [], entryId: '', entrySkills: [], pickedSkills: [], currentInfo: '❌ 条目列表加载失败' });
+          });
         });
       };
 
       // 选中条目后:拉取该武将/卡牌 skills 数组里的技能(勾选候选)
+      // 守卫同 loadEntries:响应回来时条目已不是它,就整条丢弃
       var loadEntrySkills = function (folder, entryId) {
-        var seq = ++entrySkillSeq;
         patch({ entrySkillsLoading: true });
         fetch('/noname-kit-api/entry-skills?folder=' + encodeURIComponent(folder) + '&id=' + encodeURIComponent(entryId)).then(function (r) { return r.json() }).then(function (b) {
-          if (seq !== entrySkillSeq) return;
-          setForm(function (prev) { return Object.assign({}, prev, { entrySkillsLoading: false, entrySkills: b.ok ? (b.skills || []) : [], pickedSkills: [] }) });
+          setForm(function (prev) {
+            if (prev.entryId !== entryId) return prev; // 该响应已过期
+            return Object.assign({}, prev, { entrySkillsLoading: false, entrySkills: b.ok ? (b.skills || []) : [], pickedSkills: [] });
+          });
         }, function () {
-          if (seq !== entrySkillSeq) return;
-          setForm(function (prev) { return Object.assign({}, prev, { entrySkillsLoading: false, entrySkills: [], pickedSkills: [] }) });
+          setForm(function (prev) {
+            if (prev.entryId !== entryId) return prev;
+            return Object.assign({}, prev, { entrySkillsLoading: false, entrySkills: [], pickedSkills: [] });
+          });
         });
       };
 
       var pickEntry = function (id) {
-        setForm(function (prev) { return Object.assign({}, prev, { entryId: id, pickedSkills: [], entrySkills: [], editNotes: '' }) });
+        // entrySkillsLoading 一并归零:选了「— 选择条目 —」(空)时不会有新请求来收尾,
+        // 上一次的加载态会永远挂着(守卫丢弃旧响应后没人再清它)
+        setForm(function (prev) { return Object.assign({}, prev, { entryId: id, pickedSkills: [], entrySkills: [], editNotes: '', entrySkillsLoading: false }) });
         if (id) loadEntrySkills(form.folder, id);
       };
 
@@ -278,15 +289,22 @@ window.__ModuleLoader__.load({
         patch({ folder: folder, currentInfo: '', usedIds: [], entryId: '', entryList: [], entrySkills: [], pickedSkills: [], editNotes: '', addSkills: false });
         if (!folder) return;
         if (form.goal === 'edit') loadEntries(folder, form.type);
+        // 下面两条链都按「响应回来时选中的还是不是这个包」守卫 —— 快速切包时旧包的
+        // 迟到响应曾把 currentInfo/style/usedIds/notes 整个换成旧包的(行为探针实测)
         fetch('/noname-kit-api/extension?folder=' + encodeURIComponent(folder)).then(function (r) { return r.json() }).then(function (body) {
-          if (body.error) { setForm(function (prev) { return Object.assign({}, prev, { currentInfo: '读取失败: ' + body.error }) }); return }
-          var lines = body.code ? body.code.split('\n').length : 0;
-          var style = body.code && body.code.indexOf('game.import(') >= 0 ? 'classic' : 'module';
-          setForm(function (prev) { return Object.assign({}, prev, {
-            currentInfo: '✅ ' + folder + ':约 ' + lines + ' 行,' + style + '写法',
-            style: style,
-          }) });
-        }, function () { setForm(function (prev) { return Object.assign({}, prev, { currentInfo: '读取失败' }) }) });
+          setForm(function (prev) {
+            if (prev.folder !== folder) return prev;
+            if (body.error) return Object.assign({}, prev, { currentInfo: '读取失败: ' + body.error });
+            var lines = body.code ? body.code.split('\n').length : 0;
+            var style = body.code && body.code.indexOf('game.import(') >= 0 ? 'classic' : 'module';
+            return Object.assign({}, prev, {
+              currentInfo: '✅ ' + folder + ':约 ' + lines + ' 行,' + style + '写法',
+              style: style,
+            });
+          });
+        }, function () {
+          setForm(function (prev) { return prev.folder !== folder ? prev : Object.assign({}, prev, { currentInfo: '读取失败' }) });
+        });
         // 已用任务ID + 历史注意点:登记处(进行中/已完成)+ 该包归档历史,合并去重
         fetch('/noname-kit-api/tasks').then(function (r) { return r.json() }).then(function (reg) {
           var used = (reg.tasks || []).filter(function (t) { return t.folder === folder })
@@ -298,7 +316,7 @@ window.__ModuleLoader__.load({
             return { used: used, notes: (hb.history && hb.history.notes) || [] };
           });
         }).then(function (r2) {
-          setForm(function (prev) { return Object.assign({}, prev, { usedIds: r2.used, notes: r2.notes }) });
+          setForm(function (prev) { return prev.folder !== folder ? prev : Object.assign({}, prev, { usedIds: r2.used, notes: r2.notes }) });
         }, function () { /* 拉不到就不显示,不挡流程 */ });
       };
 
@@ -599,7 +617,10 @@ window.__ModuleLoader__.load({
                : (form.folder ? e('div', 'nnk-hint', '此包暂无任务记录') : null)]
           : [textField('新扩展包名称(游戏 extension/ 下的文件夹名)', form.folder, set('folder'))],
         radioGroup('类型', form.type, [{ value: 'character', text: '⚔️ 武将' }, { value: 'card', text: '🃏 卡牌' }, { value: 'mode', text: '🎲 新玩法(自定义模式)' }], switchType),
-        isEdit ? radioGroup('目标', form.goal, [{ value: 'create', text: '✨ 创建新' }, { value: 'edit', text: '✏️ 编辑已有' }], switchGoal) : null,
+        // 🎲 模式类型的「目标」恒为「编辑已有」(switchMode/switchType 两处都已强制),
+        // 不再给这个 radio —— 手点「✨ 创建新」会让提交的消息自称「创建全新扩展包,
+        // 目标文件夹当前不存在」,而包其实是从已有列表里选的(消息自相矛盾,行为探针实测)
+        isEdit && form.type !== 'mode' ? radioGroup('目标', form.goal, [{ value: 'create', text: '✨ 创建新' }, { value: 'edit', text: '✏️ 编辑已有' }], switchGoal) : null,
         isModeCreate ? [
           e('div', 'nnk-hint', '🎲 以全新扩展包交付,生成后可随时在「📂 编辑已有扩展包」里继续调整。'),
           textField('一句话核心玩法(这是什么玩法?)', form.brief, set('brief'), { placeholder: '例: 无身份混战大逃杀,每个玩家独立求生' }),
@@ -1931,8 +1952,8 @@ window.__ModuleLoader__.load({
             h('button', { className: 'nnk-tab' + (active === 'settings' ? ' nnk-active' : ''), onClick: function () { setActive('settings') } }, '⚙ 设置')
           ),
           phase === false && active === 'new' ? e('div', 'nnk-err', '⚠️ 还没配置游戏目录——到「⚙ 设置」页填一下就能自动写入;暂时不配也行,把写入方式设为「手动复制」。') : null,
-          active === 'new' ? h(NewTaskForm, { sessionId: sessionId, send: send }) : null,
-          active === 'tasklist' ? h(TaskListContent, { sessions: props.sessions, uiSession: props.uiSession, compact: false }) : null,
+          active === 'new' ? h(NewTaskForm, { send: send }) : null,
+          active === 'tasklist' ? h(TaskListContent, { sessions: props.sessions, uiSession: props.uiSession }) : null,
           active === 'history' ? h(HistoryPanel) : null,
           active === 'online' ? h(OnlinePanel) : null,
           active === 'settings' ? h(SettingsPanel) : null
