@@ -311,8 +311,19 @@
 	 * IP + 本机 ICE 端口作为额外直连地址随信令带给对方,对方直接朝它发检查,
 	 * 不依赖组播。没有虚拟网卡时处处为空,行为与从前完全一致(零影响)。 */
 	var VIRTUAL_NIC_RE = /radmin|zerotier|hamachi|tailscale|vpn|虚拟|tap|tun|wireguard/i;
-	/* 纯函数(也供单测):从 networkInterfaces() 的形态里挑虚拟网卡 IPv4。
-	 * 判定=网卡名像虚拟网卡,或地址落在 Radmin(26.x)/Hamachi(25.x)固定网段 */
+	/* 公网 IPv6(2000::/3)也注入:校园网/教育网普遍给每台机器公网 v6,两端都有时
+	 * **不需要打洞**(没有 NAT)就能直连——而浏览器自己的 v6 候选被打码成 .local,
+	 * 对面解析不了,这条路白扔。v6 用 [地址]:端口 的形态(解析无歧义)。
+	 * 只认全局单播;链路本地(fe80::)没 zone 连不上、其它特殊段一律跳过 */
+	function isGlobalV6(addr) {
+		var ip = String(addr || "").split("%")[0].toLowerCase();
+		if (ip.indexOf(":") < 0) {
+			return false;
+		}
+		return /^2[0-9a-f]{0,3}:/.test(ip) || /^3[0-9a-f]{0,3}:/.test(ip);
+	}
+	/* 纯函数(也供单测):从 networkInterfaces() 的形态里挑「值得随信令带给对方的
+	 * 直连地址」= 虚拟网卡 IPv4(Radmin/Hamachi 段)+ 任何网卡上的公网 IPv6 */
 	function virtualIpsFrom(ifaces, extra) {
 		var out = [];
 		var seen = {};
@@ -327,11 +338,17 @@
 			var isVirtual = VIRTUAL_NIC_RE.test(name);
 			for (var i = 0; i < list.length; i++) {
 				var a = list[i];
-				if (!a || a.internal || (a.family !== "IPv4" && a.family !== 4)) {
+				if (!a || a.internal) {
 					continue;
 				}
-				if (isVirtual || /^(25|26)\./.test(a.address)) {
-					push(a.address);
+				var isV4 = a.family === "IPv4" || a.family === 4;
+				var isV6 = a.family === "IPv6" || a.family === 6;
+				if (isV4) {
+					if (isVirtual || /^(25|26)\./.test(a.address)) {
+						push(a.address);
+					}
+				} else if (isV6 && isGlobalV6(a.address)) {
+					push("[" + String(a.address).split("%")[0] + "]");
 				}
 			}
 		}
@@ -379,13 +396,16 @@
 	function directHosts(pc) {
 		try {
 			var ports = hostPortsFromSdp(pc.localDescription && pc.localDescription.sdp);
+			var ips = virtualIps();
 			var out = [];
-			virtualIps().forEach(function(ip) {
-				ports.forEach(function(port) {
+			/* 端口在外层、地址在内层交错:多地址(虚拟网卡 v4 + 公网 v6)时每个地址
+			 * 都先轮到一次,不会被"第一个地址吃满额度"挤掉;总量上限 12 条 */
+			ports.forEach(function(port) {
+				ips.forEach(function(ip) {
 					out.push(ip + ":" + port);
 				});
 			});
-			return out.slice(0, 8);
+			return out.slice(0, 12);
 		} catch (e) {
 			return [];
 		}
@@ -394,9 +414,27 @@
 	 * 返回成功加进去的条数;坏地址/被拒单条均不影响主流程;上限 8 条防载荷刷爆 */
 	function addInjected(pc, hosts) {
 		var n = 0;
-		(hosts || []).slice(0, 8).forEach(function(h) {
-			var sp = String(h).split(":");
-			if (sp.length !== 2 || !/^[0-9A-Fa-f.]+$/.test(sp[0]) || !/^\d+$/.test(sp[1])) {
+		(hosts || []).slice(0, 12).forEach(function(h) {
+			/* 两种形态:IPv4「1.2.3.4:5678」与 IPv6「[2001:db8::1]:5678」 */
+			var str = String(h);
+			var ip = "";
+			var port = "";
+			var m6 = /^\[([0-9A-Fa-f:]+)\]:(\d+)$/.exec(str);
+			if (m6) {
+				/* 只收公网 IPv6(2xxx/3xxx 开头):回环/链路本地/ULA 一律跳过
+				 * ——与发送侧同口径,别把无效候选灌进自己的 ICE 列表 */
+				if (/^[23][0-9a-fA-F]{0,3}:/.test(m6[1])) {
+					ip = "[" + m6[1] + "]";
+					port = m6[2];
+				}
+			} else {
+				var sp = str.split(":");
+				if (sp.length === 2 && /^[0-9A-Fa-f.]+$/.test(sp[0]) && /^\d+$/.test(sp[1])) {
+					ip = sp[0];
+					port = sp[1];
+				}
+			}
+			if (!ip || !port || Number(port) < 1 || Number(port) > 65535) {
 				return;
 			}
 			try {
@@ -406,7 +444,8 @@
 				 * 置 1 = 排在所有候选之后:同网走局域网、能打洞走公网直连,
 				 * 都打不通才落到虚拟网卡兜底(它存在的意义本来就是兜底) */
 				var p = pc.addIceCandidate({
-					candidate: "candidate:1 1 udp 1 " + sp[0] + " " + sp[1] + " typ host",
+					/* SDP candidate 行里的 IPv6 不带方括号(裸地址,冒号分隔) */
+					candidate: "candidate:1 1 udp 1 " + ip.replace(/^\[|\]$/g, "") + " " + port + " typ host",
 					sdpMid: "0",
 					sdpMLineIndex: 0
 				});

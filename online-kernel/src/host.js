@@ -578,7 +578,7 @@
 				/* failed 是终态且本侧不做 ICE restart,半死 pc 必须关掉,
 				 * 否则客人每重试一次就漏一个连接对象 */
 				try { pc.close(); } catch (e2) { /* 忽略 */ }
-				bridgeApi().emit("error", { message: "一位客人的直连建立失败(双方网络没打通),需要其重新加入——反复失败的话,给这位朋友生成一张邀请码,让他从另一道门进来" });
+				bridgeApi().emit("error", { message: "一位客人的直连建立失败(双方网络没打通),需要其重新加入——常见原因:对面是校园网/公司网,拦 UDP 或不放行 P2P。可试:让对面关掉防火墙对该游戏的 UDP 拦截、或换手机热点、或双方用同一个路由器/热点;邀请码不是网络兜底(只换「找到对方」的方式)" });
 			}
 		};
 		pc.setRemoteDescription(msg.sdp).then(function() {
@@ -862,7 +862,7 @@
 		};
 		pc.onconnectionstatechange = function() {
 			if (pc.connectionState === "failed") {
-				giveUp("直连建立失败(双方网络没打通)");
+				giveUp("直连建立失败(双方网络没打通;校园网/公司网拦 UDP 时需换网络或同网)——");
 			}
 		};
 		/* 打通看门狗:原先 20 秒,慢中继/移动网络下 1 次检查往返 + DTLS + SCTP 建立

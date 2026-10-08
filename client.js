@@ -1789,7 +1789,7 @@ window.__ModuleLoader__.load({
                         return '。以上都试过仍离线:点「🔁 重装内核」并重启游戏(内核与桥凭据一起重写,最省事的一招)';
                       })())),
                 (bridge.cfg && Array.isArray(bridge.cfg.virtualIps) && bridge.cfg.virtualIps.length)
-                  ? e('div', 'nnk-ok', '🛰 虚拟网卡直连已就绪:' + bridge.cfg.virtualIps.join('、') + '(自动生效,连房时把该地址带给对方,无需操作)')
+                  ? e('div', 'nnk-ok', '🛰 直连地址已就绪:' + bridge.cfg.virtualIps.join('、') + '(虚拟网卡/公网 IPv6;自动随房号与邀请码带给对方,无需操作。IPv6 直的连不需要打洞——校园网两端都有公网 v6 时最有用)')
                   : null,
                 /* 当前线路:分清"走错路了(中继)"还是"路本身慢"——用户实测延迟几秒时
                  * 第一眼要看的就是这一行。relay=中继;host=局域网直连;srflx/prflx=公网打洞 */

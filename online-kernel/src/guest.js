@@ -755,7 +755,7 @@
 				if (pc.connectionState === "failed") {
 					if (Date.now() - (guestState.lastIceFailAt || 0) > 2000) {
 						guestState.lastIceFailAt = Date.now();
-						bridgeApi().emit("error", { message: "直连建立失败(双方网络没打通)——反复失败检查防火墙是否放行无名杀(UDP),或让房主发一张邀请码,从另一道门进来" });
+						bridgeApi().emit("error", { message: "直连建立失败(双方网络没打通)——常见原因:校园网/公司网拦 UDP 或不放行 P2P。先试:双方关掉防火墙对无名杀的 UDP 拦截;换手机热点往往能成;同网(同一路由器/热点)必成。注意邀请码不是网络兜底(它只换「找到对方」的方式,网络本身拦 UDP 时同样连不上)" });
 					}
 					bridgeApi().setPhase("idle");
 					resetSession();

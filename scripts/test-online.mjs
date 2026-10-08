@@ -244,7 +244,7 @@ export default { name: "standard", character: characters, translate: translates 
   const fakePc = { addIceCandidate: (c) => { addCalls.push(c.candidate); return Promise.resolve() } }
   ok(rtc.addInjected(fakePc, ['26.1.2.3:54321']) === 1 && addCalls[0].includes('26.1.2.3 54321 typ host'), '注入候选格式正确(host 优先级)')
   ok(rtc.addInjected(fakePc, ['坏地址', '26.1.2.3:abc', '']) === 0, '坏地址全部拒绝')
-  ok(rtc.addInjected(fakePc, Array.from({ length: 12 }, (_, i) => '26.1.2.' + i + ':54321')) === 8, '注入条数上限 8(防对方载荷刷爆)')
+  ok(rtc.addInjected(fakePc, Array.from({ length: 20 }, (_, i) => '26.1.2.' + i + ':54321')) === 12, '注入条数上限 12(防对方载荷刷爆;多地址交错后额度放宽一点)')
   ok(!rtcSrc.includes('hostPortFromSdp('), '旧单端口实现在审计中清除(只留 hostPortsFromSdp)')
   ok(guestSrc.includes('rejoinBeatStreak = 0;   /* 收场一并清连死计数'), '信令收场清连死计数(防跨链残留提前收场)')
   const clientSrc = readFileSync(join(repoRoot, 'client.js'), 'utf8')
@@ -279,7 +279,7 @@ export default { name: "standard", character: characters, translate: translates 
   ok(clientSrc.includes('newest > autoPopped'), '自动弹码只在出现更新行号时(不再覆盖手动「🔎 再看」)')
   ok(rtcSrc.includes('virtualIps: virtualIps'), 'rtc 导出 virtualIps(工坊状态行数据源)')
   ok(bridgeSrc.includes('virtualIps: (function()'), '内核心跳 cfg 带虚拟网卡检测结果')
-  ok(clientSrc.includes('虚拟网卡直连已就绪'), '面板显示虚拟网卡就绪状态(用户看得见,不再是隐形功能)')
+  ok(clientSrc.includes('直连地址已就绪:') && clientSrc.includes('virtualIps.join'), '面板显示直连地址就绪状态(虚拟网卡 IPv4 + 公网 IPv6;用户看得见,不再是隐形功能)')
 
   // ── 结构性回归锁:开局瞬间误杀与「退出房间被拉回」(10-08 实测报障)──
   ok(rtcSrc.includes('lastBuffered'), '心跳判死识别传输层 ACK 推进(对端主线程忙时不再误杀)')
@@ -355,7 +355,7 @@ export default { name: "standard", character: characters, translate: translates 
 
   /* ── 10-09 用户点名:热点之间变快(线路可见 + 兜底优先级 + 出牌时限;TURN 已被用户否决——
    * 设计前提就是不租服务器,有服务器的直接用引擎原生局域网联机)── */
-  ok(rtcSrc.includes('candidate:1 1 udp 1 " + sp[0]'),
+  ok(rtcSrc.includes('candidate:1 1 udp 1 " + ip.replace('),
     '注入候选优先级降到 1(排最后):同网/公网直连优先,虚拟网卡只当兜底')
   ok(rtcSrc.includes('function trackPc(pc)') && rtcSrc.includes('"candidate-pair"') && rtcSrc.includes('currentRoundTripTime'),
     '线路观测:5 秒一轮 getStats 取候选对(host/srflx/relay + RTT)')
@@ -368,6 +368,12 @@ export default { name: "standard", character: characters, translate: translates 
     '码解析容错:从粘贴内容里摘出 NNK1.<base64url>(不再要求整串恰好相等)')
   ok(rtcSrc.includes('这看起来是 6 位房号') && rtcSrc.includes('可能被聊天软件截断'),
     '码解析失败的文案分情况给出路(粘成房号/半截码/不像码)')
+  /* 校园网群友场景:两端都有公网 IPv6 时无需打洞直连(不依赖任何服务器) */
+  ok(rtcSrc.includes('function isGlobalV6') && rtcSrc.includes('return /^2[0-9a-f]{0,3}:/'),
+    '公网 IPv6 地址随信令带给对方(校园网/教育网两端都有 v6 时直连,不用打洞)')
+  ok(rtcSrc.includes('SDP candidate 行里的 IPv6 不带方括号'), '注入的 IPv6 候选行按 SDP 规矩写裸地址(行为在探针里验)')
+  ok(guestSrc.includes('校园网/公司网拦 UDP') && hostSrc.includes('校园网/公司网拦 UDP'),
+    '直连失败文案点名校园网/公司网拦 UDP 这条最常见的真凶,并说明邀请码不是网络兜底')
 
   console.log(`\n全部通过:${passed} 项`)
 } finally {
