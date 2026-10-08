@@ -92,16 +92,16 @@
 		}
 	}
 
-	/* 定向广播:message 里带 sendTo(本次传输的目标通道 label 列表)时,
-	 * 只发给名单内的通道自己 send;名单为空(旧对端/拿不到 label)退回引擎广播。 */
+	/* 定向发送:message 里带 sendTo(本次传输的目标通道 label 列表)时,只发给
+	 * 名单内的通道自己 send。名单为空=没有可定向的通道(对端内核过旧/通道全断)
+	 * 时直接不发——早先这里退回 game.broadcast,但联机模式下广播开门就 return
+	 * (game.online 门禁),旧对端也不懂 ready/done 协议,那条"兜底"只会把
+	 * 1.9.0 修掉的"广播即成功"假象带回来(审计实证)。没通道由 startOne 前置失败 */
 	function sendToBridges(func, payload) {
-		var bridges = enteredBridges();
 		if (!payload.sendTo || !payload.sendTo.length) {
-			try {
-				nnk.env.game.broadcast(func, payload);
-			} catch (e) { /* 忽略 */ }
 			return;
 		}
+		var bridges = enteredBridges();
 		bridges.forEach(function(b) {
 			var id = bridgeId(b);
 			if (id && payload.sendTo.indexOf(id) >= 0) {
@@ -112,14 +112,27 @@
 
 	/* ---- 房主侧:补传队列(自动补传 = 一次入队全部缺失,逐个传) ---- */
 	var txSeq = 0;
-	var txQueue = [];
+	var txQueue = [];      /* 队列项 { name, only }:only=本次只发给这一条通道
+	                        * (清单补传按上报者定向——发给全体会把缺包客人 A 的
+	                        * 扩展强推给没缺包的 B、覆盖 B 本地同名文件,审计实证) */
 	var txBusy = false;
-	var txCurrent = null;   /* 正在传的名字:防同名牌重复入队重复传 */
+	var txCurrent = null;  /* 正在传的队列项:防同名重复入队重复传 */
 	var ackWait = null;     /* { id, need:[bridgeId], got:{}, resolve, timer, func } */
+	var ackFailReason = ""; /* 客人明确回 fail 时带的原因(onAck 收下,startOne 用来播报) */
 
-	/* 客人的 ready/done 回执(由 install 注册到 lib.message.server) */
+	/* 客人的 ready/done/fail 回执(由 install 注册到 lib.message.server) */
 	function onAck(msg) {
 		if (!msg || typeof msg.id !== "number") {
+			return;
+		}
+		if (ackWait && ackWait.id === msg.id && msg.type === "fail") {
+			/* 客人明确报告接收失败(不完整/体积超限/落盘失败):立刻收场带回原因,
+			 * 别让房主干等超时后报一句笼统的"没等到回执" */
+			var wf = ackWait;
+			ackWait = null;
+			clearTimeout(wf.timer);
+			ackFailReason = msg.reason || "";
+			wf.resolve(false);
 			return;
 		}
 		if (ackWait && ackWait.id === msg.id && ackWait.func === msg.type) {
@@ -147,13 +160,26 @@
 
 	/* 只对"已交给引擎"的客人等回执:停泊/排队的客人通道没被 lib.init.connection
 	 * 接管,他们的 nnk_tx_ack 根本到不了本内核——把他们算进必答名单,
-	 * 每次补传都会 3 秒后报"客人没响应"(真正缺包的人反而拿不到包)。 */
+	 * 每次补传都会 3 秒后报"客人没响应"(真正缺包的人反而拿不到包)。
+	 * targets=本次会话冻结的参与名单(开始发送那一刻定);等回执时再与"现在还
+	 * 挂着的已进入通道"取交集——中途新放行的客人没收到过一个字节,不能算必答
+	 * (旧实现在收尾一刻重算名单,双客人场景必误报"没等到回执",审计实证) */
 	function enteredBridges() {
 		return currentBridges().filter(function(b) { return b._entered === true; });
 	}
 
-	function waitAcks(id, func, timeoutMs) {
-		var need = enteredBridges().map(bridgeId).filter(function(x) { return x !== null; });
+	function waitAcks(id, func, timeoutMs, targets) {
+		var live = {};
+		enteredBridges().forEach(function(b) {
+			var i2 = bridgeId(b);
+			if (i2 !== null) {
+				live[i2] = true;
+			}
+		});
+		var need = (targets || enteredBridges().map(bridgeId)).filter(function(x) {
+			return x !== null && x !== undefined && live[x];
+		});
+		ackFailReason = "";
 		if (!need.length) {
 			return Promise.resolve(false);
 		}
@@ -168,20 +194,28 @@
 		});
 	}
 
-	function startTransfer(name) {
+	function startTransfer(name, only) {
 		var list = Array.isArray(name) ? name : [name];
 		var queued = 0;
-		var targets = enteredBridges();
+		var nowTs = Date.now();
+		Object.keys(txDone).forEach(function(k) {   /* 顺带剪掉过期记录(只写不清理会缓慢涨) */
+			if (nowTs - txDone[k] > TX_DONE_TTL) {
+				delete txDone[k];
+			}
+		});
+		var targets = (only === undefined || only === null)
+			? enteredBridges()
+			: currentBridges().filter(function(b) { return bridgeId(b) === only; });
 		for (var i = 0; i < list.length; i++) {
-			/* 正在传的同名扩展不再排队(手动按钮连点/自动+手动撞车防重复传);
-			 * 对"所有在场客人"都已传过的也不再排队(客人没重启时的重连会重新上报
-			 * 清单)——按客人区分,换人加入时照常传 */
+			/* 正在传的同名(同目标)不再排队;对"目标客人"都已传过的也不再排 */
 			var allDone = targets.length > 0 && targets.every(function(b) {
 				var at = txDone[doneKey(b, list[i])];
 				return typeof at === "number" && (Date.now() - at) < TX_DONE_TTL;
 			});
-			if (list[i] !== txCurrent && !allDone && txQueue.indexOf(list[i]) < 0) {
-				txQueue.push(list[i]);
+			var dup = (txCurrent && txCurrent.name === list[i] && txCurrent.only === (only || null))
+				|| txQueue.some(function(e2) { return e2.name === list[i] && e2.only === (only || null); });
+			if (!dup && !allDone) {
+				txQueue.push({ name: list[i], only: only || null });
 				queued++;
 			}
 		}
@@ -207,21 +241,25 @@
 		}
 		txBusy = true;
 		txCurrent = next;
-		var served = enteredBridges().map(bridgeId);
-		startOne(next, function(ok) {
+		var served = next.only
+			? [next.only]
+			: enteredBridges().map(bridgeId);
+		startOne(next.name, function(ok) {
 			if (ok) {
-				/* 记到"当时在场的每位客人"名下:同一位客人重连不重传,新客人照传 */
+				/* 记到参与本次传输的每位客人名下:同一位客人重连不重传,新客人照传 */
 				served.forEach(function(bid) {
-					txDone[bid + "|" + next] = Date.now();
+					if (bid) {
+						txDone[bid + "|" + next.name] = Date.now();
+					}
 				});
 			}
 			txBusy = false;
 			txCurrent = null;
 			pumpQueue();
-		});
+		}, next.only);
 	}
 
-	function startOne(name, done) {
+	function startOne(name, done, only) {
 		var fail = function(message) {
 			bridgeApi().emit("transfer_failed", { name: name, message: message });
 			done(false);
@@ -250,6 +288,7 @@
 		/* 收集文件清单与总体积 */
 		var files = [];
 		var total = 0;
+		var skipped = 0;   /* 符号链接/junction 等非常规条目:悄悄少发会让客人缺文件还报成功 */
 		var limit = limitBytes();
 		try {
 			(function walk(dir2, rel) {
@@ -265,18 +304,30 @@
 							throw new Error("体积超过上限(" + Math.round(limit / 1048576) + "MB),取消补传");
 						}
 						files.push({ rel: r, size: size, full: full });
+					} else {
+						skipped++;
 					}
 				});
 			})(dir, "");
 		} catch (err) {
 			return fail((err && err.message) || String(err));
 		}
+		if (skipped > 0) {
+			return fail("有 " + skipped + " 个符号链接/非常规条目无法补传(会发出残缺副本),请手动拷贝该扩展");
+		}
 		if (!files.length) {
 			return fail("这个扩展目录是空的:" + name);
 		}
 
 		var id = ++txSeq;
-		var sendTo = currentBridges().map(bridgeId).filter(function(x) { return x !== null; });
+		var sendTo = (only === undefined || only === null)
+			? currentBridges().map(bridgeId).filter(function(x) { return x !== null; })
+			: [only];
+		if (!sendTo.length) {
+			return fail("没有可定向的客人通道(对方内核可能过旧,请双方都升级到最新内核)");
+		}
+		/* 本次会话的必答名单(冻结在此):中途新放行的客人不参与本次,不欠回执 */
+		var ackTargets = only ? [only] : enteredBridges().map(bridgeId).filter(function(x) { return x !== null; });
 		var head = {
 			id: id,
 			name: name,
@@ -289,9 +340,9 @@
 		sendToBridges("nnk_tx_begin", head);
 
 		/* 等 ready 回执:没人应答就明确失败——绝不谎报"已补传" */
-		waitAcks(id, "ready", ACK_TIMEOUT).then(function(ready) {
+		waitAcks(id, "ready", ACK_TIMEOUT, ackTargets).then(function(ready) {
 			if (!ready) {
-				return fail("客人没有响应补传(可能还在进入房间的过程中)——请让客人重新加入后再试,或让他重启游戏后重试");
+				return fail(ackFailReason ? ("客人拒绝接收:" + ackFailReason) : "客人没有响应补传(可能还在进入房间的过程中)——请让客人重新加入后再试,或让他重启游戏后重试");
 			}
 			if (!currentBridges().length) {
 				return fail("客人已全部断开,补传中止");
@@ -350,9 +401,9 @@
 						if (fi >= files.length) {
 							/* 数据发完,等客人 done 回执再宣布完成 */
 							sendToBridges("nnk_tx_done", { id: id, name: name, sendTo: sendTo });
-							return waitAcks(id, "done", DONE_TIMEOUT).then(function(acked) {
+							return waitAcks(id, "done", DONE_TIMEOUT, ackTargets).then(function(acked) {
 								if (!acked) {
-									return fail("数据已发完,但没等到客人的完成回执——请让客人重开游戏后再试");
+									return fail(ackFailReason ? ("客人报告补传失败:" + ackFailReason) : "数据已发完,但没等到客人的完成回执——请让客人重开游戏后再试");
 								}
 								bridgeApi().emit("transfer_done", { name: name });
 								console.log("[联机助手] 补传完成:「" + name + "」(客人重启游戏后重新加入)");
@@ -410,6 +461,9 @@
 						return;
 					}
 					if (!safeRel(msg.rel) || typeof msg.size !== "number" || msg.size < 0) {
+						/* 记一笔:被拒的文件收尾时必须让完整性收口报失败,
+						 * 不能"跳过一个文件还回 done"(假成功活路,审计实证) */
+						rx.rejectedFiles += 1;
 						return;
 					}
 					rx.rel = msg.rel;
@@ -444,27 +498,45 @@
 					if (!rx || !msg || msg.id !== rx.id) {
 						return;
 					}
+					var id = rx.id;
+					var name = rx.name;
+					var rejected = rx.rejectedFiles;
+					var doneFiles = rx.doneFiles;
+					var expect = rx.expectCount;
 					if (rx.reported < 100) {
 						rx.reported = 100;
-						bridgeApi().emit("transfer_progress", { name: rx.name, pct: 100, side: "guest" });
+						bridgeApi().emit("transfer_progress", { name: name, pct: 100, side: "guest" });
 					}
 					var ok = flushFile();
 					if (!ok) {
-						/* 落盘失败:不发自 receipt(房主会报"没等到完成回执") */
+						/* 落盘校验失败:明确回 fail(房主立刻收场报原因,不干等超时) */
+						sendAck(id, "fail", "落盘校验失败,文件已丢弃");
 						return;
 					}
-					bridgeApi().emit("transfer_done", { name: rx.name, side: "guest" });
-					console.log("[联机助手] 补包接收完成:「" + rx.name + "」,重启游戏后重新加入");
-					sendAck(rx.id, "done");
+					/* 完整性收口:清单里每个文件都必须走到落盘(或同尺寸跳过)。
+					 * 被拒条目(如文件名含 ..)照旧回 done,就是 1.9.0 修过的
+					 * "假成功"漏网活路(审计实证)——缺一个都不报成功 */
+					if (rejected > 0 || doneFiles !== expect) {
+						var why = rejected > 0
+							? (rejected + " 个文件名不合法,无法接收")
+							: ("只收齐 " + doneFiles + "/" + expect + " 个文件");
+						bridgeApi().emit("transfer_failed", { name: name, message: "接收不完整(" + why + ")" });
+						sendAck(id, "fail", why);
+						rx = null;
+						return;
+					}
+					bridgeApi().emit("transfer_done", { name: name, side: "guest" });
+					console.log("[联机助手] 补包接收完成:「" + name + "」,重启游戏后重新加入");
+					sendAck(id, "done");
 					rx = null;
 				} catch (e) { /* 自保 */ }
 			}
 		};
 	}
 
-	function sendAck(id, type) {
+	function sendAck(id, type, reason) {
 		try {
-			nnk.env.game.send("nnk_tx_ack", { id: id, type: type });
+			nnk.env.game.send("nnk_tx_ack", { id: id, type: type, reason: reason || "" });
 		} catch (e) { /* 忽略 */ }
 	}
 
@@ -558,6 +630,7 @@
 			rx = null;
 			return false;
 		}
+		rx.doneFiles += 1;   /* 完整性收口计数:tx_done 按它核对"清单里每个文件都到了" */
 		rx.rel = null;
 		rx.skip = false;
 		return true;
@@ -614,11 +687,32 @@
 				}
 			}
 		},
-		/* 工坊命令:补传指定扩展(传单个名字或名字数组,自动排队) */
+		/* 工坊命令:补传指定扩展(传单个名字或名字数组,自动排队)。
+		 * only=只发给这一条通道(清单自动补传按上报者定向,防误覆盖别人的本地包) */
 		start: startTransfer,
+		/* 定向直发:给一个引擎 client(或 HostBridge),把一条内核消息直接从它
+		 * 的隧道发过去(与补传同款,不经 game.broadcast——联机模式下广播开门
+		 * 就 return,差集回发因此从来没到过客人;审计实证)。manifest 回发用它 */
+		sendDirect: function(client, func, payload) {
+			var id = bridgeId(client);
+			if (id === null) {
+				return false;
+			}
+			var bridges = enteredBridges();
+			for (var i = 0; i < bridges.length; i++) {
+				if (bridgeId(bridges[i]) === id) {
+					try { bridges[i].send(JSON.stringify([func, payload])); return true; } catch (e) { return false; }
+				}
+			}
+			return false;
+		},
+		clientId: bridgeId,
 		/* 客人侧开始一次接收会话(收到 tx_begin 后:先落会话,再回 ready 回执) */
 		begin: function(msg) {
 			if (!msg || !safeName(msg.name) || !Array.isArray(msg.files)) {
+				if (msg && typeof msg.id === "number") {
+					sendAck(msg.id, "fail", "补传清单格式不对");
+				}
 				return;
 			}
 			/* 接收侧也守体积上限:不信房主报的 total(恶意/异常对端不能撑爆客人) */
@@ -628,12 +722,14 @@
 			for (var i = 0; i < msg.files.length; i++) {
 				var f = msg.files[i];
 				if (!f || !safeRel(f.rel) || typeof f.size !== "number" || f.size < 0) {
-					return;   /* 清单形状不对:整单拒收 */
+					sendAck(msg.id, "fail", "补传清单里有非法条目");
+					return;   /* 清单形状不对:整单拒收并明确回绝 */
 				}
 				filesTotal += f.size;
 			}
 			if (filesTotal > limit || declared > limit) {
 				bridgeApi().emit("transfer_failed", { name: msg.name, message: "对方要传的体积超过本机上限(" + Math.round(limit / 1048576) + "MB),已拒绝" });
+				sendAck(msg.id, "fail", "体积超过本机上限");
 				return;
 			}
 			resetRx();
@@ -648,7 +744,10 @@
 				skip: false,
 				total: filesTotal,
 				doneBytes: 0,
-				reported: 0
+				reported: 0,
+				expectCount: msg.files.length,   /* 完整性收口:清单里的文件数 */
+				doneFiles: 0,
+				rejectedFiles: 0
 			};
 			bridgeApi().emit("transfer_progress", { name: msg.name, pct: 0, side: "guest" });
 			sendAck(msg.id, "ready");

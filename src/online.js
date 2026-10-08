@@ -14,7 +14,7 @@
  * (哈希必须忽略它),所以这里自带一份带跳过清单的目录哈希。
  */
 import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -114,9 +114,41 @@ function readManifest(dir) {
 /**
  * 内核自检:state ok/stale/missing/unknown(语义同 preset;unknown = 插件自带
  * 源不完整,打包异常,此时不能催用户重装)。
+ * 哈希缓存:此函数被工坊 1.5 秒一轮的 /online/status 反复调用,而内核目录
+ * 405KB。自带源进程内冻结,算一次;已装副本按「目录签名」(文件名+大小+mtime,
+ * 几个 stat 就能算)缓存内容哈希——内容没动不读盘、改动(含原地编辑)立刻
+ * 现形,正确性与性能两全。
  */
+let bundledHashCache = null
+let installedHashCache = { dir: '', sig: null, hash: null }
+
+function installedSignature(dir) {
+  try {
+    const parts = []
+    const walk = (d, rel) => {
+      const entries = readdirSync(d, { withFileTypes: true })
+      for (const entry of entries) {
+        const r = rel ? rel + '/' + entry.name : entry.name
+        if (entry.isDirectory()) {
+          walk(join(d, entry.name), r)
+        } else {
+          const st = statSync(join(d, entry.name))
+          parts.push(r + ':' + st.size + ':' + st.mtimeMs)
+        }
+      }
+    }
+    walk(dir, '')
+    return parts.sort().join('|')
+  } catch {
+    return null
+  }
+}
+
 export function kernelStatus({ nonameDir }) {
-  const bundledHash = hashKernelDir(bundledKernelDir())
+  if (bundledHashCache === null) {
+    bundledHashCache = hashKernelDir(bundledKernelDir())
+  }
+  const bundledHash = bundledHashCache
   if (!bundledHash || !existsSync(join(bundledKernelDir(), 'extension.js'))) {
     return { state: 'unknown', error: `插件自带的内核源不完整(缺 extension.js):${bundledKernelDir()}` }
   }
@@ -124,7 +156,14 @@ export function kernelStatus({ nonameDir }) {
   if (!existsSync(target)) {
     return { state: 'missing', bundledHash, installedHash: null, installedAt: null, boundApi: null }
   }
-  const installedHash = hashKernelDir(target)
+  const sig = installedSignature(target)
+  let installedHash
+  if (sig !== null && installedHashCache.dir === target && installedHashCache.sig === sig) {
+    installedHash = installedHashCache.hash
+  } else {
+    installedHash = hashKernelDir(target)
+    installedHashCache = { dir: target, sig, hash: installedHash }
+  }
   /* 内核心跳绑定在哪个 dsh(装它时写入的 baseUrl)——双 dsh 共管一个游戏目录时,
    * 心跳只发绑定方,另一方会显示离线,这个字段让绑定关系可见 */
   let boundApi = null
@@ -193,6 +232,7 @@ export function installKernel({ nonameDir, baseUrl, token, intervalMs }) {
   try {
     writeFileSync(join(target, KERNEL_MANIFEST), JSON.stringify({ hash, installedAt: Date.now() }, null, 2), 'utf8')
   } catch { /* 盖章失败只影响展示,不算安装失败 */ }
+  installedHashCache = { dir: '', sig: null, hash: null }   /* 安装完成:哈希缓存立即失效 */
   return { ok: true, target, backup, hash }
 }
 
@@ -250,6 +290,16 @@ export function createBridgeSession({ token, syncSource }) {
         }
       }
       for (const ev of payload?.events || []) {
+        /* 内核拒收人物标识(头像武将本机没有):解除"同一值只补一次"锁——
+         * 此前一旦被拒(武将未加载/扩展未启用)就永不重发,工坊却仍显示
+         * "已保存"(审计发现)。带 60 秒冷却防拒绝-重发死循环,等武将随
+         * 扩展加载后自然重试成功 */
+        if (ev && ev.type === 'error' && typeof ev.message === 'string' && ev.message.indexOf('头像武将') >= 0) {
+          if (!lastPushed.identityRetryAt || Date.now() - lastPushed.identityRetryAt > 60_000) {
+            lastPushed.identityRetryAt = Date.now()
+            lastPushed.identity = undefined
+          }
+        }
         session.events.push(ev)
       }
       if (session.events.length > 200) session.events.splice(0, session.events.length - 200)

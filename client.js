@@ -1195,7 +1195,10 @@ window.__ModuleLoader__.load({
       React.useEffect(function () {
         var alive = true;
         var tick = function () {
-          fetch('/noname-kit-api/online/status').then(function (r) { return r.json() }).then(function (d) {
+          fetch('/noname-kit-api/online/status').then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+          }).then(function (d) {
             if (alive) setStatus(d);
           }, function () { if (alive) setStatus({ fetchFailed: true }) });
         };
@@ -1232,6 +1235,8 @@ window.__ModuleLoader__.load({
        * 见过的码;顺带发现新码就自动弹一次码窗口(每个行号只弹一次) */
       var codeCacheState = React.useState({});
       var codeCache = codeCacheState[0], setCodeCache = codeCacheState[1];
+      var autoPopState = React.useState(null);
+      var autoPopped = autoPopState[0], setAutoPopped = autoPopState[1];
       React.useEffect(function () {
         var evs0 = (status && status.bridge && status.bridge.events) || [];
         if (!Array.isArray(evs0)) return;   /* 形状防守:非数组直接跳过,不让 effect 抛错 */
@@ -1247,7 +1252,11 @@ window.__ModuleLoader__.load({
           newest = ev.data.id;
         }
         if (add) setCodeCache(Object.assign({}, codeCache, add));
-        if (newest && invPop.popped !== newest) {
+        /* 只在"出现更新的行号"时自动弹窗。不能用 invPop.popped !== newest 做
+         * 条件——那样每一轮心跳轮询都会把用户手动「🔎 再看」的旧行拉回最新行
+         * (审计发现:弹出来的是别的行的码,或整行点了没反应) */
+        if (typeof newest === 'number' && (autoPopped === null || newest > autoPopped)) {
+          setAutoPopped(newest);
           setInvPop({ popped: newest, dismissed: null });
         }
       });
@@ -1260,14 +1269,19 @@ window.__ModuleLoader__.load({
           if (!d.ok) setNote('❌ ' + (d.error || '命令发送失败'));
         }, function () { setNote('❌ 插件服务不可达'); });
       };
+      var installBusyState = React.useState(false);
+      var installBusy = installBusyState[0], setInstallBusy = installBusyState[1];
       var installKernel = function () {
+        if (installBusy) return;   /* 手快连点会连吃几份备份额度 */
+        setInstallBusy(true);
         setNote('正在安装内核…');
         fetch('/noname-kit-api/online/kernel/install', { method: 'POST' })
           .then(function (r) { return r.json() })
           .then(function (d) {
             if (d.ok) setNote('✅ 已安装:重启游戏 → 扩展菜单给「联机助手」点「启」→ 重载。列表里没有它?先开 设置→通用→自动导入扩展 再重启。');
-            else setNote('❌ 安装失败: ' + (d.error || '未知错误'));
-          }, function () { setNote('❌ 插件服务不可达'); });
+            else setNote('❌ 安装失败: ' + (d.error || '未知错误') + (d.backup ? '(旧内核已备份在 ' + d.backup + ')' : ''));
+          }, function () { setNote('❌ 插件服务不可达'); })
+          .then(function () { setInstallBusy(false); });
       };
       var copyText = function (text) {
         if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1285,7 +1299,7 @@ window.__ModuleLoader__.load({
       try {
       var kernel = status.kernel;
       var bridge = status.bridge || {};
-      var evs = bridge.events || [];
+      var evs = Array.isArray(bridge.events) ? bridge.events : [];
       var phase = (bridge.state && bridge.state.phase) || 'idle';
       var phaseText = ONLINE_PHASE_TEXT[phase] || phase;
       var bridgeOnline = Boolean(bridge.online);
@@ -1458,9 +1472,9 @@ window.__ModuleLoader__.load({
             resetBtn);
         }
         var d = diffEv.data;
-        var missing = (d.exts && d.exts.missing) || [];
-        var extra = (d.exts && d.exts.extra) || [];
-        var missPacks = (d.packs && d.packs.missing) || [];
+        var missing = Array.isArray(d.exts && d.exts.missing) ? d.exts.missing : [];
+        var extra = Array.isArray(d.exts && d.exts.extra) ? d.exts.extra : [];
+        var missPacks = Array.isArray(d.packs && d.packs.missing) ? d.packs.missing : [];
         /* P2P 连接识别 v1:身份随清单交换,主机看客人、客人看房主 */
         var peer = hostFlow ? (d.guestIdentity || null) : (d.hostIdentity || null);
         /* 补传完成的从缺失列表摘出来:体检快照是进房时的,传完不刷新,
@@ -1718,8 +1732,8 @@ window.__ModuleLoader__.load({
                     : e('div', 'nnk-ok', '✅ 内核已安装' + (bridge.kernelVersion ? '(v' + bridge.kernelVersion + ')' : '')),
                 h('div', { className: 'nnk-row' },
                   kernel.state !== 'ok'
-                    ? h('button', { className: 'nnk-submit', style: { marginTop: '0' }, onClick: installKernel }, kernel.state === 'stale' ? '⬆️ 升级内核' : '📦 安装内核')
-                    : h('button', { className: 'nnk-smallbtn', onClick: installKernel }, '🔁 重装内核')),
+                    ? h('button', { className: 'nnk-submit', style: { marginTop: '0' }, disabled: installBusy, onClick: installKernel }, kernel.state === 'stale' ? '⬆️ 升级内核' : '📦 安装内核')
+                    : h('button', { className: 'nnk-smallbtn', disabled: installBusy, onClick: installKernel }, '🔁 重装内核')),
                 h('div', { className: 'nnk-phaseline' },
                   bridgeOnline
                     ? e('span', 'nnk-ok', '🟢 内核在线(游戏运行中)')
@@ -1844,7 +1858,7 @@ window.__ModuleLoader__.load({
                 '3. 主机在游戏里点「开始游戏」。禁将/包/人数在等待房间右上角「房间设置」改,点「启」广播全房。'),
               e('div', 'nnk-hint', '连接信息经加密信令交换,游戏数据点对点直连。个别网络连不上房号门,就用邀请码从另一道门进(同一个房间)。')) }))]
           : null,
-        note ? h('div', { className: 'nnk-dash-full ' + (note.indexOf('✅') === 0 ? 'nnk-ok' : 'nnk-err') }, note) : null,
+        note ? h('div', { className: 'nnk-dash-full ' + (note.indexOf('❌') === 0 ? 'nnk-err' : (note.indexOf('✅') === 0 ? 'nnk-ok' : '')) }, note) : null,
         roomPopupOpen && roomCode ? renderRoomModal() : null,
         /* 新码弹窗(按行号):生成后自动弹一次;误触收起不影响——列表里随时能复制,
          * 那行的「🔎 再看」也能重开 */

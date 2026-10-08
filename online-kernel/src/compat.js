@@ -31,7 +31,10 @@
 		var re = /\/extension\/([^\/\n]+)/g;
 		var m;
 		while ((m = re.exec(stackStr)) !== null) {
-			var name = decodeURIComponent(m[1]);
+			var name = m[1];
+			try {
+				name = decodeURIComponent(name);   /* 目录名带非法百分号转义(如 50%off)会抛:退回原文 */
+			} catch (e2) { /* 忽略 */ }
 			if (name !== KERNEL_NAME) {
 				return name;
 			}
@@ -119,20 +122,9 @@
 		return Array.isArray(list) ? list.filter(function(n) { return n !== KERNEL_NAME; }) : [];
 	}
 
-	function quarantine(ext) {
-		if (!ext || blocklist().indexOf(ext) >= 0) {
-			return;
-		}
-		var list = blocklist();
-		list.push(ext);
-		try {
-			nnk.modules.config.set("unlockBlock", list);
-		} catch (e) { /* 存不进名单则下次还会踩,保险丝仍兜底 */ }
-		bridgeApi().emit("ext_quarantined", {
-			ext: ext,
-			message: "联机下爆栈,已自动隔离(不加载该扩展的联机内容,重启游戏生效)"
-		});
-	}
+	/* 注:自动隔离(quarantine 函数与 ext_quarantined 事件)已按审计删除——
+	 * 0.3.5 起就不再自动写名单,这函数全仓无调用点,留着只会让人以为还有
+	 * 自动隔离链路。手动名单(clearQuarantine/blocklist)照常保留 */
 
 	function clearQuarantine() {
 		try {
@@ -378,11 +370,15 @@
 				try {
 					list[i].apply(null, args);
 				} catch (err) {
-					console.error("[联机助手] 扩展钩子报错(已拦截):", name, err);
+					var ext = extNameFromStack(err && err.stack);
+					/* 归因不到扩展的钩子=引擎自带(defaultHooks 与扩展同住一张表):
+					 * 仍然拦下(保联机稳定),但措辞分开——当成"扩展报错"上报会把
+					 * 引擎自己的问题引向错误的排查方向(审计发现) */
+					console.error("[联机助手] " + (ext ? "扩展" : "引擎") + "钩子报错(已拦截):", name, err);
 					bridgeApi().emit("ext_error", {
 						hook: name,
-						ext: extNameFromStack(err && err.stack),
-						message: (err && err.message) || String(err),
+						ext: ext,
+						message: (ext ? "" : "[引擎钩子] ") + ((err && err.message) || String(err)),
 						stack: firstStackLines(err && err.stack, 4)
 					});
 				}
@@ -435,7 +431,9 @@
 				if (!Array.isArray(ext)) {
 					return;
 				}
-				var kind = isContentExt(ext[0]) ? "content" : "ui";
+				/* 与闸1 共用 extKind 口径(对象特征优先):只看磁盘特征会把
+				 * "package 里声明武将/卡牌"的现代扩展误报成美化类,透视误导排查 */
+				var kind = extKind(ext[0], ext[4]) ? "content" : "ui";
 				if (ext[5]) {
 					loaded.push(ext[0]);
 				} else if (kind === "content") {

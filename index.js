@@ -211,7 +211,7 @@ export function apply(ctx, config) {
     syncSource: () => ({ identity: savedIdentity, mqttUrl: savedSignaling ? savedSignaling.mqttUrl : '' }),
   })
   // 头像列表缓存(工坊「👤 人物标识」下拉):扫游戏目录的结果,见 /online/avatars
-  const avatarsCache = { at: 0, list: null }
+  const avatarsCache = { at: 0, list: null, err: '' }
 
   // ── 1) 常驻规范知识(文本随配置状态动态生成) ─────────────────
   // POSIX 形式路径:模型在 bash 里习惯 /d/... 写法,直接给两种形式免得它自己转换/寻找
@@ -696,6 +696,14 @@ export function apply(ctx, config) {
             return (u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]') && u.host === host
           } catch { return false }
         }
+        /* 无 Origin(非浏览器)不等于可信:DSH 支持绑 0.0.0.0(手机/局域网访问),
+         * 那时同网段脚本可无 Origin 直接调这些接口改游戏目录/回滚文件/下发内核
+         * 命令(审计发现)。非浏览器请求再叠一层"来源必须是回环"判定 */
+        const remote = String((req.socket && req.socket.remoteAddress) || '')
+        const loopback = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
+        if (!origin && !loopback) {
+          return json(403, { ok: false, error: '仅接受本机发起的请求(来源地址校验未通过)' })
+        }
         if (!allowed(origin)) {
           return json(403, { ok: false, error: '仅接受来自本机工坊页面的请求(Origin 校验未通过)' })
         }
@@ -707,13 +715,23 @@ export function apply(ctx, config) {
       }
       const readBody = async () => {
         const chunks = []
-        for await (const chunk of req) chunks.push(chunk)
-        return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+        let size = 0
+        for await (const chunk of req) {
+          size += chunk.length
+          if (size > 1_048_576) {
+            /* 1MB 上限:超大 body 会让 JSON.parse 同步阻塞事件循环(审计发现) */
+            throw Object.assign(new Error('请求体过大(超过 1MB)'), { statusCode: 413 })
+          }
+          chunks.push(chunk)
+        }
+        const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+        /* 归一:null/数组/标量一律当空对象,别让它变成 500(审计发现) */
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
       }
       try {
         // 初始化三件套:任何状态下都可用(否则没配置时连向导都没法用)
         if (req.method === 'GET' && url.pathname === '/noname-kit-api/status') {
-          return json(200, { active, nonameDir: active ? nonameDir : '', source: config.nonameDir && isValidGameDir(config.nonameDir) ? 'cordis.yml' : (saved.nonameDir ? 'workshop' : 'none') })
+          return json(200, { active, nonameDir: active ? nonameDir : '', source: config.nonameDir && isValidGameDir(config.nonameDir) ? 'cordis.yml' : (readSettingsFile().nonameDir ? 'workshop' : 'none') })
         }
         if (req.method === 'GET' && url.pathname === '/noname-kit-api/detect') {
           // 结果缓存 60 秒:用户反复点扫描按钮时不要反复读盘
@@ -941,7 +959,8 @@ export function apply(ctx, config) {
           if (hostName && !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(hostName)) {
             return json(400, { ok: false, error: `Host 必须是本机回环地址,收到「${hostHeader}」` })
           }
-          const port = hostHeader.includes(':') ? hostHeader.slice(hostHeader.lastIndexOf(':') + 1) : '80'
+          const port = hostHeader.includes(':') ? hostHeader.slice(hostHeader.lastIndexOf(':') + 1)
+            : String((webCtx.webServer && webCtx.webServer.port) || 80)   /* Host 缺端口:用真实监听端口,别硬编码 80(审计发现) */
           const baseUrl = `http://127.0.0.1:${port}/noname-kit-api`
           const result = installKernel({ nonameDir, baseUrl, token: bridgeToken })
           if (result.ok) {
@@ -952,15 +971,20 @@ export function apply(ctx, config) {
         if (req.method === 'GET' && url.pathname === '/noname-kit-api/online/avatars') {
           // 人物标识的头像下拉:直接扫游戏目录(自带包+扩展包),不依赖游戏运行。
           // 扫全盘 1 秒级,缓存 5 分钟(空结果 30 秒重试,兼容目录还没就绪)。
-          if (!active) return json(503, { ok: false, avatars: [], error: 'noname-kit 未配置 nonameDir' })
+          // 失败也计冷却:否则面板每次重挂都触发全盘重扫(审计发现)
           const ttl = avatarsCache.list && avatarsCache.list.length ? 5 * 60_000 : 30_000
-          if (!avatarsCache.list || Date.now() - avatarsCache.at > ttl) {
+          if (!avatarsCache.at || Date.now() - avatarsCache.at > ttl) {
             try {
               avatarsCache.list = await listAvatars(nonameDir)
+              avatarsCache.err = ''
               avatarsCache.at = Date.now()
             } catch (error) {
-              return json(200, { ok: false, avatars: [], error: `扫描武将失败: ${error.message}` })
+              avatarsCache.err = `扫描武将失败: ${error.message}`
+              avatarsCache.at = Date.now()
             }
+          }
+          if (avatarsCache.err && !avatarsCache.list) {
+            return json(200, { ok: false, avatars: [], error: avatarsCache.err })
           }
           return json(200, { ok: true, avatars: avatarsCache.list })
         }
@@ -1062,7 +1086,7 @@ export function apply(ctx, config) {
         }
         return json(404, { error: 'not found' })
       } catch (error) {
-        return json(500, { error: error.message })
+        return json(error && error.statusCode ? error.statusCode : 500, { error: error.message })
       }
     }
   }))
