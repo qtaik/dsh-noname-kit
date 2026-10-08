@@ -42,6 +42,22 @@
 		return nnk.modules.bridge;
 	}
 
+	/* 虚拟网卡直连候选的播报(每次开机只说一次,防高频重试刷屏) */
+	var directNoted = { sent: false, recv: false };
+	function noteSent(hosts) {
+		if (hosts.length && !directNoted.sent) {
+			directNoted.sent = true;
+			bridgeApi().emit("info", { message: "检测到虚拟网卡地址 " + hosts.join("、") + ",已作为直连候选随信令发出" });
+		}
+		return hosts;
+	}
+	function noteRecv(count) {
+		if (count > 0 && !directNoted.recv) {
+			directNoted.recv = true;
+			bridgeApi().emit("info", { message: "客人提供了 " + count + " 个虚拟网卡直连地址,已加入连接尝试" });
+		}
+	}
+
 	function genRoomCode() {
 		var chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 		var bytes = new Uint8Array(6);
@@ -527,6 +543,7 @@
 			}
 		};
 		pc.setRemoteDescription(msg.sdp).then(function() {
+			noteRecv(rtc.addInjected(pc, msg.hosts));   /* 客人提议里带的虚拟网卡直连地址(Radmin/ZeroTier 等) */
 			return pc.createAnswer();
 		}).then(function(answer) {
 			return pc.setLocalDescription(answer);
@@ -536,7 +553,7 @@
 			if (hostState.mqttSession && hostState.roomCode === code) {
 				return hostState.mqttSession.publish(
 					signaling.roomTopic(code, "answer/" + guestId),
-					{ k: "answer", sdp: pc.localDescription }
+					{ k: "answer", sdp: pc.localDescription, hosts: noteSent(rtc.directHosts(pc)) }
 				);
 			}
 			/* 等应答期间房号被换/信令被取消:这张应答发出去也没人收,关掉半程 pc */
@@ -650,7 +667,7 @@
 				retireInvite(entry, "房间已解散");
 				return;
 			}
-			entry.code = rtc.encodeCode("offer", pc.localDescription);
+			entry.code = rtc.encodeCode("offer", pc.localDescription, noteSent(rtc.directHosts(pc)));
 			bridgeApi().emit("invite_ready", { id: entry.id, code: entry.code });
 			settleInvitePhase();
 			/* 自动过期:候选地址本来就活不过几分钟,一张没人用的码挂 10 分钟
@@ -1141,6 +1158,7 @@
 				return;
 			}
 			pc.setRemoteDescription(data.sdp).then(function() {
+				noteRecv(rtc.addInjected(pc, data.hosts));   /* 回执码里带的客人虚拟网卡直连地址 */
 				entry.status = "answering";
 				settleInvitePhase();
 				/* 码龄预警:邀请码里的 ICE 候选跟着 NAT 端口映射活,映射几十秒到几

@@ -7,6 +7,9 @@
 	var DEFAULTS = {
 		/* 打洞用的 STUN 服务器(国内可达 + 国外兜底) */
 		stunServers: ["stun:stun.miwifi.com:3478", "stun:stun.l.google.com:19302"],
+		/* 虚拟网卡直连的手动补充列表(Radmin/ZeroTier 等通常自动识别;
+		 * 认不出的组网工具或自定义直连地址填这里,如 ["26.1.2.3"]) */
+		virtualIps: [],
 		/* 房号信令(MQTT over WebSocket):默认公共 broker,工坊「📡 信令服务器」
 		 * 卡可改(自建/其它公共服务器,双方须一致),空值经 set_config 恢复此默认 */
 		mqttUrl: "wss://broker.emqx.io:8084/mqtt",

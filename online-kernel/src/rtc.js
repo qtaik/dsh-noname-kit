@@ -36,11 +36,13 @@
 	}
 
 	/* ---- 邀请码:NNK1.<base64url(json)> ---- */
-	function encodeCode(kind, desc) {
+	function encodeCode(kind, desc, hosts) {
 		return "NNK1." + encodeB64Url(JSON.stringify({
 			v: 1,
 			k: kind,
-			sdp: { type: desc.type, sdp: desc.sdp }
+			sdp: { type: desc.type, sdp: desc.sdp },
+			/* 虚拟网卡直连地址随码走(空则不带:旧版收码方看到多余字段也无害) */
+			hosts: hosts && hosts.length ? hosts : undefined
 		}));
 	}
 	function decodeCode(str) {
@@ -236,6 +238,94 @@
 		this._downHooks.push(fn);
 	};
 
+	/* ---- 虚拟网卡直连(Radmin/ZeroTier/Hamachi/Tailscale 等异地组网工具)----
+	 * 浏览器把局域网候选地址打码成 <uuid>.local,对方解析它要靠组播 mDNS——
+	 * 虚拟局域网转发组播并不可靠,直连可能永远建不起来。这里把虚拟网卡的真实
+	 * IP + 本机 ICE 端口作为额外直连地址随信令带给对方,对方直接朝它发检查,
+	 * 不依赖组播。没有虚拟网卡时处处为空,行为与从前完全一致(零影响)。 */
+	var VIRTUAL_NIC_RE = /radmin|zerotier|hamachi|tailscale|vpn|虚拟|tap|tun|wireguard/i;
+	/* 纯函数(也供单测):从 networkInterfaces() 的形态里挑虚拟网卡 IPv4。
+	 * 判定=网卡名像虚拟网卡,或地址落在 Radmin(26.x)/Hamachi(25.x)固定网段 */
+	function virtualIpsFrom(ifaces, extra) {
+		var out = [];
+		var seen = {};
+		function push(ip) {
+			if (ip && ip !== "127.0.0.1" && !seen[ip]) {
+				seen[ip] = true;
+				out.push(ip);
+			}
+		}
+		for (var name in (ifaces || {})) {
+			var list = ifaces[name] || [];
+			var isVirtual = VIRTUAL_NIC_RE.test(name);
+			for (var i = 0; i < list.length; i++) {
+				var a = list[i];
+				if (!a || a.internal || a.family !== "IPv4") {
+					continue;
+				}
+				if (isVirtual || /^(25|26)\./.test(a.address)) {
+					push(a.address);
+				}
+			}
+		}
+		(extra || []).forEach(push);
+		return out;
+	}
+	function virtualIps() {
+		var ifaces = null;
+		try {
+			if (typeof require === "function") {
+				ifaces = require("os").networkInterfaces();
+			}
+		} catch (e) { /* 无 node 环境:只认手动列表 */ }
+		var extra = [];
+		try {
+			extra = nnk.modules.config.get("virtualIps") || [];
+		} catch (e2) { /* 配置不可用 */ }
+		return virtualIpsFrom(ifaces, extra);
+	}
+	/* 纯函数(也供单测):本地 SDP 里 host 候选的端口——地址被 mDNS 打码,
+	 * 但端口是真的;虚拟 IP 配上这个端口就是一条可用的直连候选 */
+	function hostPortFromSdp(sdp) {
+		var m = /candidate:\S+ \d+ udp \d+ \S+ (\d+) typ host/.exec(String(sdp || ""));
+		return m ? m[1] : null;
+	}
+	/* 发出用:["虚拟IP:端口", …](无虚拟网卡=空数组,载荷照旧) */
+	function directHosts(pc) {
+		try {
+			var port = hostPortFromSdp(pc.localDescription && pc.localDescription.sdp);
+			if (!port) {
+				return [];
+			}
+			return virtualIps().map(function(ip) { return ip + ":" + port; });
+		} catch (e) {
+			return [];
+		}
+	}
+	/* 接收用:把对方给的直连地址加进 ICE(必须在 setRemoteDescription 之后)。
+	 * 返回成功加进去的条数;坏地址/被拒单条均不影响主流程 */
+	function addInjected(pc, hosts) {
+		var n = 0;
+		(hosts || []).forEach(function(h) {
+			var sp = String(h).split(":");
+			if (sp.length !== 2 || !/^[0-9A-Fa-f.]+$/.test(sp[0]) || !/^\d+$/.test(sp[1])) {
+				return;
+			}
+			try {
+				var p = pc.addIceCandidate({
+					candidate: "candidate:1 1 udp 2122260223 " + sp[0] + " " + sp[1] + " typ host",
+					sdpMid: "0",
+					sdpMLineIndex: 0
+				});
+				if (p && p.catch) {
+					p.catch(function() { /* 单条被拒不影响其他候选 */ });
+				}
+				n++;
+			} catch (e) { /* 忽略单条失败 */ }
+		});
+		return n;
+	}
+
 	nnk.modules.rtc = {
 		/* encodeB64Url/decodeB64Url 仅服务上方编解码,不对外导出 */
 		encodeCode: encodeCode,
@@ -244,6 +334,11 @@
 		waitGather: waitGather,
 		startPing: startPing,
 		FakeWebSocket: FakeWebSocket,
-		HostBridge: HostBridge
+		HostBridge: HostBridge,
+		/* 虚拟网卡直连:directHosts/addInjected 供两道门收发,纯函数供单测 */
+		directHosts: directHosts,
+		addInjected: addInjected,
+		virtualIpsFrom: virtualIpsFrom,
+		hostPortFromSdp: hostPortFromSdp
 	};
 })();

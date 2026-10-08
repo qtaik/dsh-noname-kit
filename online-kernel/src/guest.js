@@ -22,6 +22,22 @@
 		return nnk.modules.bridge;
 	}
 
+	/* 虚拟网卡直连候选的播报(每侧每次开机只说一次,防重回循环刷屏) */
+	var directNoted = { sent: false, recv: false };
+	function noteSent(hosts) {
+		if (hosts.length && !directNoted.sent) {
+			directNoted.sent = true;
+			bridgeApi().emit("info", { message: "检测到虚拟网卡地址 " + hosts.join("、") + ",已作为直连候选随信令发出" });
+		}
+		return hosts;
+	}
+	function noteRecv(count) {
+		if (count > 0 && !directNoted.recv) {
+			directNoted.recv = true;
+			bridgeApi().emit("info", { message: "对方提供了 " + count + " 个虚拟网卡直连地址,已加入连接尝试" });
+		}
+	}
+
 	/* 把已就绪的 FakeWebSocket 接进引擎(复刻 game.connect 的接线部分,
 	 * 唯一差别是 game.sandbox 置空:nnk 通道没有原生沙盒键,好友局信任主机)。
 	 * force=自动重回:客人进过房间后 game.online 恒真(引擎 init 置的),
@@ -470,6 +486,7 @@
 				}
 			}, 30000);
 			pc.setRemoteDescription(data.sdp).then(function() {
+				noteRecv(rtc.addInjected(pc, data.hosts));   /* 主机随邀请码带来的虚拟网卡直连地址 */
 				return pc.createAnswer();
 			}).then(function(answer) {
 				return pc.setLocalDescription(answer);
@@ -481,7 +498,7 @@
 				 * 手里的「房间大厅 / 退出房间」入口跟着闪没(实测:回执码出了,
 				 * 反而找不到自己的房间)。邀请码门进来的客人本来就有 session.code */
 				bridgeApi().setPhase("answer_ready", session.code ? { code: session.code } : undefined);
-				bridgeApi().emit("answer_ready", { code: rtc.encodeCode("answer", pc.localDescription) });
+				bridgeApi().emit("answer_ready", { code: rtc.encodeCode("answer", pc.localDescription, noteSent(rtc.directHosts(pc))) });
 			}).catch(function(err) {
 				console.error("[联机助手] 加入失败", err);
 				resetSession();
@@ -651,7 +668,9 @@
 						if (/\/answer\//.test(topic) && !answered && msg && msg.sdp) {
 							answered = true;
 							session.hostSeen = Date.now();
-							pc.setRemoteDescription(msg.sdp).catch(function(err) {
+							pc.setRemoteDescription(msg.sdp).then(function() {
+								noteRecv(rtc.addInjected(pc, msg.hosts));   /* 主机应答里带的虚拟网卡直连地址 */
+							}).catch(function(err) {
 								bridgeApi().emit("error", { message: "房主应答处理失败: " + (err.message || err) });
 							});
 						}
@@ -671,7 +690,8 @@
 				}).then(function(mqttSession) {
 					return mqttSession.publish(signaling.roomTopic(code, "offer"), {
 						guestId: guestId,
-						sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
+						sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
+						hosts: noteSent(rtc.directHosts(pc))   /* 虚拟网卡直连地址(Radmin/ZeroTier 等) */
 					});
 				}).then(function() {
 					bridgeApi().setPhase("waiting_host", { code: code });

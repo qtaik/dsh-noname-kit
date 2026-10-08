@@ -9,6 +9,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { runInNewContext } from 'node:vm'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
@@ -210,6 +211,33 @@ export default { name: "standard", character: characters, translate: translates 
   ok(!hostSrc.includes('env._status.mode || "identity"'), '对局结束接力不再收引擎被单挑局改写的模式(创建房间报 normal 的污染源)')
   ok(hostSrc.includes('ROOM_MODES.indexOf(pendingTask.mode) >= 0'), '开机续跑对接力的 mode 过白名单(拦被污染的标记)')
   ok(hostSrc.includes('ROOM_MODES.indexOf(pendingTask.mode) >= 0) ? pendingTask.mode : "identity"'), '看门狗救房的 mode 同样过白名单')
+
+  // ── 虚拟网卡直连(Radmin/ZeroTier 等异地组网,10-08 需求)──
+  const rtcSrc = readFileSync(join(repoRoot, 'online-kernel', 'src', 'rtc.js'), 'utf8')
+  const rtcSandbox = { window: { __nnk__: { modules: { config: { get: () => [] } } } } }
+  runInNewContext(rtcSrc, rtcSandbox)
+  const rtc = rtcSandbox.window.__nnk__.modules.rtc
+  const faces = {
+    'Radmin VPN': [{ family: 'IPv4', address: '26.12.34.56', internal: false }],
+    'Ethernet': [{ family: 'IPv4', address: '192.168.1.5', internal: false }],
+    'Loopback': [{ family: 'IPv4', address: '127.0.0.1', internal: true }],
+  }
+  ok(rtc.virtualIpsFrom(faces, []).join() === '26.12.34.56', 'Radmin 网卡自动识别(26.x 网段),普通网卡/环回不注入')
+  ok(rtc.virtualIpsFrom({ 'ZeroTier One': [{ family: 'IPv4', address: '10.9.9.9', internal: false }] }, []).join() === '10.9.9.9', 'ZeroTier 按网卡名识别')
+  ok(rtc.virtualIpsFrom({ '以太网 2': [{ family: 'IPv4', address: '25.1.2.3', internal: false }] }, []).join() === '25.1.2.3', 'Hamachi 网段(25.x)按地址识别(网卡名任意)')
+  ok(rtc.virtualIpsFrom(faces, ['26.99.99.99']).length === 2, '手动补充列表并入选出')
+  ok(rtc.virtualIpsFrom({ 'Ethernet': [{ family: 'IPv4', address: '192.168.1.5', internal: false }] }, []).length === 0, '无虚拟网卡=空(对普通用户零影响)')
+  ok(rtc.hostPortFromSdp('v=0\r\na=candidate:1 1 udp 2122260223 8f2a-1.local 54321 typ host generation 0') === '54321', '从本地 SDP 提取 ICE 端口(地址被 mDNS 打码,端口是真的)')
+  ok(rtc.hostPortFromSdp('a=candidate:2 1 udp 1686052607 1.2.3.4 54322 typ srflx raddr 0.0.0.0 rport 0') === null, '只有 host 候选参与提取')
+  const addCalls = []
+  const fakePc = { addIceCandidate: (c) => { addCalls.push(c.candidate); return Promise.resolve() } }
+  ok(rtc.addInjected(fakePc, ['26.1.2.3:54321']) === 1 && addCalls[0].includes('26.1.2.3 54321 typ host'), '注入候选格式正确(host 优先级)')
+  ok(rtc.addInjected(fakePc, ['坏地址', '26.1.2.3:abc', '']) === 0, '坏地址全部拒绝')
+  ok(rtcSrc.includes('hosts: hosts && hosts.length ? hosts : undefined'), '邀请码载荷带直连地址(空则不带,旧内核收码也无害)')
+  ok(guestSrc.split('rtc.directHosts(pc)').length === 3, '客人侧两处发出直连地址(房号提议 + 回执码)')
+  ok(hostSrc.split('rtc.directHosts(pc)').length === 3, '主机侧两处发出直连地址(应答 + 邀请码)')
+  ok(guestSrc.includes('rtc.addInjected(pc, msg.hosts)') && guestSrc.includes('rtc.addInjected(pc, data.hosts)'), '客人侧两处收下对方直连地址(应答/邀请码)')
+  ok(hostSrc.includes('rtc.addInjected(pc, msg.hosts)') && hostSrc.includes('rtc.addInjected(pc, data.hosts)'), '主机侧两处收下对方直连地址(提议/回执码)')
 
   console.log(`\n全部通过:${passed} 项`)
 } finally {
