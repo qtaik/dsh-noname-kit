@@ -71,10 +71,19 @@
 	/*
 	 * 打开一个房号信令会话:连接 broker、订阅 topics、消息先解密再回调。
 	 * resolve 出 {publish(topic, obj, retained), end()};publish 自动加密。
+	 * 本层的一切失败都打上 nnkSignal 标记——客人侧自动重回循环靠它区分
+	 * 「信令服务器连不上」(不扣重试预算)与「房主不在」(扣)。此前只认文案
+	 * 里的"信令服务器"四字,mqtt 库自己的报错(connack timeout/ECONNREFUSED)
+	 * 全被误判成房主不在,8 次扣完就误报"房主可能已关闭游戏"(审计发现)。
 	 */
+	function signalFailure(err) {
+		var e2 = err instanceof Error ? err : new Error(String(err || "信令失败"));
+		try { e2.nnkSignal = true; } catch (e3) { /* 极端情况(冻结对象):不强求 */ }
+		return e2;
+	}
 	async function openRoomSession(code, role, topics, onMessage) {
 		if (!window.mqtt) {
-			throw new Error("MQTT 库未加载(房号信令不可用),请改用邀请码方式");
+			throw signalFailure(new Error("MQTT 库未加载(房号信令不可用),请改用邀请码方式"));
 		}
 		var key = await deriveKey(code);
 		var cfgUrl = nnk.modules.config.get("mqttUrl") || "wss://broker.emqx.io:8084/mqtt";
@@ -95,7 +104,7 @@
 					clean: true
 				});
 			} catch (err) {
-				reject(err);
+				reject(signalFailure(err));
 				return;
 			}
 			var session = {
@@ -133,7 +142,7 @@
 			client.on("error", function(err) {
 				if (!settled) {
 					try { client.end(true); } catch (e) { /* 忽略 */ }
-					reject(err);
+					reject(signalFailure(new Error("信令服务器连不上: " + ((err && err.message) || err))));
 				}
 			});
 			setTimeout(function() {
@@ -141,7 +150,7 @@
 					try { client.end(true); } catch (e) { /* 忽略 */ }
 					/* 文案说准:超时是"本机连不上信令服务器",与房主是否在重组无关
 					 * (旧文案让用户以为房主那边出事了)。留邀请码这条路兜底。 */
-					reject(new Error("信令服务器连不上或响应太慢(公共服务器偶发抽风;反复失败可让房主发一张邀请码,从另一道门进)"));
+					reject(signalFailure(new Error("信令服务器连不上或响应太慢(公共服务器偶发抽风;反复失败可让房主发一张邀请码,从另一道门进)")));
 				}
 			}, 7000);
 		});

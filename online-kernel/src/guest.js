@@ -725,10 +725,11 @@
 					bridgeApi().emit("error", { message: (err && err.message) || "加入失败" });
 				});
 			}).catch(function(err) {
-				/* 信令层失败(MQTT 连不上/超时)打标:自动重回循环据此不扣重试次数
-				 * ——这不是"房主不在"的证据,是公共 broker 抽风(实测:8 次重试
-				 * 全被信令超时耗完,误报"房主可能已关闭游戏") */
-				if (/信令服务器/.test(String((err && err.message) || err))) {
+				/* 信令层失败(MQTT 连不上/超时/库缺失)打标:自动重回循环据此不扣重试
+				 * 次数——这不是"房主不在"的证据(实测:8 次重试全被信令超时耗完,误报
+				 * "房主可能已关闭游戏")。标记由 signaling 层统一打(err.nnkSignal),
+				 * 文案匹配保留作旧路径兜底 */
+				if ((err && err.nnkSignal) || /信令服务器/.test(String((err && err.message) || err))) {
 					guestState.lastJoinSignalFail = true;
 				}
 				resetSession();

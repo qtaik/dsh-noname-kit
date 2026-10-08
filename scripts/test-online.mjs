@@ -243,6 +243,14 @@ export default { name: "standard", character: characters, translate: translates 
   ok(guestSrc.includes('rejoinBeatStreak = 0;   /* 收场一并清连死计数'), '信令收场清连死计数(防跨链残留提前收场)')
   const clientSrc = readFileSync(join(repoRoot, 'client.js'), 'utf8')
   ok(clientSrc.includes('不认识的模式一律不灌进单选框'), '客户端模式同步有白名单(旧内核送污染模式不灌单选框)')
+
+  // ── 结构性回归锁:审计批(bridge/信令失败分类/提议看门狗)──
+  const bridgeSrc = readFileSync(join(repoRoot, 'online-kernel', 'src', 'bridge.js'), 'utf8')
+  ok(sigSrc.includes('nnkSignal = true'), '信令层失败统一打标(nnkSignal)')
+  ok(guestSrc.includes('(err && err.nnkSignal)'), '客人侧按标识别信令失败(不再只认文案正则)')
+  ok(bridgeSrc.includes('var backlog = []') && bridgeSrc.includes('backlog = batch'), '桥事件有重发缓冲(送达确认前不丢)')
+  ok(bridgeSrc.includes('if (!cfg || polling)') && bridgeSrc.includes('polling = false'), '桥轮询串行化(fetch 慢时不让两轮并发)')
+  ok(hostSrc.includes('pc._nnkAdopted = true') && hostSrc.includes('if (!pc._nnkAdopted)'), '无人完成的提议有 pc 看门狗(90 秒回收)')
   ok(rtcSrc.includes('hosts: hosts && hosts.length ? hosts : undefined'), '邀请码载荷带直连地址(空则不带,旧内核收码也无害)')
   ok(guestSrc.split('rtc.directHosts(pc)').length === 3, '客人侧两处发出直连地址(房号提议 + 回执码)')
   ok(hostSrc.split('rtc.directHosts(pc)').length === 3, '主机侧两处发出直连地址(应答 + 邀请码)')

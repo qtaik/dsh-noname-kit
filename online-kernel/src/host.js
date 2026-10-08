@@ -530,11 +530,20 @@
 			}
 			var channel = e.channel;
 			channel.onopen = function() {
+				pc._nnkAdopted = true;   /* 有人接上来了:看门狗不再收它 */
 				var conn = new rtc.HostBridge(channel);
 				registerBridge(conn, pc);
 				handleNewBridge(conn);
 			};
 		};
+		/* 没人完成的提议看门狗:客人发布提议后消失/被恶意刷提议时,这条 pc 永远
+		 * 停在 new 状态(ICE 从没开始,连 failed 都不会到),没人回收就是泄漏。
+		 * 90 秒(远超客人侧单次尝试 ~35 秒 + 一两轮重试)还没被接走就收掉 */
+		setTimeout(function() {
+			if (!pc._nnkAdopted) {
+				try { pc.close(); } catch (e5) { /* 忽略 */ }
+			}
+		}, 90000);
 		pc.onconnectionstatechange = function() {
 			if (pc.connectionState === "failed") {
 				/* failed 是终态且本侧不做 ICE restart,半死 pc 必须关掉,

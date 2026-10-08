@@ -11,6 +11,12 @@
 	var failures = 0;
 	var seq = 0;
 	var events = [];
+	var backlog = [];   /* 上一轮没送达的事件(HTTP 失败/应答异常):下一轮带上重发。
+	                     * 此前是"发出前就从队列移除",桥断一拍(比如 dsh 重启窗口)
+	                     * 正好赶上生成邀请码/回执码,码正文事件就永久丢了(审计发现)。
+	                     * 重发的重复风险:插件端按 seq 是追加渲染,极端情况动态里
+	                     * 重复一行——比丢码轻得多 */
+	var polling = false;   /* 串行化:0.7 秒一拍比一次请求快时,不让两轮并发 */
 	var state = { phase: "idle", ts: Date.now() };
 
 	function emit(type, data) {
@@ -136,10 +142,15 @@
 	}
 
 	function poll() {
-		if (!cfg) {
+		if (!cfg || polling) {
 			return;
 		}
-			fetch(cfg.baseUrl + "/online/bridge", {
+		polling = true;
+		var batch = backlog.concat(events.splice(0, events.length));
+		backlog = batch;   /* 先记账:这一批没确认送达前都算欠着 */
+		var req;
+		try {
+			req = fetch(cfg.baseUrl + "/online/bridge", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
@@ -170,25 +181,32 @@
 							}
 						})()
 					}),
-				cfg: {
-					unlockUIExtensions: !!nnk.modules.config.get("unlockUIExtensions"),
-					autoUnlockExtensions: !!nnk.modules.config.get("autoUnlockExtensions"),
-					root: !!(nnk.modules.compat && nnk.modules.compat.gameRoot()),
-					/* 人物标识:工坊靠它回填输入框、插件靠它判断要不要离线补发 */
-					onlineName: String(nnk.modules.config.get("onlineName") || ""),
-					onlineAvatar: String(nnk.modules.config.get("onlineAvatar") || ""),
-					/* 信令服务器当前生效值(自定义或默认) */
-					mqttUrl: String(nnk.modules.config.get("mqttUrl") || "")
-				},
-				events: events.splice(0, events.length)
-			})
-		}).then(function(r) {
+					cfg: {
+						unlockUIExtensions: !!nnk.modules.config.get("unlockUIExtensions"),
+						autoUnlockExtensions: !!nnk.modules.config.get("autoUnlockExtensions"),
+						root: !!(nnk.modules.compat && nnk.modules.compat.gameRoot()),
+						/* 人物标识:工坊靠它回填输入框、插件靠它判断要不要离线补发 */
+						onlineName: String(nnk.modules.config.get("onlineName") || ""),
+						onlineAvatar: String(nnk.modules.config.get("onlineAvatar") || ""),
+						/* 信令服务器当前生效值(自定义或默认) */
+						mqttUrl: String(nnk.modules.config.get("mqttUrl") || "")
+					},
+					events: batch
+				})
+			});
+		} catch (err) {
+			failures++;   /* fetch 同步抛错(地址非法等):下一轮照常重试 */
+			polling = false;
+			return;
+		}
+		req.then(function(r) {
 			if (!r.ok) {
 				throw new Error("HTTP " + r.status);
 			}
 			failures = 0;
 			return r.json();
 		}).then(function(body) {
+			backlog = [];   /* 送达确认:清掉欠账(含本轮新事件与上轮重发) */
 			var cmds = body && body.commands || [];
 			cmds.forEach(dispatchSafe);
 		}).catch(function(err) {
@@ -196,6 +214,8 @@
 			if (failures === 3 || failures === 10) {
 				console.warn("[联机助手] 桥暂时不通(" + failures + " 次):", err && err.message);
 			}
+		}).then(function() {
+			polling = false;
 		});
 	}
 
