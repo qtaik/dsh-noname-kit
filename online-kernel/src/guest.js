@@ -199,6 +199,7 @@
 			if (signalOnlyNext && guestState.rejoinSignalStreak > 8) {
 				guestState.rejoinCode = null;
 				guestState.rejoinSignalStreak = 0;
+				guestState.rejoinBeatStreak = 0;   /* 收场一并清连死计数:防跨链残留提前收场 */
 				bridgeApi().setPhase("idle");
 				bridgeApi().emit("error", { message: "信令服务器一直连不上,自动重回中止——请检查网络,或让房主发一张邀请码从另一道门进" });
 				return;

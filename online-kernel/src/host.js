@@ -23,6 +23,7 @@
 		                       * 按需生成(一客一张),不在这里记状态 */
 		stage: null,          /* lobby=P2P 大厅(未进引擎) | loaded=引擎房间已建 */
 		roomCode: null,
+		roomMode: null,       /* 房间当前模式(ROOM_MODES 之一;建房/恢复时赋值,解散清空) */
 		reuseCode: null,      /* 打完一把重载重组:接力上局的房号,客人自动重进 */
 		invites: [],          /* 邀请码列表(一客一张,可同时挂多张):见 startInvite */
 		inviteSeq: 0,         /* 邀请码行号自增(列表里按行号定位:粘回执码/作废) */

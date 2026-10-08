@@ -1221,6 +1221,9 @@ window.__ModuleLoader__.load({
         var ev0 = onlinePickEvent((status && status.bridge && status.bridge.events) || [], 'room_members');
         var m = ev0 && ev0.data && ev0.data.mode;
         if (!m || m === rmSyncKey) return;
+        /* 白名单兜底:旧内核可能送来被联机单挑局污染的模式(引擎会把它原生
+         * 改写成 "normal",创建房间恒被拒)——不认识的模式一律不灌进单选框 */
+        if (!ONLINE_MODES.some(function (x) { return x.id === m; })) return;
         setRmSyncKey(m);
         setRoomMode(m);
       });

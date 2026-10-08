@@ -227,12 +227,22 @@ export default { name: "standard", character: characters, translate: translates 
   ok(rtc.virtualIpsFrom({ '以太网 2': [{ family: 'IPv4', address: '25.1.2.3', internal: false }] }, []).join() === '25.1.2.3', 'Hamachi 网段(25.x)按地址识别(网卡名任意)')
   ok(rtc.virtualIpsFrom(faces, ['26.99.99.99']).length === 2, '手动补充列表并入选出')
   ok(rtc.virtualIpsFrom({ 'Ethernet': [{ family: 'IPv4', address: '192.168.1.5', internal: false }] }, []).length === 0, '无虚拟网卡=空(对普通用户零影响)')
-  ok(rtc.hostPortFromSdp('v=0\r\na=candidate:1 1 udp 2122260223 8f2a-1.local 54321 typ host generation 0') === '54321', '从本地 SDP 提取 ICE 端口(地址被 mDNS 打码,端口是真的)')
-  ok(rtc.hostPortFromSdp('a=candidate:2 1 udp 1686052607 1.2.3.4 54322 typ srflx raddr 0.0.0.0 rport 0') === null, '只有 host 候选参与提取')
+  ok(rtc.virtualIpsFrom({ 'Radmin': [{ family: 4, address: '26.5.5.5', internal: false }] }, []).join() === '26.5.5.5', 'family 为数字 4 的旧形态也认')
+  ok(rtc.hostPortsFromSdp('v=0\r\na=candidate:1 1 udp 2122260223 8f2a.local 54321 typ host generation 0\r\na=candidate:2 1 udp 2122194687 8f2a.local 54322 typ host generation 0\r\na=candidate:3 1 udp 1686052607 1.2.3.4 54323 typ srflx').join() === '54321,54322', '提取全部 host 候选端口(去重;srflx 不算)')
+  ok(rtc.hostPortsFromSdp('v=0\r\n').length === 0, '没有 host 候选=空数组(不发虚假地址)')
+  rtcSandbox.window.__nnk__.modules.config.get = () => ['26.9.9.9']
+  const pcStub = { localDescription: { sdp: 'a=candidate:1 1 udp 1 x.local 1111 typ host\r\na=candidate:2 1 udp 2 x.local 2222 typ host' } }
+  ok(rtc.directHosts(pcStub).join() === '26.9.9.9:1111,26.9.9.9:2222', '直连地址=虚拟IP×全部端口交叉(双网卡机器只取第一个端口必失效)')
+  rtcSandbox.window.__nnk__.modules.config.get = () => []
   const addCalls = []
   const fakePc = { addIceCandidate: (c) => { addCalls.push(c.candidate); return Promise.resolve() } }
   ok(rtc.addInjected(fakePc, ['26.1.2.3:54321']) === 1 && addCalls[0].includes('26.1.2.3 54321 typ host'), '注入候选格式正确(host 优先级)')
   ok(rtc.addInjected(fakePc, ['坏地址', '26.1.2.3:abc', '']) === 0, '坏地址全部拒绝')
+  ok(rtc.addInjected(fakePc, Array.from({ length: 12 }, (_, i) => '26.1.2.' + i + ':54321')) === 8, '注入条数上限 8(防对方载荷刷爆)')
+  ok(!rtcSrc.includes('hostPortFromSdp('), '旧单端口实现在审计中清除(只留 hostPortsFromSdp)')
+  ok(guestSrc.includes('rejoinBeatStreak = 0;   /* 收场一并清连死计数'), '信令收场清连死计数(防跨链残留提前收场)')
+  const clientSrc = readFileSync(join(repoRoot, 'client.js'), 'utf8')
+  ok(clientSrc.includes('不认识的模式一律不灌进单选框'), '客户端模式同步有白名单(旧内核送污染模式不灌单选框)')
   ok(rtcSrc.includes('hosts: hosts && hosts.length ? hosts : undefined'), '邀请码载荷带直连地址(空则不带,旧内核收码也无害)')
   ok(guestSrc.split('rtc.directHosts(pc)').length === 3, '客人侧两处发出直连地址(房号提议 + 回执码)')
   ok(hostSrc.split('rtc.directHosts(pc)').length === 3, '主机侧两处发出直连地址(应答 + 邀请码)')

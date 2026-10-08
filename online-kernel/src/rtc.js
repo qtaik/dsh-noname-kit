@@ -260,7 +260,7 @@
 			var isVirtual = VIRTUAL_NIC_RE.test(name);
 			for (var i = 0; i < list.length; i++) {
 				var a = list[i];
-				if (!a || a.internal || a.family !== "IPv4") {
+				if (!a || a.internal || (a.family !== "IPv4" && a.family !== 4)) {
 					continue;
 				}
 				if (isVirtual || /^(25|26)\./.test(a.address)) {
@@ -284,29 +284,42 @@
 		} catch (e2) { /* 配置不可用 */ }
 		return virtualIpsFrom(ifaces, extra);
 	}
-	/* 纯函数(也供单测):本地 SDP 里 host 候选的端口——地址被 mDNS 打码,
-	 * 但端口是真的;虚拟 IP 配上这个端口就是一条可用的直连候选 */
-	function hostPortFromSdp(sdp) {
-		var m = /candidate:\S+ \d+ udp \d+ \S+ (\d+) typ host/.exec(String(sdp || ""));
-		return m ? m[1] : null;
+	/* 纯函数(也供单测):本地 SDP 里**所有** host 候选的端口(去重)。
+	 * Chromium 给每张网卡各绑一个 ICE socket(端口互不相同),而地址全被
+	 * mDNS 打码成 .local——配虚拟 IP 必须把每个端口都试一遍:只取第一个
+	 * 会打到别的网卡的 socket 上被丢弃(双网卡机器=以太网在前,必失效) */
+	function hostPortsFromSdp(sdp) {
+		var re = /candidate:\S+ \d+ udp \d+ \S+ (\d+) typ host/g;
+		var out = [];
+		var m;
+		while ((m = re.exec(String(sdp || "")))) {
+			if (out.indexOf(m[1]) < 0) {
+				out.push(m[1]);
+			}
+		}
+		return out;
 	}
-	/* 发出用:["虚拟IP:端口", …](无虚拟网卡=空数组,载荷照旧) */
+	/* 发出用:["虚拟IP:端口", …] 全交叉(无虚拟网卡=空数组,载荷照旧)。
+	 * 上限 8:网卡/虚拟 IP 再多也不至于把信令撑爆,多余组合本来也没意义 */
 	function directHosts(pc) {
 		try {
-			var port = hostPortFromSdp(pc.localDescription && pc.localDescription.sdp);
-			if (!port) {
-				return [];
-			}
-			return virtualIps().map(function(ip) { return ip + ":" + port; });
+			var ports = hostPortsFromSdp(pc.localDescription && pc.localDescription.sdp);
+			var out = [];
+			virtualIps().forEach(function(ip) {
+				ports.forEach(function(port) {
+					out.push(ip + ":" + port);
+				});
+			});
+			return out.slice(0, 8);
 		} catch (e) {
 			return [];
 		}
 	}
 	/* 接收用:把对方给的直连地址加进 ICE(必须在 setRemoteDescription 之后)。
-	 * 返回成功加进去的条数;坏地址/被拒单条均不影响主流程 */
+	 * 返回成功加进去的条数;坏地址/被拒单条均不影响主流程;上限 8 条防载荷刷爆 */
 	function addInjected(pc, hosts) {
 		var n = 0;
-		(hosts || []).forEach(function(h) {
+		(hosts || []).slice(0, 8).forEach(function(h) {
 			var sp = String(h).split(":");
 			if (sp.length !== 2 || !/^[0-9A-Fa-f.]+$/.test(sp[0]) || !/^\d+$/.test(sp[1])) {
 				return;
@@ -339,6 +352,6 @@
 		directHosts: directHosts,
 		addInjected: addInjected,
 		virtualIpsFrom: virtualIpsFrom,
-		hostPortFromSdp: hostPortFromSdp
+		hostPortsFromSdp: hostPortsFromSdp
 	};
 })();
