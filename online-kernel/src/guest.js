@@ -161,7 +161,7 @@
 			if (guestState.rejoinCode === code) {
 				guestState.rejoinCode = null;
 				bridgeApi().setPhase("idle");
-				bridgeApi().emit("error", { message: "自动重回房间失败(房主可能已关闭游戏)——请让房主重新建房,或手动输入房号 " + code + " 重试" });
+				bridgeApi().emit("error", { message: "自动重回房间失败(房主可能已关闭游戏)——让房主重新建房后把新房号发给你(重新建房会换新房号,旧号重试没用)" });
 				finishRejoin();
 			}
 			return;
@@ -195,7 +195,7 @@
 				guestState.rejoinCode = null;
 				guestState.rejoinBeatStreak = 0;
 				bridgeApi().setPhase("idle");
-				bridgeApi().emit("error", { message: "连续多轮收不到房主心跳——房间已解散或房主已关闭游戏,自动重回中止。让房主重新建房后再进(房号 " + code + ")" });
+				bridgeApi().emit("error", { message: "连续多轮收不到房主心跳——房间已解散或房主已关闭游戏,自动重回中止。让房主重新建房后把新房号发给你(重新建房会换新房号)" });
 				finishRejoin();
 				return;
 			}
@@ -459,6 +459,9 @@
 			bridgeApi().setPhase("joining");
 			var data;
 			try {
+				if (!String(offerText || "").trim()) {
+					throw new Error("粘贴框是空的——把房主发来的「邀请码」整段贴进来再点连接");
+				}
 				data = rtc.decodeCode(offerText);
 				if (data.k !== "offer") {
 					throw new Error("这是回执码,请粘贴房主的「邀请码」");
@@ -466,7 +469,11 @@
 			} catch (err) {
 				resetSession();
 				bridgeApi().setPhase("idle");
-				bridgeApi().emit("error", { message: err.message });
+				var pMsg = err.message || "";
+				if (pMsg.indexOf("不是有效的联机助手码") >= 0 || pMsg.indexOf("码内容无法识别") >= 0) {
+					pMsg += "——码可能被聊天软件截断/加了表情,请让房主重新整段复制发一次";
+				}
+				bridgeApi().emit("error", { message: pMsg });
 				return;
 			}
 			pc.ondatachannel = function(e) {
@@ -796,7 +803,10 @@
 					}
 				).then(function(mqttSession) {
 					session.mqtt = mqttSession;
-					/* 房主在线校验:retained 心跳应在订阅后立即送达 */
+					/* 房主在线校验:retained 心跳会在 SUBSCRIBE 往返后送达。窗口 3.5→8 秒:
+					 * 计时是从 mqtt connect 起算的,订阅确认 + retained 投递在慢中继/移动
+					 * 网络下 1~3 秒是常态,3.5 秒会把活着的房主报成「没有找到在线主机」,
+					 * 还白扣一次重回预算(每轮成本仅 8~11 秒,8 轮约 80 秒就烧完) */
 					return new Promise(function(resolve, reject) {
 						setTimeout(function() {
 							if (!session.hostSeen) {
@@ -804,7 +814,7 @@
 							} else {
 								resolve(mqttSession);   /* 传给下一步发提议用(参数作用域不跨 then) */
 							}
-						}, 3500);
+						}, 8000);
 					});
 				}).then(function(mqttSession) {
 					return mqttSession.publish(signaling.roomTopic(code, "offer"), {
@@ -823,10 +833,15 @@
 					setTimeout(function() {
 						if (!answered && guestState.session === session && !session.beatRefreshed) {
 							guestState.lastAttemptBeatDead = true;   /* 重回循环据此换文案 */
-							if (Date.now() - (guestState.hostLoadingAt || 0) >= 60000) {
+							var inLoading = Date.now() - (guestState.hostLoadingAt || 0) < 60000;
+							if (!inLoading) {
 								guestState.rejoinBeatStreak = (guestState.rejoinBeatStreak || 0) + 1;   /* 非载入窗口的判死:计入连死轮数 */
 							}
-							bridgeApi().emit("error", { message: "房主心跳已停止刷新——主机可能已关闭游戏,正在重试…" });
+							/* 载入窗口内别喊"主机可能已关闭游戏":同屏的动态流里正挂着
+							 * 「主机正在载入游戏,自动跟随重连」,两句自相矛盾 */
+							bridgeApi().emit("error", { message: inLoading
+								? "主机正在载入游戏(心跳暂断)——自动跟随重连中…"
+								: "房主心跳已停止刷新——主机可能已关闭游戏,正在重试…" });
 							bridgeApi().setPhase("idle");
 							resetSession();
 						}

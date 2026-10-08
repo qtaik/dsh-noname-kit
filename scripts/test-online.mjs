@@ -262,6 +262,7 @@ export default { name: "standard", character: characters, translate: translates 
   const txSrc = readFileSync(join(repoRoot, 'online-kernel', 'src', 'transfer.js'), 'utf8')
   const mfSrc = readFileSync(join(repoRoot, 'online-kernel', 'src', 'manifest.js'), 'utf8')
   const cpSrc = readFileSync(join(repoRoot, 'online-kernel', 'src', 'compat.js'), 'utf8')
+  const onlineSrc = readFileSync(join(repoRoot, 'src', 'online.js'), 'utf8')
   const indexSrc = readFileSync(join(repoRoot, 'index.js'), 'utf8')
   ok(!mfSrc.includes('game.broadcast('), '差集回发不再走 game.broadcast(联机模式下开门即 return,永远到不了客人)')
   ok(mfSrc.includes('sendDirect(this, "nnk_manifest_diff"'), '差集回发走定向直发(与补传同通道)')
@@ -310,6 +311,31 @@ export default { name: "standard", character: characters, translate: translates 
     '包体检差集同时带双方内核版本(guestKernel/hostKernel)')
   ok(clientSrc.includes('d.guestKernel') && clientSrc.includes('d.hostKernel'),
     '工坊体检卡消费双方内核版本(混装时明说版本不一致 + 升级出路)')
+
+  /* ── 第 4 轮:慢网/主线程卡顿下的窗口与出路(每一条都是实测踩过的误判面)── */
+  ok(hostSrc.includes('function notifyReloading()') && hostSrc.split('notifyReloading();').length === 3,
+    '三条重载路径共享「主机重载中」通知(载入 / 打完一把回大厅;救援那条无会话可发)')
+  ok(hostSrc.includes('45 秒仍未打通直连') && !hostSrc.includes('20 秒仍未打通直连'),
+    '邀请码打通看门狗 20→45 秒(慢中继不再误杀能通的连接;客人侧本就是 3 分钟)')
+  ok(guestSrc.includes('}, 8000);') && !guestSrc.includes('}, 3500);'),
+    '房主在线校验窗口 3.5→8 秒(订阅确认+retained 投递在慢网要 1~3 秒)')
+  ok(guestSrc.includes('主机正在载入游戏(心跳暂断)'),
+    '载入窗口内的判死文案不再自相矛盾(不再喊"主机可能已关闭游戏")')
+  ok(rtcSrc.includes('setTimeout(finish, 8000)') && !rtcSrc.includes('setTimeout(finish, 4000)'),
+    'ICE 候选收集兜底 4→8 秒(非 trickle 一次性交换,早切会永久丢 srflx)')
+  ok(txSrc.includes('var STALL_TIMEOUT = 45000') && txSrc.includes('对端消费过慢或已无响应'),
+    '补传背压超时 20→45 秒且文案不再误报"卡死"')
+  ok(txSrc.includes('请让房主把游戏目录 extension/<扩展名> 整个文件夹拷给你') || txSrc.includes('可以请房主把游戏目录 extension/<扩展名> 整个文件夹拷给你'),
+    '补包不可用的几条失败都给出出路(手动拷贝)')
+  ok(txSrc.includes('补包需要官方版无名杀(Electron 外壳)'), '「没有 Node 文件能力」说明需要官方 Electron 版')
+  ok(onlineSrc.includes("bridgeConfig = 'ok'") && onlineSrc.includes('bridgeConfig,'),
+    '内核心跳状态上报桥配置在不在(内容哈希刻意跳过它,永久离线时看不见原因)')
+  ok(clientSrc.includes("kernel.bridgeConfig === 'missing'") && clientSrc.includes('以上都试过仍离线'),
+    '工坊离线提示点名桥配置缺失 + 恒定给出「重装内核」兜底出路')
+  ok(onlineSrc.includes('function ioHint(error)'), '安装内核失败按错误码给人话与下一步(EPERM/EBUSY/ENOSPC)')
+  ok(hostSrc.includes('粘贴框是空的') && guestSrc.includes('粘贴框是空的'),
+    '空粘贴与码损坏分开说(两端)')
+  ok(guestSrc.includes('重新建房会换新房号'), '自动重回收场不再让用户拿旧房号白试')
 
   console.log(`\n全部通过:${passed} 项`)
 } finally {

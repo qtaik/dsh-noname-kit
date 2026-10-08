@@ -1777,9 +1777,16 @@ window.__ModuleLoader__.load({
                         if (!boundElsewhere && kernel && kernel.tokenMatches === false) {
                           return '。另:内核凭据与当前 dsh 不一致(设置文件损坏重建过?)——点「🔁 重装内核」并重启游戏即恢复在线';
                         }
-                        return boundElsewhere
-                          ? '。另:内核心跳绑定在另一个 dsh(端口 ' + m[1] + ')——在本页点「升级内核」并重启游戏即切回本页'
-                          : '';
+                        if (boundElsewhere) {
+                          return '。另:内核心跳绑定在另一个 dsh(端口 ' + m[1] + ')——在本页点「升级内核」并重启游戏即切回本页';
+                        }
+                        // 桥配置缺失/读不了:心跳根本发不出去,而内容哈希刻意跳过它、state 照样 ok
+                        // ——这是"永久离线"里最看不见的一种,必须点名 + 给唯一有效动作
+                        if (kernel && kernel.bridgeConfig === 'missing') {
+                          return '。另:内核桥配置(nnk-bridge.json)缺失或读不了——心跳发不出来,点「🔁 重装内核」并重启游戏即修复';
+                        }
+                        // 前面都试过还离线:兜一句通用出路,别让用户在山穷水尽时对着这行字发呆
+                        return '。以上都试过仍离线:点「🔁 重装内核」并重启游戏(内核与桥凭据一起重写,最省事的一招)';
                       })())),
                 (bridge.cfg && Array.isArray(bridge.cfg.virtualIps) && bridge.cfg.virtualIps.length)
                   ? e('div', 'nnk-ok', '🛰 虚拟网卡直连已就绪:' + bridge.cfg.virtualIps.join('、') + '(自动生效,连房时把该地址带给对方,无需操作)')

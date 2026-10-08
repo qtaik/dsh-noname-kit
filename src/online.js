@@ -173,13 +173,18 @@ export function kernelStatus({ nonameDir, token }) {
    * 内核手里仍是老的 → 每一拍心跳都 403、lastSeen 永不刷新,工坊只显示「内核离线」,
    * 用户被引去查"扩展启没启用"(实测关注点)。tokenMatches 让界面能直接给出出路 */
   let tokenMatches = null
+  /* 桥配置在不在:内容哈希刻意跳过 nnk-bridge.json(安装时写入、不属于内核内容),
+   * 所以它丢了/坏了 state 照样报 ok——而心跳全靠它,表现只有「内核永久离线」,
+   * 界面上看不出原因。missing 时给界面一条准确出路(重装内核) */
+  let bridgeConfig = 'missing'
   try {
     const bridgeCfg = JSON.parse(readFileSync(join(target, 'nnk-bridge.json'), 'utf8'))
+    bridgeConfig = 'ok'
     boundApi = bridgeCfg.baseUrl || null
     if (typeof bridgeCfg.token === 'string' && typeof token === 'string' && token) {
       tokenMatches = bridgeCfg.token === token
     }
-  } catch { /* 没装桥配置(未安装/老版本) */ }
+  } catch { /* 没装桥配置(未安装/老版本/被删) */ }
   return {
     state: installedHash === bundledHash ? 'ok' : 'stale',
     bundledHash,
@@ -187,7 +192,19 @@ export function kernelStatus({ nonameDir, token }) {
     installedAt: readManifest(target)?.installedAt ?? null,
     boundApi,
     tokenMatches,
+    bridgeConfig,
   }
+}
+
+/** 文件系统错误 → 人话 + 下一步。安装/重装内核是用户唯一能自救的动作,
+ *  只回 EPERM/EBUSY 这种天书等于把用户晾在原地(实测反馈面)。 */
+function ioHint(error) {
+  const code = error && error.code
+  if (code === 'EBUSY' || code === 'EPERM' || code === 'EACCES') {
+    return '(文件被占用/无权限:先完全关闭游戏与杀软实时防护,再点一次「📦 安装内核」重写即可)'
+  }
+  if (code === 'ENOSPC') return '(磁盘空间不足:清理磁盘后再点一次)'
+  return '(可再点一次「📦 安装内核」重试;重复失败请把本条原文发给开发者)'
 }
 
 /**
@@ -209,12 +226,12 @@ export function installKernel({ nonameDir, baseUrl, token, intervalMs }) {
       copyDirInto(target, backupPath)
       backup = backupPath
     } catch (error) {
-      return { ok: false, error: `备份旧内核失败:${error.message}` }
+      return { ok: false, error: `备份旧内核失败:${error.message}${ioHint(error)}` }
     }
     try {
       rmSync(target, { recursive: true, force: true })
     } catch (error) {
-      return { ok: false, error: `清理旧内核失败:${error.message}`, backup }
+      return { ok: false, error: `清理旧内核失败:${error.message}${ioHint(error)}`, backup }
     }
     try {
       // 滚动清理:同前缀按名字(毫秒时间戳,等宽)排序,只留最新 BACKUP_KEEP 份
@@ -227,7 +244,7 @@ export function installKernel({ nonameDir, baseUrl, token, intervalMs }) {
   try {
     copyDirInto(bundled, target)
   } catch (error) {
-    return { ok: false, error: `复制内核失败:${error.message}`, backup }
+    return { ok: false, error: `复制内核失败:${error.message}${ioHint(error)}`, backup }
   }
   try {
     writeFileSync(join(target, BRIDGE_FILE), JSON.stringify({
@@ -237,7 +254,7 @@ export function installKernel({ nonameDir, baseUrl, token, intervalMs }) {
       installedAt: Date.now(),
     }, null, 2), 'utf8')
   } catch (error) {
-    return { ok: false, error: `写入桥配置失败:${error.message}`, backup }
+    return { ok: false, error: `写入桥配置失败:${error.message}${ioHint(error)}`, backup }
   }
   const hash = hashKernelDir(target)
   try {

@@ -36,7 +36,11 @@
 	 * 被主线程卡顿骗)。给足余量,宁可慢判也不误报"客人没响应" */
 	var ACK_TIMEOUT = 6000;          /* 等客人 ready 回执的上限 */
 	var DONE_TIMEOUT = 12000;        /* 等客人 done 回执的上限 */
-	var STALL_TIMEOUT = 20000;       /* 背压等待的上限(对端半死时不再永久卡住) */
+	/* 背压等待上限:20→45 秒。原值按"对端卡死"上沿定,但慢网/对端主线程长卡顿
+	 * (会话来不急消费,缓冲一直高于阈值)同样会连续触发——把"慢"误报成"卡死",
+	 * 用户被告知"让客人重开游戏"白折腾一趟,已传的部分还不保留。放宽后只是
+	 * 真卡死时晚 25 秒报错,文案也改成"消费过慢/无响应" */
+	var STALL_TIMEOUT = 45000;       /* 背压等待的上限(对端半死时不再永久卡住) */
 
 	function bridgeApi() {
 		return nnk.modules.bridge;
@@ -276,13 +280,13 @@
 		}
 		var req = nodeRequire();
 		if (!req) {
-			return fail("本游戏环境没有 Node 文件能力,补包不可用");
+			return fail("本游戏环境没有 Node 文件能力,补包不可用——补包需要官方版无名杀(Electron 外壳);可以请房主把游戏目录 extension/<扩展名> 整个文件夹拷给你,放到同样位置");
 		}
 		var fs = req("fs");
 		var path = req("path");
 		var root = gameRoot();
 		if (!root) {
-			return fail("定位游戏根目录失败,补包不可用(需要 extension/" + KERNEL_NAME + " 存在)");
+			return fail("定位游戏根目录失败,补包不可用——请确认游戏本体是官方版结构(resources/app 下能看到 extension/ 目录);也可以请房主手动拷贝扩展文件夹");
 		}
 		var dir = path.join(root, "extension", name);
 		if (!fs.existsSync(dir)) {
@@ -304,7 +308,7 @@
 						var size = fs.statSync(full).size;
 						total += size;
 						if (total > limit) {
-							throw new Error("体积超过上限(" + Math.round(limit / 1048576) + "MB),取消补传");
+							throw new Error("体积超过上限(" + Math.round(limit / 1048576) + "MB),取消补传——这个扩展太大,请让房主把 extension/<扩展名> 文件夹打包发给你,手动放到同样位置");
 						}
 						files.push({ rel: r, size: size, full: full });
 					} else {
@@ -378,7 +382,7 @@
 					if (!waitSince) {
 						waitSince = Date.now();
 					} else if (Date.now() - waitSince > STALL_TIMEOUT) {
-						return fail("通道积压太久(对端可能已卡死),补传中止——请让客人重开游戏后再试");
+						return fail("通道积压太久(对端消费过慢或已无响应),补传中止——让客人确认游戏没卡死,稍后可再点一次「📦 补传」");
 					}
 					waiting = true;
 					setTimeout(function() {
@@ -547,7 +551,7 @@
 	function startFileWrite() {
 		var req = nodeRequire();
 		if (!req) {
-			bridgeApi().emit("transfer_failed", { name: rx.name, message: "本游戏环境没有 Node 文件能力,接收中止" });
+			bridgeApi().emit("transfer_failed", { name: rx.name, message: "本游戏环境没有 Node 文件能力,接收中止——补包需要官方版无名杀(Electron 外壳);可请房主手动拷贝扩展文件夹" });
 			rx = null;
 			return;
 		}
@@ -555,7 +559,7 @@
 		var path = req("path");
 		var root = gameRoot();
 		if (!root) {
-			bridgeApi().emit("transfer_failed", { name: rx.name, message: "定位游戏根目录失败,接收中止" });
+			bridgeApi().emit("transfer_failed", { name: rx.name, message: "定位游戏根目录失败,接收中止——请确认游戏本体是官方版结构;也可请房主手动拷贝扩展文件夹" });
 			rx = null;
 			return;
 		}
@@ -575,7 +579,7 @@
 			try { fs.unlinkSync(rx.tmp); } catch (e2) { /* 残留清理 */ }
 			rx.fd = fs.openSync(rx.tmp, "w");
 		} catch (err) {
-			bridgeApi().emit("transfer_failed", { name: rx.name, message: "写入失败:" + ((err && err.message) || err) });
+			bridgeApi().emit("transfer_failed", { name: rx.name, message: "写入失败(磁盘空间/权限?):" + ((err && err.message) || err) + "——腾出空间或关闭占用后重试" });
 			rx = null;
 		}
 	}
@@ -629,7 +633,7 @@
 				fs.renameSync(rx.tmp, rx.target);
 			}
 		} catch (err) {
-			bridgeApi().emit("transfer_failed", { name: rx.name, message: "落盘失败:" + ((err && err.message) || err) });
+			bridgeApi().emit("transfer_failed", { name: rx.name, message: "落盘失败(磁盘空间/权限?):" + ((err && err.message) || err) + "——腾出空间或关闭占用后重试" });
 			rx = null;
 			return false;
 		}

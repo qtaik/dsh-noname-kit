@@ -142,7 +142,11 @@
 					finish();
 				}
 			});
-			setTimeout(finish, 4000);
+			/* 兜底 4→8 秒:这是**非 trickle** 的一次性交换,码一发出去就不再补候选,
+			 * 4 秒内没集齐的 srflx 就永久丢了(默认 STUN 里 google 那条国内大概率不可达,
+			 * 其超时会拖住整个 gathering)——慢网上表现为「双方网络没打通」。只在
+			 * 集齐偏慢时才多等几秒;STUN 配空/全部秒回时行为不变 */
+			setTimeout(finish, 8000);
 		});
 	}
 

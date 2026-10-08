@@ -190,6 +190,23 @@
 	}
 
 	/* 重载进房(老路径):接力标记 + 通知客人载入 + 等写库回调落地再重载 */
+	/* 通知客人「主机要重载了」:客人端据此把自动重回的话术切成「载入跟随」,
+	 * 并且 60 秒内的判死不计入连死轮数(guest 侧 hostLoadingAt)。顺带清掉
+	 * retained 心跳——重载窗口里新来的/重试的客人会立刻看到「没找到在线主机」
+	 * 快速重试,而不是对着旧心跳白等 30 秒(主机重启后 startMqtt 会重新挂上)。
+	 * 凡"房间还活着但整页要重载"的路径都得调它(载入到游戏 / 打完一把回大厅):
+	 * 原先只有载入那条发,回大厅缺失——客人把"房主正在重载"读成"房主已关闭游戏",
+	 * 3 轮连死(约 60~70 秒)就收场回菜单,而房主其实正用同一房号在重建。
+	 * (开机自愈救援那条不适用:那一刻房间还没建、mqtt 会话不存在,想发也没得发) */
+	function notifyReloading() {
+		try {
+			if (hostState.mqttSession && hostState.roomCode) {
+				hostState.mqttSession.publish(signaling.roomTopic(hostState.roomCode, "host"), { nnk_loading: true });
+				hostState.mqttSession.publishRaw(signaling.roomTopic(hostState.roomCode, "host"), "", true);
+			}
+		} catch (eN) { /* 通知失败不影响重载 */ }
+	}
+
 	function reloadIntoGame(mode) {
 		var env = nnk.env;
 		try {
@@ -199,16 +216,7 @@
 		} catch (e) { /* 忽略 */ }
 		hostState.stage = "loaded";
 		hostState.roomMode = mode;
-		/* 通知客人「主机要载入重载了」:客人端据此把自动重回的话术切成
-		 * 「载入跟随」;顺带清掉 retained 心跳——重载窗口里新来的/重试的
-		 * 客人会立刻看到「没找到在线主机」快速重试,而不是对着旧心跳
-		 * 白等 30 秒(主机重启后 startMqtt 会重新挂上心跳) */
-		try {
-			if (hostState.mqttSession) {
-				hostState.mqttSession.publish(signaling.roomTopic(hostState.roomCode, "host"), { nnk_loading: true });
-				hostState.mqttSession.publishRaw(signaling.roomTopic(hostState.roomCode, "host"), "", true);
-			}
-		} catch (eN) { /* 通知失败不影响重载 */ }
+		notifyReloading();
 		bridgeApi().emit("info", { message: "正在按「" + (env.lib.translate[mode] || mode) + "」重开房间(原房号 " + hostState.roomCode + ",客人自动重回)…" });
 		var gone = false;
 		var go = function() {
@@ -840,11 +848,15 @@
 				giveUp("直连建立失败(双方网络没打通)");
 			}
 		};
+		/* 打通看门狗:原先 20 秒,慢中继/移动网络下 1 次检查往返 + DTLS + SCTP 建立
+		 * 加起来就可能 20 秒出头(单程 400~1500ms 抖动是常态),把本来能通的连接
+		 * 误杀、强制换码重走一遍。客人侧同场景给的是 3 分钟保底,两端耐心差 9 倍——
+		 * 放宽到 45 秒(仍远短于客人侧,失败照样自动补一张新码) */
 		setTimeout(function() {
 			if (pc.connectionState !== "connected" && pc.connectionState !== "closed") {
-				giveUp("20 秒仍未打通直连(网络受限)");
+				giveUp("45 秒仍未打通直连(网络受限)");
 			}
-		}, 20000);
+		}, 45000);
 	}
 
 	var api = {
@@ -983,6 +995,7 @@
 						localStorage.setItem(env.lib.configprefix + "nnk_host_pending", JSON.stringify({ mode: overMode, signaling: "mqtt", stage: "lobby" }));
 						localStorage.setItem(env.lib.configprefix + "nnk_host_roomcode", hostState.roomCode);
 						localStorage.setItem(env.lib.configprefix + "directstart", "true");
+						notifyReloading();   /* 客人侧据此进入「载入跟随」宽限,不把重载读成房主关游戏 */
 						bridgeApi().emit("info", { message: "对局结束,已回到房间大厅(原房号 " + hostState.roomCode + " 保留),选模式后点「载入到游戏」继续" });
 						var gone = false;
 						var go = function() {
@@ -1173,12 +1186,19 @@
 			}
 			var data;
 			try {
+				if (!String(codeText || "").trim()) {
+					throw new Error("粘贴框是空的——把客人回发的「回执码」整段贴进来再点连接");
+				}
 				data = rtc.decodeCode(codeText);
 				if (data.k !== "answer") {
 					throw new Error("这不是回执码,请粘贴客人回发的「回执码」");
 				}
 			} catch (err) {
-				bridgeApi().emit("error", { message: err.message });
+				var aMsg = err.message || "";
+				if (aMsg.indexOf("不是有效的联机助手码") >= 0 || aMsg.indexOf("码内容无法识别") >= 0) {
+					aMsg += "——码可能被聊天软件截断/加了表情,请让客人重新整段复制发一次";
+				}
+				bridgeApi().emit("error", { message: aMsg });
 				return;
 			}
 			pc.setRemoteDescription(data.sdp).then(function() {
