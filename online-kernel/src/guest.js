@@ -480,6 +480,7 @@
 				if (e.channel.label === "nnk-ping") {
 					/* 专用心跳线(主机侧建的):只保温+判死,不进引擎 */
 					e.channel.onopen = function() {
+						rtc.trackPc(pc);   /* 线路观测:工坊显示直连/中继 + 往返延迟 */
 						session.ping = rtc.startPing(e.channel, function() {
 							if (guestState.session !== session) {
 								return;
@@ -670,6 +671,7 @@
 			 * 引擎重载 + 「任何来源重载都自动重回」)立刻接管 */
 			var pingChannel = pc.createDataChannel("nnk-ping", { ordered: true });
 			pingChannel.onopen = function() {
+				rtc.trackPc(pc);   /* 线路观测:工坊显示直连/中继 + 往返延迟 */
 				session.ping = rtc.startPing(pingChannel, function() {
 					if (guestState.session !== session) {
 						return;

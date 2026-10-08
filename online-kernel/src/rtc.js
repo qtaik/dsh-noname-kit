@@ -384,8 +384,13 @@
 				return;
 			}
 			try {
+				/* 优先级给最低(1):候选类型是 host(type 偏好 126),只要给正常数值就
+				 * **天然压过**对端真实的 srflx 公网候选(type 100)——于是同网/公网直连
+				 * 明明更快,ICE 却优先去连虚拟网卡那条(可能正是 Radmin 的海外中继)。
+				 * 置 1 = 排在所有候选之后:同网走局域网、能打洞走公网直连,
+				 * 都打不通才落到虚拟网卡兜底(它存在的意义本来就是兜底) */
 				var p = pc.addIceCandidate({
-					candidate: "candidate:1 1 udp 2122260223 " + sp[0] + " " + sp[1] + " typ host",
+					candidate: "candidate:1 1 udp 1 " + sp[0] + " " + sp[1] + " typ host",
 					sdpMid: "0",
 					sdpMLineIndex: 0
 				});
@@ -396,6 +401,65 @@
 			} catch (e) { /* 忽略单条失败 */ }
 		});
 		return n;
+	}
+
+	/* ── 当前线路观测(工坊「内核卡」显示:直连/中继 + 往返延迟)──
+	 * 用户报障"延迟 5~6 秒"时,第一件事是分清"走错路了(中继)"还是"路本身就慢"。
+	 * getStats 的 selectedCandidatePair 给出对端候选类型(host/srflx/relay)与 RTT。
+	 * 5 秒一轮,结果 15 秒内有效(断了就不显示陈旧值)。 */
+	var lastLink = null;
+	var linkWatchTimer = null;
+	var linkWatchedPc = null;
+	var LINK_KIND = { host: "direct", srflx: "p2p", prflx: "p2p", relay: "relay" };
+	function trackPc(pc) {
+		linkWatchedPc = pc;
+		if (linkWatchTimer) {
+			return;
+		}
+		linkWatchTimer = setInterval(function() {
+			var target = linkWatchedPc;
+			if (!target || typeof target.getStats !== "function") {
+				return;
+			}
+			try {
+				var p = target.getStats();
+				if (!p || !p.then) {
+					return;
+				}
+				p.then(function(report) {
+					var candidates = {};
+					var pair = null;
+					report.forEach(function(stat) {
+						if (stat.type === "local-candidate" || stat.type === "remote-candidate") {
+							candidates[stat.id] = stat;
+						}
+						if (stat.type === "candidate-pair" && stat.state === "succeeded" && (stat.selected || stat.nominated)) {
+							pair = stat;
+						}
+					});
+					if (!pair) {
+						return;
+					}
+					var remote = candidates[pair.remoteCandidateId] || {};
+					var local = candidates[pair.localCandidateId] || {};
+					lastLink = {
+						at: Date.now(),
+						kind: LINK_KIND[remote.candidateType] || (remote.candidateType || "?"),
+						remote: remote.candidateType || "?",
+						local: local.candidateType || "?",
+						rtt: typeof pair.currentRoundTripTime === "number" ? Math.round(pair.currentRoundTripTime * 1000) : null,
+						protocol: remote.protocol || local.protocol || ""
+					};
+				}).catch(function() { /* stats 拿不到不影响对局 */ });
+			} catch (eS) { /* 同上 */ }
+		}, 5000);
+	}
+	/** 15 秒内的最近一次观测(否则视为不新鲜,返回 null)。 */
+	function currentLink() {
+		if (!lastLink || Date.now() - lastLink.at > 15000) {
+			return null;
+		}
+		return lastLink;
 	}
 
 	nnk.modules.rtc = {
@@ -412,6 +476,8 @@
 		addInjected: addInjected,
 		virtualIpsFrom: virtualIpsFrom,
 		virtualIps: virtualIps,   /* 工坊面板状态行用(检测到哪些虚拟网卡地址) */
-		hostPortsFromSdp: hostPortsFromSdp
+		hostPortsFromSdp: hostPortsFromSdp,
+		trackPc: trackPc,         /* 记住当前 pc,5 秒一轮观测线路(直连/中继 + RTT) */
+		currentLink: currentLink  /* 工坊「内核卡」显示用;15 秒无观测返回 null */
 	};
 })();

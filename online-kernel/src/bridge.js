@@ -194,6 +194,16 @@
 								return [];
 							}
 						})(),
+						/* 当前线路观测:对端候选类型(host=局域网直连/srflx=公网打洞/relay=中继)
+						 * + 往返延迟,工坊显示「🔗 线路:直连 · 往返 42ms」——
+						 * 用户报"延迟几秒"时第一眼就能分清"走错路了"还是"路本身慢" */
+						link: (function() {
+							try {
+								return (nnk.modules.rtc && nnk.modules.rtc.currentLink) ? nnk.modules.rtc.currentLink() : null;
+							} catch (e5) {
+								return null;
+							}
+						})(),
 						/* 人物标识:工坊靠它回填输入框、插件靠它判断要不要离线补发 */
 						onlineName: String(nnk.modules.config.get("onlineName") || ""),
 						onlineAvatar: String(nnk.modules.config.get("onlineAvatar") || ""),

@@ -99,6 +99,10 @@
 			 * 关掉它:对局中的来客改走 denied("gaming"),由内核既有的「房主正在对局中,
 			 * 本局结束后自动进入」处理(0.3.74 已验证的那条路) */
 			game.saveConfig("connect_observe", false, "connect");
+			/* 「出牌时限」默认 30 秒(引擎 connect_choose_timeout init:"30"):跨网/热点
+			 * 环境下单程就几秒,30 秒常常不够"看完局面再出牌",被自动托管很扫兴。
+			 * 默认放宽到 60 秒(房主在等待房间里仍可随时改,不锁死) */
+			game.saveConfig("connect_choose_timeout", "60", "connect");
 		} catch (e) { /* 个别版本无此键也不影响建房 */ }
 		uiE.create.roomInfo();
 		uiE.create.chat();
@@ -537,6 +541,7 @@
 				 * 主通道随之关闭,走既有 onDown 清理(摘客/成员表/队列补位) */
 				e.channel.onopen = function() {
 					pc._nnkPingCh = e.channel;
+					rtc.trackPc(pc);   /* 线路观测:工坊显示直连/中继 + 往返延迟 */
 					pc._nnkPing = rtc.startPing(e.channel, function() {
 						try { pc.close(); } catch (eD) { /* 忽略 */ }
 					}, function() {
@@ -666,6 +671,7 @@
 		var pingChannel = pc.createDataChannel("nnk-ping", { ordered: true });
 		pingChannel.onopen = function() {
 			pc._nnkPingCh = pingChannel;
+			rtc.trackPc(pc);   /* 线路观测:工坊显示直连/中继 + 往返延迟 */
 			pc._nnkPing = rtc.startPing(pingChannel, function() {
 				try { pc.close(); } catch (eD) { /* 忽略 */ }
 			}, function() {

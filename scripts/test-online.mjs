@@ -353,6 +353,17 @@ export default { name: "standard", character: characters, translate: translates 
   ok(hostSrc.split('return pc.connectionState').length === 3 && guestSrc.split('session.pc.connectionState').length === 3,
     '主机两处/客人两处判死都接上传输层状态')
 
+  /* ── 10-09 用户点名:热点之间变快(线路可见 + 兜底优先级 + 出牌时限;TURN 已被用户否决——
+   * 设计前提就是不租服务器,有服务器的直接用引擎原生局域网联机)── */
+  ok(rtcSrc.includes('candidate:1 1 udp 1 " + sp[0]'),
+    '注入候选优先级降到 1(排最后):同网/公网直连优先,虚拟网卡只当兜底')
+  ok(rtcSrc.includes('function trackPc(pc)') && rtcSrc.includes('"candidate-pair"') && rtcSrc.includes('currentRoundTripTime'),
+    '线路观测:5 秒一轮 getStats 取候选对(host/srflx/relay + RTT)')
+  ok(bridgeSrc.includes('link: (function()') && clientSrc.includes('🔗 当前线路:'),
+    '心跳上报线路 + 工坊内核卡显示「🔗 当前线路:直连/中继 · 往返 Nms」')
+  ok(hostSrc.includes('game.saveConfig("connect_choose_timeout", "60", "connect")'),
+    '出牌时限默认放宽到 60 秒(引擎默认 30,跨网环境常被自动托管)')
+
   console.log(`\n全部通过:${passed} 项`)
 } finally {
   rmSync(home, { recursive: true, force: true })

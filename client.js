@@ -1791,6 +1791,18 @@ window.__ModuleLoader__.load({
                 (bridge.cfg && Array.isArray(bridge.cfg.virtualIps) && bridge.cfg.virtualIps.length)
                   ? e('div', 'nnk-ok', '🛰 虚拟网卡直连已就绪:' + bridge.cfg.virtualIps.join('、') + '(自动生效,连房时把该地址带给对方,无需操作)')
                   : null,
+                /* 当前线路:分清"走错路了(中继)"还是"路本身慢"——用户实测延迟几秒时
+                 * 第一眼要看的就是这一行。relay=中继;host=局域网直连;srflx/prflx=公网打洞 */
+                (function () {
+                  var link = bridge.cfg && bridge.cfg.link;
+                  if (!link || !link.kind) return null;
+                  var kindText = link.kind === 'relay' ? '中继' : link.kind === 'direct' ? '局域网直连' : link.kind === 'p2p' ? '公网打洞直连' : link.kind;
+                  var rtt = typeof link.rtt === 'number' ? link.rtt : null;
+                  var slow = link.kind === 'relay' || (rtt !== null && rtt > 400);
+                  return e('div', slow ? 'nnk-hint' : 'nnk-ok',
+                    '🔗 当前线路:' + kindText + (rtt !== null ? ' · 往返 ' + rtt + 'ms' : '')
+                    + (slow ? '(中继或延迟偏高——打洞没打穿,走的是虚拟网卡那条线。可试:两台机接同一个热点/路由器;或换国内可达的组网工具(蒲公英等,国内中继);Radmin 显示「中继」时就是走了它境外的服务器)' : ''));
+                })(),
                 phase !== 'idle'
                   ? e('div', 'nnk-hint', '当前状态:' + phaseText + (roomCode ? '(房号 ' + roomCode + ')' : ''))
                   : null)),
