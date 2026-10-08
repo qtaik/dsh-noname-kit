@@ -185,6 +185,15 @@
 						unlockUIExtensions: !!nnk.modules.config.get("unlockUIExtensions"),
 						autoUnlockExtensions: !!nnk.modules.config.get("autoUnlockExtensions"),
 						root: !!(nnk.modules.compat && nnk.modules.compat.gameRoot()),
+						/* 虚拟网卡直连(Radmin/ZeroTier 等):自动生效、无需开关,
+						 * 这里上报检测结果,工坊面板显示"已就绪"让用户看得见 */
+						virtualIps: (function() {
+							try {
+								return (nnk.modules.rtc && nnk.modules.rtc.virtualIps) ? nnk.modules.rtc.virtualIps() : [];
+							} catch (e4) {
+								return [];
+							}
+						})(),
 						/* 人物标识:工坊靠它回填输入框、插件靠它判断要不要离线补发 */
 						onlineName: String(nnk.modules.config.get("onlineName") || ""),
 						onlineAvatar: String(nnk.modules.config.get("onlineAvatar") || ""),

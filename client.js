@@ -1746,6 +1746,9 @@ window.__ModuleLoader__.load({
                           ? '。另:内核心跳绑定在另一个 dsh(端口 ' + m[1] + ')——在本页点「升级内核」并重启游戏即切回本页'
                           : '';
                       })())),
+                (bridge.cfg && Array.isArray(bridge.cfg.virtualIps) && bridge.cfg.virtualIps.length)
+                  ? e('div', 'nnk-ok', '🛰 虚拟网卡直连已就绪:' + bridge.cfg.virtualIps.join('、') + '(自动生效,连房时把该地址带给对方,无需操作)')
+                  : null,
                 phase !== 'idle'
                   ? e('div', 'nnk-hint', '当前状态:' + phaseText + (roomCode ? '(房号 ' + roomCode + ')' : ''))
                   : null)),

@@ -271,7 +271,13 @@
 		(extra || []).forEach(push);
 		return out;
 	}
+	var virtualIpsCache = { at: 0, list: null };
 	function virtualIps() {
+		/* 5 秒缓存:桥心跳 0.7 秒一拍,别每拍都枚举网卡;接/断 Radmin 后
+		 * 地址变化最多 5 秒内被发现 */
+		if (virtualIpsCache.list && Date.now() - virtualIpsCache.at < 5000) {
+			return virtualIpsCache.list;
+		}
 		var ifaces = null;
 		try {
 			if (typeof require === "function") {
@@ -282,7 +288,9 @@
 		try {
 			extra = nnk.modules.config.get("virtualIps") || [];
 		} catch (e2) { /* 配置不可用 */ }
-		return virtualIpsFrom(ifaces, extra);
+		var out = virtualIpsFrom(ifaces, extra);
+		virtualIpsCache = { at: Date.now(), list: out };
+		return out;
 	}
 	/* 纯函数(也供单测):本地 SDP 里**所有** host 候选的端口(去重)。
 	 * Chromium 给每张网卡各绑一个 ICE socket(端口互不相同),而地址全被
@@ -352,6 +360,7 @@
 		directHosts: directHosts,
 		addInjected: addInjected,
 		virtualIpsFrom: virtualIpsFrom,
+		virtualIps: virtualIps,   /* 工坊面板状态行用(检测到哪些虚拟网卡地址) */
 		hostPortsFromSdp: hostPortsFromSdp
 	};
 })();
