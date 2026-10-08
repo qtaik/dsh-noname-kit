@@ -191,6 +191,17 @@ export default { name: "standard", character: characters, translate: translates 
   ok(sigSrc.includes('}, 7000);'), '信令兜底超时 7 秒(不再 12 秒拖慢自动重回)')
   ok(!sigSrc.includes('连接超时(可改用邀请码方式)'), '超时文案不再甩锅房主')
 
+  // ── 结构性回归锁:房主退游戏后客人不再白转 8 轮(10-08 实测报障) ──
+  ok(guestSrc.includes('lastAttemptBeatDead = true'), '心跳判死处记证据(重回循环据此计数)')
+  ok(guestSrc.includes('guestState.lastAttemptBeatDead = false;   /* 心跳在刷新=房主活着'), '心跳在刷新时清掉判死证据')
+  ok(guestSrc.includes('rejoinBeatStreak >= 3'), '心跳判死连续 3 轮即收场(不烧满 8 轮)')
+  ok(guestSrc.includes('连续多轮收不到房主心跳'), '收场给人话:解散/关游戏,不再说「正在重组房间」')
+  ok(guestSrc.includes('房主已无心跳,尝试重回'), '判死期间文案分流(不再谎称「重组房间」)')
+  ok(guestSrc.replace(/\r\n/g, '\n').includes('guestState.lastAttemptBeatDead = false;\n\t\t\t\tguestState.rejoinBeatStreak = 0;\n\t\t\t}\n\t\t\tif (!rejoin && env.game.online)'), '手动发起新加入时清空判死计数')
+  const iceGuard = guestSrc.lastIndexOf('pc.onconnectionstatechange')   /* 后者=房号门;前者=邀请码门(自带 failNoted 守卫) */
+  ok(iceGuard > 0 && guestSrc.slice(iceGuard, iceGuard + 400).includes('if (guestState.session !== session)'), 'ICE 失败回调有会话守卫(旧 pc 迟到报错不误杀新尝试)')
+  ok(guestSrc.includes('lastIceFailAt'), '「直连建立失败」同文案 2 秒去重(实测双发)')
+
   console.log(`\n全部通过:${passed} 项`)
 } finally {
   rmSync(home, { recursive: true, force: true })

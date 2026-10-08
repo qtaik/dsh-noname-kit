@@ -12,7 +12,10 @@
 
 	var guestState = nnk.state.guest = {
 		session: null,   /* { pc, fake, autoConnect } */
-		rejoinGen: 0     /* 自动重回链代号:每次新链/取消都递增,旧链的迟到定时器作废 */
+		rejoinGen: 0,    /* 自动重回链代号:每次新链/取消都递增,旧链的迟到定时器作废 */
+		rejoinBeatStreak: 0,   /* 连续「心跳判死」的重回轮数:≥3 收场——房主退游戏后别让客人白转满 8 轮(实测 2 分钟,只能手点取消) */
+		lastAttemptBeatDead: false,   /* 上一轮是否以「心跳 10 秒无刷新」收场:重回循环据此换文案+计数 */
+		lastIceFailAt: 0    /* 上一条「直连建立失败」发出时刻:同文案 2 秒去重(pc 迟到报错会双发) */
 	};
 
 	function bridgeApi() {
@@ -136,9 +139,12 @@
 		}
 		if (!inFlight) {
 			/* 刚收到主机的「载入」通知(60 秒内):话术切成载入跟随,别让客人
-			 * 以为房主崩了;其他场景(打完一把重组/掉线)照旧 */
+			 * 以为房主崩了;心跳已死且不在载入窗口:别再谎称「重组房间」;
+			 * 其他场景(打完一把重组/掉线)照旧 */
 			var hostLoading = Date.now() - (guestState.hostLoadingAt || 0) < 60000;
-			bridgeApi().emit("info", { message: (hostLoading ? "主机正在载入游戏,自动跟随重连 " : "房主正在重组房间,自动重回 ") + code + "(第 " + (9 - attempts) + " 次尝试)…" });
+			var hostGone = guestState.lastAttemptBeatDead && !hostLoading;
+			guestState.lastAttemptBeatDead = false;   /* 用后即清:本轮自己的判死会在中途重新置真 */
+			bridgeApi().emit("info", { message: (hostLoading ? "主机正在载入游戏,自动跟随重连 " : hostGone ? "房主已无心跳,尝试重回 " : "房主正在重组房间,自动重回 ") + code + "(第 " + (9 - attempts) + " 次尝试)…" });
 			api.joinByRoomCode(code, true, true);   /* rejoin 模式:绕过「联机中不能加入」守卫 */
 		}
 		setTimeout(function() {
@@ -147,7 +153,21 @@
 			}
 			if (guestState.session && (guestState.session.entered || guestState.session.parked)) {
 				guestState.rejoinCode = null;
+				guestState.rejoinBeatStreak = 0;
+				guestState.lastAttemptBeatDead = false;
 				return;   /* 已进入房间 / 已停回大厅,循环完成 */
+			}
+			/* 心跳连死收场:非载入窗口内连续 3 轮判死(约 1 分钟)= 房间解散/
+			 * 房主关游戏,收场给人话,别让客人对着「正在重组房间」白转满 8 轮
+			 * (实测 2 分钟只能手点取消)。计数在判死点自增(每轮至多一次),
+			 * 载入窗口不计数(主机重载心跳本来就断跳,是正常空窗) */
+			var hostLoadingNow = Date.now() - (guestState.hostLoadingAt || 0) < 60000;
+			if (guestState.rejoinBeatStreak >= 3 && !hostLoadingNow) {
+				guestState.rejoinCode = null;
+				guestState.rejoinBeatStreak = 0;
+				bridgeApi().setPhase("idle");
+				bridgeApi().emit("error", { message: "连续多轮收不到房主心跳——房间已解散或房主已关闭游戏,自动重回中止。让房主重新建房后再进(房号 " + code + ")" });
+				return;
 			}
 			/* 次数扣减:只有"真尝试过、连到房间层"才扣。信令服务器连不上
 			 * (公共 broker 偶发抽风)算信号层失败,不扣次数——否则 8 次被信号
@@ -481,6 +501,11 @@
 				return;
 			}
 			resetSession();
+			if (!rejoin) {
+				/* 手动发起新加入:清掉上一条重回链留下的判死证据与计数 */
+				guestState.lastAttemptBeatDead = false;
+				guestState.rejoinBeatStreak = 0;
+			}
 			if (!rejoin && env.game.online) {
 				bridgeApi().emit("error", { message: "游戏正在联机中,请先退出当前对局" });
 				return;
@@ -577,8 +602,14 @@
 				}
 			});
 			pc.onconnectionstatechange = function() {
+				if (guestState.session !== session) {
+					return;   /* 旧 pc 的迟到报错:不惊扰新一轮尝试(双发同文案、还会 resetSession 误杀新会话,实测) */
+				}
 				if (pc.connectionState === "failed") {
+					if (Date.now() - (guestState.lastIceFailAt || 0) > 2000) {
+						guestState.lastIceFailAt = Date.now();
 						bridgeApi().emit("error", { message: "直连建立失败(双方网络没打通)——反复失败检查防火墙是否放行无名杀(UDP),或让房主发一张邀请码,从另一道门进来" });
+					}
 					bridgeApi().setPhase("idle");
 					resetSession();
 				}
@@ -600,6 +631,8 @@
 							if (msg && typeof msg.ts === "number") {
 								if (session.beatTs && msg.ts !== session.beatTs) {
 									session.beatRefreshed = true;
+									guestState.lastAttemptBeatDead = false;   /* 心跳在刷新=房主活着,清掉判死证据 */
+									guestState.rejoinBeatStreak = 0;
 								}
 								session.beatTs = msg.ts;
 							}
@@ -648,6 +681,10 @@
 					 * 时每轮都要耗满 30 秒,重试磨磨蹭蹭) */
 					setTimeout(function() {
 						if (!answered && guestState.session === session && !session.beatRefreshed) {
+							guestState.lastAttemptBeatDead = true;   /* 重回循环据此换文案 */
+							if (Date.now() - (guestState.hostLoadingAt || 0) >= 60000) {
+								guestState.rejoinBeatStreak = (guestState.rejoinBeatStreak || 0) + 1;   /* 非载入窗口的判死:计入连死轮数 */
+							}
 							bridgeApi().emit("error", { message: "房主心跳已停止刷新——主机可能已关闭游戏,正在重试…" });
 							bridgeApi().setPhase("idle");
 							resetSession();
