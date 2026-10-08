@@ -58,6 +58,7 @@
 				session.entered = true;   /* 自动重回循环据此区分「真进了」和「还在握手」 */
 				guestState.hostLoadingAt = 0;   /* 已进来,载入跟随之类的话术复位 */
 				try { localStorage.removeItem(env.lib.configprefix + "nnk_guest_reentry"); } catch (eR) { /* 忽略 */ }
+				try { localStorage.removeItem(env.lib.configprefix + "nnk_host_game"); } catch (eG) { /* 进来了:清"房主对局中"等待标记 */ }
 				bridgeApi().setPhase("connected", session.code ? { code: session.code } : undefined);
 				bridgeApi().emit("session_established");
 			}
@@ -319,17 +320,44 @@
 				if (pendingJson) {
 					localStorage.removeItem(env.lib.configprefix + "nnk_guest_pending");
 					var task = JSON.parse(pendingJson);
+					/* 续跑链代号:等待期间(含 UI 就绪前)用户取消/退出会递增 gen,
+					 * 到点前复查——否则"等房主打完"的 20 秒延迟里点了取消,
+					 * 定时器到点照样把人拉回房间(审计发现的竞态) */
+					var resumeGen = guestState.rejoinGen || 0;
 					var waited = 0;
 					var resumeTimer = setInterval(function() {
 						waited += 300;
 						if (nnk.env.ui && nnk.env.ui.control && nnk.env.ui.arena) {
 							clearInterval(resumeTimer);
-							if (task && task.kind === "invite") {
-								api.joinByInvite(task.code, true);
-							} else if (task) {
-								/* 客人自己点「重新开始」/主机重组后的重进:主机可能也在
-								 * 重载重建,单次尝试大概率撞空——走带重试的自动重回 */
-								autoRejoin(task.code, 8);
+							var startResume = function() {
+								if (task && task.kind === "invite") {
+									api.joinByInvite(task.code, true);
+								} else if (task) {
+									/* 客人自己点「重新开始」/主机重组后的重进:主机可能也在
+									 * 重载重建,单次尝试大概率撞空——走带重试的自动重回 */
+									autoRejoin(task.code, 8);
+								}
+							};
+							var runResume = function() {
+								if ((guestState.rejoinGen || 0) !== resumeGen) {
+									return;   /* 等待期间已被取消/新链取代:作废 */
+								}
+								startResume();
+							};
+							/* 上一轮是"房主对局中"被拒:放慢节奏等本局打完再进(标记跨
+							 * 重载写在 localStorage)——否则每 15 秒一轮重载循环,两边的
+							 * 动态与日志都会被刷爆 */
+							var waitMs2 = 0;
+							try {
+								var gAt = parseInt(localStorage.getItem(env.lib.configprefix + "nnk_host_game") || "0", 10) || 0;
+								if (gAt && Date.now() - gAt < 120000) {
+									waitMs2 = 20000;
+								}
+							} catch (eW) { /* 忽略 */ }
+							if (waitMs2) {
+								setTimeout(runResume, waitMs2);
+							} else {
+								runResume();
 							}
 						} else if (waited > 15000) {
 							clearInterval(resumeTimer);
@@ -339,6 +367,57 @@
 					}, 300);
 				}
 			} catch (e) { /* localStorage 不可用则无续跑 */ }
+			/* 引擎「加入被拒」(denied)的阻塞弹窗在房间会话期静音:
+			 * 注意官方处理器末尾还有两个必须跑的副作用——game.ws.close()(关掉这
+			 * 条连接)与 _status.connectDenied() 回调,version/key 分支还有
+			 * saveConfig 清理;所以这里**不能提前 return 跳过原处理器**,只把
+			 * window.alert/confirm 临时换成静音壳,原逻辑照跑(审计发现:早先
+			 * 的 skip 会留下半挂连接与未收尾的 connecting 状态)。
+			 * 「游戏已开始」=房主正在对局中、客人只能等本局结束——重试循环会
+			 * 持续;这条只做播报与标记,不发弹窗 */
+			if (env.lib && env.lib.message && env.lib.message.client
+				&& typeof env.lib.message.client.denied === "function"
+				&& !env.lib.message.client.denied.__nnkWrapped) {
+				var origDenied = env.lib.message.client.denied;
+				env.lib.message.client.denied = function(reason) {
+					var inSession = false;
+					try {
+						inSession = !!(guestState.rejoinCode || (guestState.session && guestState.session.code));
+					} catch (e0) { /* 忽略 */ }
+					if (inSession) {
+						try {
+							if (reason === "gaming") {
+								/* 跨重载的"房主对局中"标记:重载后的续跑据此放慢节奏,
+								 * 别 15 秒一轮重载循环刷爆两边的动态与日志 */
+								localStorage.setItem(nnk.env.lib.configprefix + "nnk_host_game", String(Date.now()));
+							}
+							/* 同一原因 60 秒内只播报一次(跨重载用 localStorage 节流) */
+							var noteKey = nnk.env.lib.configprefix + "nnk_denied_note";
+							var noted = parseInt(localStorage.getItem(noteKey) || "0", 10) || 0;
+							if (Date.now() - noted > 60000) {
+								localStorage.setItem(noteKey, String(Date.now()));
+								var text = reason === "gaming" ? "房主正在对局中,暂时进不去——本局结束后会自动进入(持续重试中,不用管)"
+									: reason === "version" ? "被拒:两边游戏本体版本不一致,请更新到同一版本"
+									: reason === "number" ? "被拒:房间已满"
+									: reason === "banned" ? "被拒:名字为空或被房主拉黑"
+									: "加入被拒:" + reason;
+								bridgeApi().emit("info", { message: text });
+							}
+						} catch (eN) { /* 忽略 */ }
+						var oa = window.alert;
+						var oc = window.confirm;
+						try {
+							window.alert = function() {};
+							window.confirm = function() { return false; };   /* extension 分支的确认框也不阻塞 */
+							return origDenied.apply(this, arguments);
+						} finally {
+							try { window.alert = oa; window.confirm = oc; } catch (eR) { /* 忽略 */ }
+						}
+					}
+					return origDenied.apply(this, arguments);
+				};
+				env.lib.message.client.denied.__nnkWrapped = true;
+			}
 			/* 引擎「退出房间」按钮:先清本内核的重连令牌再走引擎原流程——否则它
 			 * 触发的重载会被客机重载包装当成"断线"登记自动重回,用户点了退出还会
 			 * 被拉回原房间(实测)。清令牌+清会话后,重载包装看到空令牌就不登记了 */
@@ -400,6 +479,8 @@
 							}
 							bridgeApi().emit("info", { message: "与主机的连接静默了,自动重连…" });
 							try { session.fake.channel.close(); } catch (eD) { /* 忽略 */ }
+						}, function() {
+							return session.fake ? (session.fake._lastIn || 0) : 0;   /* 主通道来包=主机活着 */
 						});
 					};
 					return;
@@ -483,11 +564,6 @@
 				/* 一体化房间:邀请码客人也拿着房号(内核随停车指令下发),
 				 * 断开后走房号门自动重回——恢复不再区分当初从哪道门进来 */
 				if (session.wasIn && session.code && nnk.env._status.connectMode) {
-					/* 抑制引擎的自毁重载(library:10396 的 _nocallback 开关):重载会
-					 * 丢 game.onlineID,重连被主机引擎当新客人拒「游戏已开始」形成
-					 * 弹窗循环(实测)。原位重连带旧 id→主机 reinit(原生断线重连);
-					 * 彻底放弃时由收场路径自己重载回干净菜单 */
-					session.fake._nocallback = true;
 					bridgeApi().setPhase("joining", { code: session.code });
 					autoRejoin(session.code, 8);
 					return;
@@ -591,6 +667,8 @@
 					}
 					bridgeApi().emit("info", { message: "与主机的连接静默了,自动重连…" });
 					try { channel.close(); } catch (eD) { /* 忽略 */ }
+				}, function() {
+					return session.fake ? (session.fake._lastIn || 0) : 0;   /* 主通道来包=主机活着 */
 				});
 			};
 			fake.onUp(function() {
@@ -644,13 +722,13 @@
 					guestState.session = null;
 					try { if (session.ping) session.ping.stop(); } catch (eP) { /* 忽略 */ }
 				/* 房号房间的通道断开(主机重组/换模式重载/掉线)一律自动重回:
-				 * 主机真退了的话重试穷尽后会给明确提示 */
+				 * 主机真退了的话重试穷尽后会给明确提示。
+				 * 注:曾试过在此抑制引擎自毁重载(保 game.onlineID)走原生断线重连
+				 * (reinit),但引擎 1.11.6 的 reinit 路径 decoded parsedResult 对
+				 * 活对象无环保护,重连必爆栈(Maximum call stack size exceeded,
+				 * event.name:game)——退回引擎自家的重载路径,身份刷新为新人,
+				 * 主机侧「对局中新客人」的原生拒绝由 denied 包装转成工坊提示 */
 				if (session.wasIn && session.code && nnk.env._status.connectMode) {
-					/* 抑制引擎的自毁重载(library:10396 的 _nocallback 开关):重载会
-					 * 丢 game.onlineID,重连被主机引擎当新客人拒「游戏已开始」形成
-					 * 弹窗循环(实测)。原位重连带旧 id→主机 reinit(原生断线重连);
-					 * 彻底放弃时由收场路径自己重载回干净菜单 */
-					session.fake._nocallback = true;
 					bridgeApi().setPhase("joining", { code: session.code });
 					autoRejoin(session.code, 8);
 					return;

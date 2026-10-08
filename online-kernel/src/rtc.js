@@ -64,11 +64,16 @@
 	}
 
 	/* 专用心跳("nnk-ping" 通道,与游戏数据线完全分开、不经过引擎):
-	 * 每 2.5 秒发一拍,收到任意来包算活;约 8 秒(3 拍)没有来包就判死并回调
+	 * 每 2.5 秒发一拍,收到任意来包算活;约 20 秒(8 拍)全无来包才判死并回调
 	 * onDead——秒级判死,不用干等 ICE consent 超时(~25 秒)才发现断线;
 	 * 持续的微量流量还能防止空闲 P2P 链路被 NAT/UDP 映射超时悄悄回收。
+	 * 判活的证据有三路(缺一不可,全是实测踩出来的):
+	 *  ①心跳线来包;②自己发送缓冲在推进(对端 SCTP 层在 ACK——对端主线程
+	 *  忙时心跳断供但 ACK 照常);③peerTraffic() 报的主通道来包时间(对端
+	 *  开局时主通道正狂发数据,而它那侧的心跳定时器饿死——只看心跳必误杀,
+	 *  实测:房主点开始游戏客人机必掉线)。
 	 * 返回 { stop() }:主动关闭通道前先 stop(),避免把自己的关闭当成对端掉线。 */
-	function startPing(channel, onDead) {
+	function startPing(channel, onDead, peerTraffic) {
 		var stopped = false;
 		var lastSeen = Date.now();
 		var lastBuffered = null;
@@ -96,10 +101,6 @@
 			if (channel.readyState !== "open") {
 				return;   /* 还没打开,下一拍再看 */
 			}
-			/* 传输层活性:自己发送缓冲在推进(bufferedAmount 下降)=对方 SCTP 层
-			 * 在收在 ACK=链路活着。对端主线程忙(开局加载/渲染选将)时 JS 层的
-			 * 心跳会整段断供,但 ACK 照常——只看心跳会误杀整条链路(实测:
-			 * 点开始游戏后客机刚进选将就被判死,重载→新身份→「游戏已开始」循环) */
 			try {
 				var buf = channel.bufferedAmount || 0;
 				if (lastBuffered !== null && buf < lastBuffered) {
@@ -107,8 +108,13 @@
 				}
 				lastBuffered = buf;
 			} catch (eB) { /* 读不到就算了 */ }
-			if (Date.now() - lastSeen > 12000) {
-				stop(true);   /* 约 5 拍没来包、缓冲也不推进=静默 */
+			var trafficAt = 0;
+			if (peerTraffic) {
+				try { trafficAt = peerTraffic() || 0; } catch (eT) { trafficAt = 0; }
+			}
+			if (Date.now() - Math.max(lastSeen, trafficAt) > 20000) {
+				stop(true);   /* 约 8 拍全无动静=静默。阈值 20 秒:三路证据之外仍留余量
+				               * 给"对端静默加载"(慢机器开局十几秒不发送任何东西) */
 				return;
 			}
 			try { channel.send("p"); } catch (e2) { /* 下一拍再判 */ }
@@ -157,6 +163,7 @@
 		this._upHooks = [];
 		this._downHooks = [];
 		this._open = false;
+		this._lastIn = 0;   /* 主通道最近来包时刻:心跳判死的兜底证据(见 startPing) */
 		channel.onopen = function() {
 			self._open = true;
 			self._upHooks.forEach(function(f) { f(); });
@@ -165,6 +172,7 @@
 			}
 		};
 		channel.onmessage = function(e) {
+			self._lastIn = Date.now();
 			if (self.onmessage) {
 				self.onmessage({ data: e.data });
 			} else {

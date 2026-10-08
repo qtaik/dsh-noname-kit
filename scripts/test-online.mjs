@@ -275,8 +275,15 @@ export default { name: "standard", character: characters, translate: translates 
   ok(clientSrc.includes('虚拟网卡直连已就绪'), '面板显示虚拟网卡就绪状态(用户看得见,不再是隐形功能)')
 
   // ── 结构性回归锁:开局瞬间误杀与「退出房间被拉回」(10-08 实测报障)──
-  ok(rtcSrc.includes('lastBuffered') && rtcSrc.includes('> 12000'), '心跳判死识别传输层 ACK 推进(对端主线程忙时不再误杀)')
-  ok(guestSrc.split('session.fake._nocallback = true').length === 3, '两道门的断线善后都抑制引擎自毁重载(保 game.onlineID,原位重连被主机 reinit 认回)')
+  ok(rtcSrc.includes('lastBuffered'), '心跳判死识别传输层 ACK 推进(对端主线程忙时不再误杀)')
+  ok(rtcSrc.includes('peerTraffic') && rtcSrc.includes('_lastIn'), '心跳判死第三路证据:主通道来包(对端开局狂发数据、心跳定时器饿死不误杀)')
+  ok(rtcSrc.includes('> 20000'), '心跳判死阈值 20 秒(对端静默加载留余量)')
+  ok(!guestSrc.includes('session.fake._nocallback'), '断线善后不再抑制引擎重载(引擎 1.11.6 的原生 reinit 路径 parsedResult 爆栈,已弃用)')
+  ok(guestSrc.includes('env.lib.message.client.denied.__nnkWrapped'), '「加入被拒」弹窗转工坊消息(游戏已开始不弹阻塞框,静默等本局结束)')
+  ok(guestSrc.includes('window.alert = function() {}') && guestSrc.includes('window.confirm'), '「加入被拒」只静音弹窗不改道(game.ws.close/connectDenied 等副作用照跑——审计修)')
+  ok(guestSrc.includes('nnk_host_game') && guestSrc.includes('resumeGen'), '「房主对局中」标记跨重载+续跑带链代号守卫(等待期取消作废——审计修)')
+  ok(hostSrc.split('pc._nnkTrafficAt = Date.now()').length === 3, '主机侧两道门的主通道都盖时间戳')
+  ok(guestSrc.split('session.fake._lastIn').length === 3, '客人侧两道门的心跳都探测主通道来包')
   ok(guestSrc.includes('function finishRejoin()') && guestSrc.split('finishRejoin();').length === 4, '收场路径自己重载回干净菜单(抑制了引擎重载就必须自己收尾)')
   ok(guestSrc.includes('__nnkExitWrapped'), '引擎「退出房间」按钮清重连令牌(点了退出不再被拉回原房间)')
 

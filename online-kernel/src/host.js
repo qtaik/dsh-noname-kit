@@ -524,6 +524,8 @@
 					pc._nnkPingCh = e.channel;
 					pc._nnkPing = rtc.startPing(e.channel, function() {
 						try { pc.close(); } catch (eD) { /* 忽略 */ }
+					}, function() {
+						return pc._nnkTrafficAt || 0;   /* 主通道来包=对端活着(开局狂发数据心跳饿死场景) */
 					});
 				};
 				return;
@@ -532,6 +534,11 @@
 			channel.onopen = function() {
 				pc._nnkAdopted = true;   /* 有人接上来了:看门狗不再收它 */
 				var conn = new rtc.HostBridge(channel);
+				var inner = channel.onmessage;
+				channel.onmessage = function(ev) {
+					pc._nnkTrafficAt = Date.now();
+					return inner.call(this, ev);
+				};
 				registerBridge(conn, pc);
 				handleNewBridge(conn);
 			};
@@ -644,6 +651,8 @@
 			pc._nnkPingCh = pingChannel;
 			pc._nnkPing = rtc.startPing(pingChannel, function() {
 				try { pc.close(); } catch (eD) { /* 忽略 */ }
+			}, function() {
+				return pc._nnkTrafficAt || 0;   /* 主通道来包=对端活着 */
 			});
 		};
 		channel.onopen = function() {
@@ -660,6 +669,11 @@
 			entry.status = "used";
 			entry.note = "";
 			var conn = new rtc.HostBridge(channel);
+			var inner = channel.onmessage;
+			channel.onmessage = function(ev) {
+				pc._nnkTrafficAt = Date.now();
+				return inner.call(this, ev);
+			};
 			conn._invite = entry;   /* 客人报 hello 时把名字写回这一行 */
 			registerBridge(conn, pc);
 			handleNewBridge(conn);
