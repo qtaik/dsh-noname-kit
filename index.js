@@ -211,7 +211,9 @@ export function apply(ctx, config) {
     syncSource: () => ({ identity: savedIdentity, mqttUrl: savedSignaling ? savedSignaling.mqttUrl : '' }),
   })
   // 头像列表缓存(工坊「👤 人物标识」下拉):扫游戏目录的结果,见 /online/avatars
-  const avatarsCache = { at: 0, list: null, err: '' }
+  // dir 记下这份缓存属于哪个游戏目录——换目录必须整体失效(否则下拉里是上一个
+  // 目录扫出来的武将:选中保存被内核 hasCharacter 拒,新目录已有的又看不到)
+  const avatarsCache = { at: 0, list: null, err: '', dir: '' }
 
   // ── 1) 常驻规范知识(文本随配置状态动态生成) ─────────────────
   // POSIX 形式路径:模型在 bash 里习惯 /d/... 写法,直接给两种形式免得它自己转换/寻找
@@ -931,7 +933,7 @@ export function apply(ctx, config) {
           let kernel = null
           let kernelError = null
           if (active) {
-            try { kernel = kernelStatus({ nonameDir }) } catch (error) { kernel = { state: 'unknown' }; kernelError = error.message }
+            try { kernel = kernelStatus({ nonameDir, token: bridgeToken }) } catch (error) { kernel = { state: 'unknown' }; kernelError = error.message }
           }
           return json(200, {
             active,
@@ -973,11 +975,13 @@ export function apply(ctx, config) {
           // 扫全盘 1 秒级,缓存 5 分钟(空结果 30 秒重试,兼容目录还没就绪)。
           // 失败也计冷却:否则面板每次重挂都触发全盘重扫(审计发现)
           const ttl = avatarsCache.list && avatarsCache.list.length ? 5 * 60_000 : 30_000
-          if (!avatarsCache.at || Date.now() - avatarsCache.at > ttl) {
+          const dirChanged = avatarsCache.dir !== (nonameDir || '')
+          if (dirChanged || !avatarsCache.at || Date.now() - avatarsCache.at > ttl) {
             try {
               avatarsCache.list = await listAvatars(nonameDir)
               avatarsCache.err = ''
               avatarsCache.at = Date.now()
+              avatarsCache.dir = nonameDir || ''
             } catch (error) {
               avatarsCache.err = `扫描武将失败: ${error.message}`
               avatarsCache.at = Date.now()

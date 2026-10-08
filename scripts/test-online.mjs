@@ -52,6 +52,12 @@ try {
   status = online.kernelStatus({ nonameDir: gameDir })
   ok(status.state === 'ok', '安装后 state=ok(桥配置与盖章文件不参与哈希)')
   ok(status.installedAt > 0, '盖章带安装时间')
+  /* 凭据配对:noname-kit.json 损坏被留档重建后会重生成 token,内核手里那把就成了旧的
+   * ——每一拍心跳都 403、lastSeen 永不刷新,界面上只表现为「内核离线」(用户被引去查
+   * "扩展启没启用")。tokenMatches 让状态接口能给出准确出路:重装内核 */
+  ok(online.kernelStatus({ nonameDir: gameDir, token: 'tok-abc' }).tokenMatches === true, 'token 相符时 tokenMatches=true')
+  ok(online.kernelStatus({ nonameDir: gameDir, token: 'tok-old' }).tokenMatches === false, 'token 不符(设置文件被重建过)时 tokenMatches=false')
+  ok(online.kernelStatus({ nonameDir: gameDir }).tokenMatches === null, '不传 token 时 tokenMatches=null(不误报)')
 
   // ── 3) stale:改动已安装副本(非桥/盖章文件) ────────────────
   writeFileSync(join(online.kernelDirOf(gameDir), 'src', 'rtc.js'), '// tampered\n', 'utf8')

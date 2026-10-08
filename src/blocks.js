@@ -497,6 +497,12 @@ export function migrateCode(oldCode) {
   const base = scanAnchored(oldCode).length ? stripAnchors(oldCode) : oldCode
   const items = []
   for (const kind of [...CONTENT_KINDS, 'translate']) items.push(...virtualBlocks(base, kind))
+  /* 必须按位置重排:上面按 kind 分组收集(skill/card/character/translate),与文件里的
+   * 实际顺序无关。两个不同 kind 的区块落在相邻行(紧凑写法:`character: { a: {...} },`
+   * 下一行就是 `card: { c1: [1] },`)时共用同一个边界偏移,插入顺序由收集顺序决定——
+   * 位置在后、kind 在前的块会把它的 begin 锚排到另一块的 end 锚之前,扫描器按同名配对,
+   * 前块于是吞掉后块的 begin 锚、后块从区块目录里消失(实测:迁移"成功"却写坏索引) */
+  items.sort((a, b) => (a.start - b.start) || (a.end - b.end))
   if (!items.length) {
     // 新式 ES Module 多文件包(如懒人包预装的英雄杀):extension.js 只是入口壳,
     // 条目在子目录模块(const character = {...} + export)。锚点化与全文写入的
@@ -531,7 +537,11 @@ export function migrateCode(oldCode) {
     // 全被误补,逗号落到下一行行首 → Unexpected token ',')
     let last = le - 1
     while (last > ls && /[ \t\r\n]/.test(base[last])) last--
-    if (base[last] !== ',') { addAt(last + 1, ','); commas++ }
+    /* 只有"区块结束就是这一行最后一个有效字符"时才补逗号:紧凑写法里行尾可能是
+     * 区段/语句的收尾 `}`(如 `const character = { Miku: [...] }`),在它后面补逗号会
+     * 拼出 `const character = {...},` —— 轻则迁移后语法校验失败(用户看到一句
+     * "不应发生"),重则下一行的隐式全局赋值被并进同一个 const 声明,静默改语义(实测) */
+    if (base[last] !== ',' && last === b.end) { addAt(last + 1, ','); commas++ }
   }
   let code = base
   for (const at of [...byAt.keys()].sort((a, b) => b - a)) {

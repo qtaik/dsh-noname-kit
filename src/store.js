@@ -13,10 +13,10 @@
  *     把"丢了什么"留在盘上可查,再按空处理——绝不静默覆盖用户数据。
  */
 
-import { existsSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 const warned = new Set()
 function warnOnce(key, message) {
@@ -30,10 +30,24 @@ function stashCorrupt(file, ts) {
   try {
     const dest = `${file}.corrupt-${ts || Date.now()}`
     renameSync(file, dest)
+    pruneCorruptStashes(file)
     return dest
   } catch {
     return null
   }
+}
+
+/** 留档不能无限堆积(同一份状态文件被反复损坏,比如目录在云同步盘里被反复写回
+ *  旧的坏副本):同前缀只留最新 3 份。留档内容只是"抢救线索",不是备份链。 */
+function pruneCorruptStashes(file) {
+  try {
+    const dir = dirname(file)
+    const prefix = basename(file) + '.corrupt-'
+    const olds = readdirSync(dir).filter((n) => n.startsWith(prefix)).sort()
+    for (const n of olds.slice(0, Math.max(0, olds.length - 3))) {
+      try { unlinkSync(join(dir, n)) } catch { /* 单个删不掉跳过 */ }
+    }
+  } catch { /* 目录读不到就算了,不影响留档本身 */ }
 }
 
 /**

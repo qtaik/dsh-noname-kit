@@ -3,10 +3,10 @@
  * 记录:任务列表(类型/摘要/返工轮次/时间)、注意点(踩坑记录)、备份事件。
  * 历史面板(Web 界面)与 AI 的 noname_skills_written 都读写这份文件。
  */
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { extRootOf, safeFolderPath } from './write.js'
-import { writeJsonAtomicSync } from './store.js'
+import { readJsonSafe, writeJsonAtomicSync } from './store.js'
 
 const HISTORY_FILE = 'noname-kit.history.json'
 
@@ -20,20 +20,20 @@ function folderPath(nonameDir, folder) {
 }
 
 export async function readHistory(nonameDir, folder) {
-  try {
-    const raw = await readFile(join(folderPath(nonameDir, folder), HISTORY_FILE), 'utf8')
-    const parsed = JSON.parse(raw)
-    const history = { ...emptyHistory(), ...parsed }
-    // 形状容错:字段被手改坏(如 tasks:null)时回退默认,别让历史面板整页 500
-    if (!Array.isArray(history.tasks)) history.tasks = []
-    if (!Array.isArray(history.notes)) history.notes = []
-    /* backups 也要兜:被手改坏(如 {})时 recordBackup 的 .push 会抛,
-     * 异常会冒到写入工具层,把"已写入"报成"写入失败"(工具层 catch 在写入之后) */
-    if (!Array.isArray(history.backups)) history.backups = []
-    return history
-  } catch {
-    return emptyHistory()
-  }
+  /* 走 store.js 的安全读:文件损坏(半截 JSON/形状异常)时先把原文件留档成
+   * <名字>.corrupt-<时间戳> 再按空处理 —— 此前自己 JSON.parse + catch 吞成空,
+   * 下一次写入(归档/记备份)整份覆盖,该扩展的归档/注意点/备份登记一次性静默消失
+   * (与 noname-kit.json 同类的数据丢失面,实测复现) */
+  const file = join(folderPath(nonameDir, folder), HISTORY_FILE)
+  const parsed = await readJsonSafe(file, emptyHistory())
+  const history = { ...emptyHistory(), ...parsed }
+  // 形状容错:字段被手改坏(如 tasks:null)时回退默认,别让历史面板整页 500
+  if (!Array.isArray(history.tasks)) history.tasks = []
+  if (!Array.isArray(history.notes)) history.notes = []
+  /* backups 也要兜:被手改坏(如 {})时 recordBackup 的 .push 会抛,
+   * 异常会冒到写入工具层,把"已写入"报成"写入失败"(工具层 catch 在写入之后) */
+  if (!Array.isArray(history.backups)) history.backups = []
+  return history
 }
 
 async function updateHistory(nonameDir, folder, mutate) {

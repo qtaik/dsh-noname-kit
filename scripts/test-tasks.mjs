@@ -333,6 +333,62 @@ try {
     ok(junk.length === 0, '回滚不在源码目录留时间戳垃圾文件:' + JSON.stringify(junk))
   }
 
+  // ── 备份往返(单文件包 / 包根备份 / 中文模块路径 / 回滚最旧一份)──
+  // 上一段只覆盖了 ASCII 子目录模块;单文件包(包根 extension.js,最常见形态)的列表
+  // 输出是 "backup/extension.<ts>.js",回滚侧原先要求 backup 段序号 > 0 → 100% 报
+  // "非法的备份路径"(恢复通道整体不可用);中文目录/文件名又被 \w 白名单拒。
+  {
+    const w = await import('../src/write.js')
+    const fsSync = await import('node:fs')
+    const pkgDir = join(home, 'extension', '单文件包')
+    fsSync.mkdirSync(pkgDir, { recursive: true })
+    fsSync.writeFileSync(join(pkgDir, 'extension.js'), "game.import('extension', { name: '单文件包', v: 1 });")
+    for (let v = 2; v <= 4; v++) {
+      await w.writeExtension(home, { folder: '单文件包', code: `game.import('extension', { name: '单文件包', v: ${v} });` })
+    }
+    const list = await w.listBackups(home, '单文件包')
+    ok(list.length === 3 && /^backup\/extension\.\d{8}-\d{6}(-\d{6})?\.js$/.test(list[0]),
+      '单文件包备份列表形如 backup/extension.<ts>.js:' + list[0])
+    const r = await w.rollbackExtension(home, '单文件包', list[0])
+    ok(r.ok !== false, '单文件包:listBackups 输出能喂回 rollbackExtension(包根 backup/ 形态)')
+    ok(fsSync.readFileSync(join(pkgDir, 'extension.js'), 'utf8').includes('v: 3'), '回滚后内容 = 上一版(v: 3)')
+    // 回滚最旧一份:prune 不能把回滚源自己删掉(copyFile 继承 mtime,新副本会把它挤出保留位)
+    const list2 = await w.listBackups(home, '单文件包')
+    const oldest = list2[list2.length - 1]
+    const r2 = await w.rollbackExtension(home, '单文件包', oldest)
+    ok(r2.ok !== false && fsSync.readFileSync(join(pkgDir, 'extension.js'), 'utf8').includes('v: 1'),
+      '回滚到最旧一份成功且回滚源没被 prune 销毁')
+    // 中文子目录 + 中文模块名(写入侧放行,回滚侧原先用 \w 白名单拒绝)
+    fsSync.mkdirSync(join(pkgDir, '武将'), { recursive: true })
+    fsSync.writeFileSync(join(pkgDir, '武将', '武将.js'), 'const character = { v: 1 };\nexport { character };')
+    await w.writeExtension(home, { folder: '单文件包', file: '武将/武将.js', code: 'const character = { v: 2 };\nexport { character };' })
+    const list3 = await w.listBackups(home, '单文件包')
+    const zh = list3.find((n) => n.includes('武将/backup/'))
+    ok(Boolean(zh), '中文子目录备份能被列出:' + zh)
+    const r3 = await w.rollbackExtension(home, '单文件包', zh)
+    ok(r3.ok !== false && fsSync.readFileSync(join(pkgDir, '武将', '武将.js'), 'utf8').includes('v: 1'),
+      '中文模块路径能回滚(不再被 \\w 白名单拒)')
+  }
+
+  // ── 历史文件损坏:必须留档再按空处理,不许被下次写入静默覆盖 ──
+  {
+    const h = await import('../src/history.js')
+    const fsSync = await import('node:fs')
+    const pkgDir = join(home, 'extension', '损坏包')
+    fsSync.mkdirSync(pkgDir, { recursive: true })
+    const historyFile = join(pkgDir, 'noname-kit.history.json')
+    fsSync.writeFileSync(historyFile, '{"version":1,"tasks":[{"taskId":"t1","summary":"重要归档"}],"notes":["重要注意点"],"backups":[]')
+    const before = console.warn
+    console.warn = () => {}
+    await h.archiveTask(home, { folder: '损坏包', taskId: 't2', kind: 'character', summary: '新任务', notes: [], rounds: 1 })
+    console.warn = before
+    const stashed = fsSync.readdirSync(pkgDir).filter((n) => n.includes('.corrupt-'))
+    ok(stashed.length === 1, '损坏的历史文件被留档(.corrupt-<ts>)而不是静默覆盖')
+    ok(fsSync.readFileSync(join(pkgDir, stashed[0]), 'utf8').includes('重要注意点'), '留档里保留着原内容(可人工恢复)')
+    const after = JSON.parse(fsSync.readFileSync(historyFile, 'utf8'))
+    ok(Array.isArray(after.tasks) && after.tasks.some((t) => t.taskId === 't2'), '归档照常写入新历史')
+  }
+
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })

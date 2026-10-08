@@ -155,13 +155,18 @@ export async function checkForUpdate({
   force = false,
 } = {}) {
   const install = detectInstall({ dshHome, packageName })
+  /* installHint 刻意不在 base 里算:命令要带**精确版本号**(带 @latest 的 add 遇上
+   * pnpm 冷却期会静默留在旧版,本模块开头即此坑),而 latest 要等探测回来才知道。
+   * 原先先算一份不带 latest 的塞进 base,启动日志(与 check.installHint 载荷)照它
+   * 提示,用户执行后版本纹丝不动、也无报错。现在各分支按需补,缓存那份是带 latest 的 */
   const base = {
     current: currentVersion,
     installForm: install.form,
     installProfile: install.profile,
     installSpec: install.spec,
-    installHint: installHint({ form: install.form, profile: install.profile, packageName }),
+    installHint: null,
   }
+  const hintFor = (latest) => installHint({ form: install.form, profile: install.profile, packageName, latest })
   if (install.form === 'link') {
     return { ...base, latest: null, source: null, hasUpdate: false, error: null, skipped: 'link', checkedAt: Date.now() }
   }
@@ -173,13 +178,14 @@ export async function checkForUpdate({
   let result = npm
   if (!npm.ok) result = slug ? await fetchGithubLatest({ fetchImpl, repo: slug, timeoutMs }) : npm
   if (!result.ok) {
-    return { ...base, latest: null, source: null, hasUpdate: false, error: result.error, checkedAt: Date.now() }
+    return { ...base, installHint: hintFor(null), latest: null, source: null, hasUpdate: false, error: result.error, checkedAt: Date.now() }
   }
   const payload = {
     ...base,
     // 显示用规范化形式(去掉 GitHub tag 的 v 前缀,与 current 写法一致);
     // 比较仍用远端原值。
     latest: formatVersion(result.latest),
+    installHint: hintFor(formatVersion(result.latest)),
     source: result.source,
     hasUpdate: isNewer(result.latest, currentVersion),
     error: null,

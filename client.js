@@ -1763,7 +1763,13 @@ window.__ModuleLoader__.load({
                         /* 只比端口:baseUrl 恒写 127.0.0.1,用户用 localhost 开页面时
                          * 整串比对恒不等,会误报「绑定在另一个 dsh」 */
                         var m = kernel && kernel.boundApi ? /:(\d+)/.exec(kernel.boundApi) : null;
-                        return m && String(location.port || '') !== m[1]
+                        var boundElsewhere = m && String(location.port || '') !== m[1];
+                        // 凭据不符(内核手里是旧 token,心跳一律 403):只查"扩展启没启用"查不出,
+                        // 直接给出路——重装内核会写入本实例的当前 token
+                        if (!boundElsewhere && kernel && kernel.tokenMatches === false) {
+                          return '。另:内核凭据与当前 dsh 不一致(设置文件损坏重建过?)——点「🔁 重装内核」并重启游戏即恢复在线';
+                        }
+                        return boundElsewhere
                           ? '。另:内核心跳绑定在另一个 dsh(端口 ' + m[1] + ')——在本页点「升级内核」并重启游戏即切回本页'
                           : '';
                       })())),

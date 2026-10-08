@@ -144,7 +144,7 @@ function dirSignature(dir) {
   }
 }
 
-export function kernelStatus({ nonameDir }) {
+export function kernelStatus({ nonameDir, token }) {
   const bundledDir = bundledKernelDir()
   const bundledSig = dirSignature(bundledDir)
   if (bundledSig === null || bundledHashCache.sig !== bundledSig) {
@@ -169,8 +169,16 @@ export function kernelStatus({ nonameDir }) {
   /* 内核心跳绑定在哪个 dsh(装它时写入的 baseUrl)——双 dsh 共管一个游戏目录时,
    * 心跳只发绑定方,另一方会显示离线,这个字段让绑定关系可见 */
   let boundApi = null
+  /* token 是否还是本实例的那把:noname-kit.json 损坏被留档重建后会重生成 token,
+   * 内核手里仍是老的 → 每一拍心跳都 403、lastSeen 永不刷新,工坊只显示「内核离线」,
+   * 用户被引去查"扩展启没启用"(实测关注点)。tokenMatches 让界面能直接给出出路 */
+  let tokenMatches = null
   try {
-    boundApi = JSON.parse(readFileSync(join(target, 'nnk-bridge.json'), 'utf8')).baseUrl || null
+    const bridgeCfg = JSON.parse(readFileSync(join(target, 'nnk-bridge.json'), 'utf8'))
+    boundApi = bridgeCfg.baseUrl || null
+    if (typeof bridgeCfg.token === 'string' && typeof token === 'string' && token) {
+      tokenMatches = bridgeCfg.token === token
+    }
   } catch { /* 没装桥配置(未安装/老版本) */ }
   return {
     state: installedHash === bundledHash ? 'ok' : 'stale',
@@ -178,6 +186,7 @@ export function kernelStatus({ nonameDir }) {
     installedHash,
     installedAt: readManifest(target)?.installedAt ?? null,
     boundApi,
+    tokenMatches,
   }
 }
 

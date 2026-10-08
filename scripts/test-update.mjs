@@ -153,6 +153,9 @@ try {
   })
   ok(npmHit.hasUpdate && npmHit.latest === '1.2.0' && npmHit.source === 'npm', 'npm 通道命中并判定有新版本')
   eq(calls.length, 1, 'npm 命中时只发一次请求')
+  /* 升级命令必须带精确版本号:带 @latest 的 add 遇上 pnpm 冷却期会静默留在旧版
+   * (用户执行后版本没变、也无报错)。启动日志照 result.installHint 提示,别给假命令 */
+  eq(npmHit.installHint, 'dsh plugin --profile web add dsh-noname-kit@1.2.0', '升级命令带精确版本号(不是 @latest)')
 
   // 缓存:第二次不再联网
   const cached = await update.checkForUpdate({

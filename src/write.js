@@ -3,7 +3,7 @@
  * 路径安全:文件夹名只允许安全字符,解析后必须仍在 extension 目录内
  * (防路径逃逸)。覆盖前自动备份到 <文件夹>/backup/。
  */
-import { copyFile, mkdir, readFile, readdir, writeFile, unlink, stat } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, readdir, writeFile, unlink, stat, rename } from 'node:fs/promises'
 import { join, resolve, basename, relative, sep, dirname } from 'node:path'
 import { validateExtensionCode, syntaxCheck, collectDefinedIds } from './validate.js'
 import { scanAnchored, scanBlocks, extractBlock, assembleBlocks, checkFidelity, migrateCode, stripAnchors, findAllSections, sectionProperties, virtualCharacterBlocks, virtualCardBlocks, virtualBlocks, virtualTranslateBlocks, CONTENT_KINDS } from './blocks.js'
@@ -88,17 +88,33 @@ function timestamp() {
 /** 每个备份目录保留的最新备份数(超出按文件修改时间从旧到新删除)。 */
 const BACKUP_KEEP = 3
 
+/** 同目录临时文件 + rename 的原子写:进程中途被杀/磁盘满不会留下半截文件。 */
+async function writeFileAtomic(target, content) {
+  const tmp = `${target}.nnk-tmp-${process.pid}-${Date.now()}`
+  try {
+    await writeFile(tmp, content, 'utf8')
+    await rename(tmp, target)
+  } catch (error) {
+    try { await unlink(tmp) } catch { /* 没建成 */ }
+    throw error
+  }
+}
+
 /**
  * 备份滚动清理:backupDir 里只保留最新 BACKUP_KEEP 个 .js 备份,其余删除。
  * 返回被删文件的相对路径(相对 nonameDir,POSIX)——供调用方同步清理
  * history.backups 登记,避免登记指向已不存在的文件。
+ * protect: 文件名集合,命中的绝不删(回滚时保护「本次回滚源」——copyFile 会继承
+ * 源文件 mtime,回滚最旧那份时它会被刚生成的 pre-rollback 挤掉,紧接着的
+ * copyFile(backupPath→target) 就读一个已被删的文件:实测 ENOENT)。
  */
-async function pruneBackups(backupDir, relBase) {
+async function pruneBackups(backupDir, relBase, protect) {
   let names
   try { names = await readdir(backupDir) } catch { return [] }
   const stats = []
   for (const n of names) {
     if (!/\.js$/i.test(n)) continue
+    if (protect && protect.has(n)) continue
     try { stats.push({ n, m: (await stat(join(backupDir, n))).mtimeMs }) } catch { /* 刚被并发删掉 */ }
   }
   stats.sort((a, b) => b.m - a.m)
@@ -239,19 +255,28 @@ export async function writeExtension(nonameDir, { folder, file, code, blocks, ed
     await copyFile(target, join(backupDir, basename(backup)))
     await pruneHistoryBackups(nonameDir, folder, await pruneBackups(backupDir, relative(nonameDir, backupDir)))
   }
-  await writeFile(target, finalCode, 'utf8')
+  /* 原子写(tmp+rename):原地截断写在断电/进程被杀/ENOSPC 时会把 extension.js
+   * 留成半截,游戏加载直接报错,而工具层只会回一句"写入被拒"(实测关注点) */
+  await writeFileAtomic(target, finalCode)
 
   // 初值必须是 boolean 而非 null/null 省略:info.json 已存在且本次未提交时,
   // infoWritten 会一直保持初值——null 过不了 output schema
   let infoWritten = false
   if (infoJson && String(infoJson).trim()) {
     const infoPath = join(full, 'info.json')
+    // 解析失败与落盘失败分开报:原先一个 catch 兜住两者,磁盘/权限错误被报成
+    // "info.json 不是合法 JSON",把系统故障误诊成用户写错了 JSON(实测误导点)
+    let parsed
     try {
-      const parsed = JSON.parse(infoJson)
-      await writeFile(infoPath, JSON.stringify(parsed, null, 2), 'utf8')
-      infoWritten = true
+      parsed = JSON.parse(infoJson)
     } catch (error) {
       return { ...verdict, wrote: true, path: relative(nonameDir, target).split(sep).join('/'), backup, infoError: `info.json 不是合法 JSON,未写入: ${error.message}` }
+    }
+    try {
+      await writeFileAtomic(infoPath, JSON.stringify(parsed, null, 2))
+      infoWritten = true
+    } catch (error) {
+      return { ...verdict, wrote: true, path: relative(nonameDir, target).split(sep).join('/'), backup, infoError: `info.json 写入失败(磁盘空间/权限?): ${error.message}` }
     }
   } else {
     // 没提供 info.json 时,若也不存在则写一份最小可用的
@@ -441,8 +466,13 @@ export async function rollbackExtension(nonameDir, folder, backupName) {
   let backupPath
   let target
   const segs = rel.split('/')
+  /* 段名/文件名一律与写入侧同口径(safeEntryFilePath):包内相对 .js 路径、不许 ..
+   * 与绝对路径。原先用 /^[\w.-]+$/ 当白名单——\w 不含中文,中文子目录/中文模块名
+   * 的包(写入侧明确放行)回滚必报"非法的备份路径"(实测)。 */
+  const safeSeg = (x) => Boolean(x) && x !== '..' && x !== '.' && !x.includes('\\') && !x.includes(':')
+  const safeJsName = (x) => safeSeg(x) && /\.js$/i.test(x)
   if (segs.length === 1) {
-    if (!/^[\w.-]+\.js$/.test(segs[0])) throw new Error('非法的备份文件名。')
+    if (!safeJsName(segs[0])) throw new Error('非法的备份文件名。')
     backupPath = join(full, 'backup', segs[0])
     /* 备份名带源文件基名(extension.<ts>.js / index.<ts>.js):
      * 按基名还原目标,别再一律往 extension.js 里灌(包根有非入口模块时写错文件) */
@@ -450,12 +480,13 @@ export async function rollbackExtension(nonameDir, folder, backupName) {
     target = join(full, (m ? m[1] : 'extension') + '.js')
   } else {
     const backupIdx = segs.lastIndexOf('backup')
-    if (backupIdx <= 0 || backupIdx === segs.length - 1) throw new Error('非法的备份路径。')
-    const backupFile = segs[backupIdx + 1]
-    if (!/^[\w.-]+\.js$/.test(backupFile)) throw new Error('非法的备份文件名。')
+    /* backupIdx === 0 是**包根 backup/** 的正常形态(listBackups 对包根备份输出
+     * "backup/extension.<ts>.js")——原先要求 > 0,于是单文件包(最常见形态)点
+     * 回滚 100% 报"非法的备份路径",恢复通道整体不可用(实测) */
+    if (backupIdx < 0 || backupIdx === segs.length - 1) throw new Error('非法的备份路径。')
     const dirSegs = segs.slice(0, backupIdx)
     const nameSegs = segs.slice(backupIdx + 1)
-    if (dirSegs.some((x) => !/^[\w.-]+$/.test(x)) || nameSegs.some((x) => !/^[\w.-]+\.js$/.test(x))) {
+    if (dirSegs.some((x) => !safeSeg(x)) || nameSegs.some((x) => !safeJsName(x))) {
       throw new Error('非法的备份路径。')
     }
     backupPath = join(full, ...dirSegs, 'backup', ...nameSegs)
@@ -468,16 +499,21 @@ export async function rollbackExtension(nonameDir, folder, backupName) {
     })
     target = join(full, ...dirSegs, ...restoredNames)
   }
-  await readFile(backupPath, 'utf8') // 存在性检查
-  // 回滚前把当前版本也备份一份,保证不丢
+  // 内容先读进内存:后面的 prune 有可能动到备份目录,回滚不应依赖源文件还在盘上
+  let backupContent
+  try { backupContent = await readFile(backupPath, 'utf8') } catch { throw new Error('备份文件读不到(可能已被清理):' + backupName) }
+  // 回滚前把当前版本也备份一份,保证不丢;本次回滚源加入 prune 保护名单
+  let protect = null
   try {
     await readFile(target, 'utf8')
     const backupDir = join(dirname(target), 'backup')
     await mkdir(backupDir, { recursive: true })
-    await copyFile(target, join(backupDir, `${basename(target, '.js')}.pre-rollback.${timestamp()}.js`))
-    await pruneHistoryBackups(nonameDir, folder, await pruneBackups(backupDir, relative(nonameDir, backupDir)))
+    const preName = `${basename(target, '.js')}.pre-rollback.${timestamp()}.js`
+    await copyFile(target, join(backupDir, preName))
+    protect = new Set([basename(backupPath), preName])
+    await pruneHistoryBackups(nonameDir, folder, await pruneBackups(backupDir, relative(nonameDir, backupDir), protect))
   } catch { /* 当前不存在 */ }
-  await copyFile(backupPath, target)
+  await writeFileAtomic(target, backupContent)
   return { folder, restored: backupName }
 }
 

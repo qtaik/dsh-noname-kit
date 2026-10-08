@@ -99,9 +99,14 @@ export function hashDir(dir) {
   const files = collectFiles(dir, '', []).sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0))
   const hash = createHash('sha256')
   for (const file of files) {
+    let content
+    /* 单个文件读不到(被编辑器/杀软占用、权限变化、读目录与读文件之间被删)不能抛出去:
+     * 这条链一路冒到插件 apply 里的启动自检 = 整个 noname-kit 加载失败(工具与工坊页
+     * 一起消失),经 /update 接口则变成 500。返回 null 让调用方按「状态未知」降级 */
+    try { content = readFileSync(file.full, 'utf8') } catch { return null }
     hash.update(file.rel)
     hash.update('\0')
-    hash.update(readFileSync(file.full, 'utf8').replace(/\r\n/g, '\n'))
+    hash.update(content.replace(/\r\n/g, '\n'))
     hash.update('\0')
   }
   return hash.digest('hex')
@@ -134,6 +139,14 @@ export function presetStatus({ presetDir, bundledDir }) {
   }
   const manifest = readManifest(presetDir)
   const installedHash = hashDir(presetDir)
+  /* 已装那份里有文件读不到(哈希算不出来):不猜"过期",如实报未知,并给出唯一有效动作
+   * ——设置页的「♻️ 重装 preset」会整份覆盖,顺带修掉被占用的坏份 */
+  if (installedHash === null) {
+    return {
+      state: 'unknown', bundledHash, installedHash: null, installedAt: manifest?.installedAt ?? null,
+      error: '已安装 preset 里有文件读不到(被占用或权限变化?)——可点「♻️ 重装 preset」整份覆盖修复',
+    }
+  }
   return {
     state: installedHash === bundledHash ? 'ok' : 'stale',
     bundledHash,
@@ -197,7 +210,17 @@ export function installPreset({ presetDir, bundledDir }) {
     mkdirSync(dirname(presetDir), { recursive: true })
     cpSync(bundledDir, presetDir, { recursive: true })
   } catch (error) {
-    return { ok: false, error: `复制 preset 失败:${error.message}`, backup }
+    /* 此刻旧 preset 已被删除、新的只留"不存在或半份"——半份会被 DSH discovery 当正常
+     * preset 列出来(agent.cordis.yml 已复制的那种),新会话拿到缺文件的坏 preset 且
+     * 不报错。尽力恢复:先清掉半份,再把备份整体搬回去;并把备份路径写进文案,
+     * 恢复也失败时用户知道去哪手动找(原先只说一句"复制失败",备份路径只留在返回值里) */
+    let restored = false
+    try {
+      rmSync(presetDir, { recursive: true, force: true })
+      if (backup) { cpSync(backup, presetDir, { recursive: true }); restored = true }
+    } catch { /* 恢复也失败:下面文案带上备份路径供人工恢复 */ }
+    const tail = backup ? (restored ? ';旧版本已自动恢复,备份仍在 ' : ';备份在 ') + backup : ''
+    return { ok: false, error: `复制 preset 失败:${error.message}${tail}`, backup, restored }
   }
   const hash = hashDir(presetDir)
   try {

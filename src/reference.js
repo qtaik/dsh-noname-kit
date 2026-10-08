@@ -291,7 +291,10 @@ export async function searchReference(nonameDir, { query, type = 'any', limit = 
   const qGrams = bigramsOf(qClean)
   if (qGrams.size >= 3) {
     const existIds = new Set(matches.map((m) => m.id).filter(Boolean))
-    const simHits = []
+    /* 必须 let:下面按 limit 截断会整体重赋值(原写成 const,任何 ≥4 字的查询
+     * 进这一阶段即 TypeError「Assignment to constant variable」——搜索主路径全崩,
+     * AI 只能退化去 bash 搜,所以一直没被人察觉;行为复现脚本抓出) */
+    let simHits = []
     for (const [id, entry] of index.byId) {
       if (!entry.name && !entry.info) continue
       if (existIds.has(id)) continue

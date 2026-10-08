@@ -276,6 +276,39 @@ export default function () {
   ok(!carrM.error && carrM.blocks === 2 && syntaxOk(carrM.code), 'character:数组形态条目迁移后语法通过')
   ok(carrM.code.includes('//#noname-kit-begin character:Miku'), 'character:数组形态条目也打上锚点')
 
+  /* 紧凑写法:每行一个区段(character 在前、card 在后,与 CONTENT_KINDS 的
+   * skill/card/character 收集顺序相反)。锚点必须按位置排序后再落位——原按 kind 分组
+   * 顺序落位时,位置在后、kind 在前的块的 begin 锚排到了另一块的 end 锚之前,
+   * 扫描器按同名配对 → 前块吞掉后块的 begin 锚、后块从区块目录里消失
+   * (迁移"成功"却写坏索引,实测) */
+  const COMPACT = [
+    "game.import('extension', {",
+    "  name: '紧凑',",
+    "  character: { a: { hp: 3 } },",
+    "  card: { c1: [1] },",
+    "  skill: { s1: { desc: 'x' } },",
+    "  translate: { a: '甲' },",
+    "});",
+  ].join('\n')
+  const compactM = blocks.migrateCode(COMPACT)
+  ok(!compactM.error, '紧凑单行区段:迁移成功')
+  const compactAnchors = compactM.error ? [] : blocks.scanAnchored(compactM.code)
+  ok(compactM.blocks === 4 && compactAnchors.length === 4, '紧凑单行区段:四个块的锚点全部配对(没有块被吞)')
+  ok(!compactAnchors.some((b) => /noname-kit-(begin|end)/.test(b.text)), '紧凑单行区段:块内文不含别人的锚点行')
+  ok(!compactM.error && syntaxOk(compactM.code), '紧凑单行区段:迁移后语法通过')
+
+  /* 单行 const 声明:只有"区块结束就是这一行最后一个有效字符"时才补收尾逗号。
+   * 否则逗号落到语句级(`const character = {...},`)——轻则迁移后语法校验失败,
+   * 重则下一行的隐式全局赋值被并进同一个 const 声明(实测:语义静默改变) */
+  const CONST_ONE = "const character = { Miku: ['Miku', [], 4] }\nfoo = 1"
+  const constM = blocks.migrateCode(CONST_ONE)
+  ok(!constM.error, '单行 const 声明:迁移成功')
+  ok(!constM.error && /^foo = 1$/m.test(constM.code) && !/Miku[^\n]*\},\s*$/m.test(constM.code),
+    '单行 const 声明:不给语句级补逗号(foo = 1 没被并进声明)')
+  /* 这段不是完整扩展(没有 name/game.import 包裹),用纯语法检查——全量校验器
+   * 会报"没有找到扩展的 name 字段",那是校验器的语义规则不是语法问题 */
+  ok(!constM.error && syntaxCheck(constM.code).ok, '单行 const 声明:迁移后语法通过')
+
   // ES Module 多文件壳(英雄杀式):extension.js 无区段、条目在子目录模块——
   // 必须报「多文件结构」专属错误,不能误导用户去走全文模式(全文写的也是壳文件)
   const ESM_SHELL = 'import { lib, game } from "noname";\nconst extensionPackage = { name: "英雄杀" };\nexport let type = "extension";\nexport default extensionPackage;\n'
