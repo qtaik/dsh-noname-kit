@@ -1796,7 +1796,11 @@ window.__ModuleLoader__.load({
                 (function () {
                   var link = bridge.cfg && bridge.cfg.link;
                   if (!link || !link.kind) return null;
-                  var kindText = link.kind === 'relay' ? '中继' : link.kind === 'direct' ? '局域网直连' : link.kind === 'p2p' ? '公网打洞直连' : link.kind;
+                  /* 内核离线后插件仍会保留最后一拍 cfg:别把上一场的线路当"当前"(实测复核) */
+                  if (!bridgeOnline) return null;
+                  var kindText = link.kind === 'relay' ? '中继'
+                    : link.kind === 'direct' ? (link.injected ? '虚拟网卡/IPv6 直连地址' : '局域网直连')
+                    : link.kind === 'p2p' ? '公网打洞直连' : link.kind;
                   var rtt = typeof link.rtt === 'number' ? link.rtt : null;
                   var slow = link.kind === 'relay' || (rtt !== null && rtt > 400);
                   return e('div', slow ? 'nnk-hint' : 'nnk-ok',

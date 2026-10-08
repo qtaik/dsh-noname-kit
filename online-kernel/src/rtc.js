@@ -51,6 +51,12 @@
 	 * 做法:去掉所有空白,再在全串里找第一段 NNK1.<base64url> */
 	function decodeCode(str) {
 		var clean = String(str || "").replace(/\s+/g, "");
+		var all = clean.match(/NNK1\./g);
+		if (all && all.length > 1) {
+			/* 粘了多个码(常见:聊天记录里旧码与新码一起复制)。静默取第一个可能是
+			 * **过期的那张**,用户只会看到"连不上"——宁可让他删掉多余的再粘 */
+			throw new Error("粘贴内容里有 " + all.length + " 个码——请只保留要用的那一个(删掉多余的再粘)");
+		}
 		var m = /NNK1\.([A-Za-z0-9\-_]+)/.exec(clean);
 		if (!m) {
 			/* 常见手滑分个类,给具体出路,而不是一句"不是有效的码" */
@@ -467,7 +473,10 @@
 	var linkWatchedPc = null;
 	var LINK_KIND = { host: "direct", srflx: "p2p", prflx: "p2p", relay: "relay" };
 	function trackPc(pc) {
-		linkWatchedPc = pc;
+		if (linkWatchedPc !== pc) {
+			linkWatchedPc = pc;
+			lastLink = null;   /* 换连接:旧线路的观测立刻作废,别把上一位客人的线报成当前线路 */
+		}
 		if (linkWatchTimer) {
 			return;
 		}
@@ -484,14 +493,24 @@
 				p.then(function(report) {
 					var candidates = {};
 					var pair = null;
+					var fallback = null;
 					report.forEach(function(stat) {
 						if (stat.type === "local-candidate" || stat.type === "remote-candidate") {
 							candidates[stat.id] = stat;
 						}
-						if (stat.type === "candidate-pair" && stat.state === "succeeded" && (stat.selected || stat.nominated)) {
-							pair = stat;
+						if (stat.type === "candidate-pair" && stat.state === "succeeded") {
+							/* 双栈多路径时会有**多个** succeeded/nominated:只有 selected=true 的
+							 * 才是真正在用的那条;取不到 selected 才退而用 nominated(审计复核) */
+							if (stat.selected === true) {
+								pair = stat;
+							} else if (stat.nominated && !fallback) {
+								fallback = stat;
+							}
 						}
 					});
+					if (!pair) {
+						pair = fallback;
+					}
 					if (!pair) {
 						return;
 					}
@@ -502,6 +521,9 @@
 						kind: LINK_KIND[remote.candidateType] || (remote.candidateType || "?"),
 						remote: remote.candidateType || "?",
 						local: local.candidateType || "?",
+						/* 注入的虚拟网卡/IPv6 直连地址优先级被我们置成 1:用它给工坊文案区分
+						 * "真·局域网直连"与"走的注入地址"(否则后者会被显示成局域网直连) */
+						injected: remote.candidateType === "host" && typeof remote.priority === "number" && remote.priority <= 1,
 						rtt: typeof pair.currentRoundTripTime === "number" ? Math.round(pair.currentRoundTripTime * 1000) : null,
 						protocol: remote.protocol || local.protocol || ""
 					};

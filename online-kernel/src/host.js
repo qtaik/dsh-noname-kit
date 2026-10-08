@@ -70,6 +70,17 @@
 		return s;
 	}
 
+	/* 「本页正在打一局**联机**对局」的本地判据。**不要用 game.online**:
+	 * 房主页它是恒 false(lib.message.client.createroom 就是这么置的),原先拿它当
+	 * "联机中"的三处守卫(创建房间/载入到游戏的在局检查、重开守卫)全部空转——
+	 * 实测后果:对局中在工坊点「载入到游戏」会把整局重载掉。改用本地事实:
+	 * 我们自己在建房(hostState.active)且已把房间带进引擎(stage=loaded)。 */
+	function inOurOnlineGame(env) {
+		return Boolean(hostState.active && hostState.stage === "loaded")
+			&& Boolean(env.game.players && env.game.players.length)
+			&& !env._status.over && !env._status.waitingForPlayer;
+	}
+
 	function softCreateServer() {
 		var env = nnk.env;
 		var lib = env.lib;
@@ -92,18 +103,25 @@
 		try {
 			game.saveConfig("check_versionLocal", false, "connect");
 			game.saveConfig("check_extension", false, "connect");
-			/* 「允许旁观」默认是**开**的(引擎 startMenu.js:177 connect_observe init:true),
-			 * 而引擎 init 处理器对**对局进行中**进来的新客户端会走旁观分支:
-			 * lib.node.observing.push + 发 reinit(observe=房主 playerid)——客人直接变成
-			 * 旁观、视角挂在房主身上(实测:客人掉线重进,屏幕上全是房主视角 + 「退出旁观」)。
-			 * 关掉它:对局中的来客改走 denied("gaming"),由内核既有的「房主正在对局中,
-			 * 本局结束后自动进入」处理(0.3.74 已验证的那条路) */
-			game.saveConfig("connect_observe", false, "connect");
-			/* 「出牌时限」默认 30 秒(引擎 connect_choose_timeout init:"30"):跨网/热点
-			 * 环境下单程就几秒,30 秒常常不够"看完局面再出牌",被自动托管很扫兴。
-			 * 默认放宽到 60 秒(房主在等待房间里仍可随时改,不锁死) */
-			game.saveConfig("connect_choose_timeout", "60", "connect");
 		} catch (e) { /* 个别版本无此键也不影响建房 */ }
+		/* 「允许旁观」/「出牌时限」必须写**活的 configOL**,不能走 saveConfig:
+		 * 引擎是从 lib.configOL 读这两个的(init 处理器读 configOL.observe;出牌计时读
+		 * configOL.choose_timeout),而 configOL 是 switchMode 时按**游戏模式桶**填的
+		 * (game/index.js 的 `configOL[i.slice(8)] = get.config(i)`,而 get.config 的默认
+		 * mode = lib.config.mode)——照 check_versionLocal 的路子写成
+		 * saveConfig(key, val, "connect") 会落进没人读的 mode_config.connect = 空转
+		 * (审计复核:get.config 默认 mode / startMenu 默认写入位置 / init 读取点三处实证)。
+		 * 此时 configOL 已由 switchMode 填好、客人 init 尚未到达,直接改活对象即可;
+		 * 不动用户配置库,也就不会留下脏记录。
+		 * 「允许旁观」默认开(startMenu.js:177 init:true)→ 对局中来客会被收成旁观、
+		 * 视角挂房主(实测);关掉后走 denied("gaming"),由 0.3.74 那条「房主正在对局中」
+		 * 处理。「出牌时限」默认 30 秒跨网太短 → 60 秒(房主在等待房间仍可改)。 */
+		try {
+			if (env.lib.configOL) {
+				env.lib.configOL.observe = false;
+				env.lib.configOL.choose_timeout = "60";
+			}
+		} catch (eCO) { /* 结构异常时跳过,不影响建房 */ }
 		uiE.create.roomInfo();
 		uiE.create.chat();
 		/* 打完一把重载重组:接力上局房号,客人凭同一房号自动重进;
@@ -892,46 +910,87 @@
 				}
 				return origCreateServer.apply(env.game, arguments);
 			};
-			/* 开局就绪门禁:引擎的 init 处理器会**先**把客人摆进等待房间(分配 playerid +
-			 * initOL 渲染),客人回 `inited` 之后才算握手完成(客户端回 inited → 主机
-			 * lib.message.server.inited)。而原生 startGame 不查这一条(library/index.js
-			 * 只判 this.id == game.onlinezhu)——主机看到客人已经出现在等待房间就点开始,
-			 * 客人那侧可能还在加载:实测把客人卡成半截界面(座位/牌堆散着、出牌不同步),
-			 * 之后只能退出重进。这里补一道门:还有客人没 inited 就拦下并说明原因;
-			 * 连点三次仍拦不住时放行(客人卡死时别把房主锁在等待房间,他可以本局结束后
-			 * 自动进入——对局中的来客已被 connect_observe=false 改成排队等下一局) */
+			/* 开局就绪门禁(钩子必须挂对):引擎的「开始游戏」在**房主页走本地分支**
+			 * (ui/create/index.js 按 game.online 分流,而房主页 game.online 恒 false——
+			 * lib.message.client.createroom 就是这么置的,native 同款),点开始最终落到
+			 * `game.resume()`;lib.message.server.startGame 在房主页根本不会执行
+			 * (原实现挂在它上面 = 空转,审计复核:createroom 置 false + 按钮分支 +
+			 * 用户实测"房主按钮显示开始游戏"三条互证)。
+			 * 改包 game.resume,只在**等待房阶段**(waitingForPlayer 为真)拦:
+			 * 还有客人没完成握手(init 后回 inited;与 game.broadcast 的过滤口径一致
+			 * `c.closed !== true && !c.inited`)就先不开始——那一刻开局,客人会卡成半截
+			 * 界面(实测)。**拦下后自动重试**:引擎的开始按钮点一次就自删
+			 * (ui/create/index.js 尾部 button.delete()),让房主"再点一次"没有可能;
+			 * 客人齐了自动开局,超过 60 秒仍不齐就照常开局并说明(不把房主锁在等待房)。 */
+			try {
+				if (typeof env.game.resume === "function" && !env.game.resume.__nnkWrapped) {
+					var origResume = env.game.resume;
+					var startGateTimer = null;
+					var startGateArmedAt = 0;
+					var notReadyClients = function() {
+						var clients = (env.lib.node && env.lib.node.clients) || [];
+						var n = 0;
+						for (var ci = 0; ci < clients.length; ci++) {
+							var c = clients[ci];
+							if (c && c.closed !== true && !c.inited) {
+								n++;
+							}
+						}
+						return n;
+					};
+					env.game.resume = function() {
+						var gateArgs = Array.prototype.slice.call(arguments);
+						try {
+							if (env._status.waitingForPlayer && !startGateTimer) {
+								var nLeft = notReadyClients();
+								if (nLeft > 0) {
+									startGateArmedAt = Date.now();
+									bridgeApi().emit("info", { message: "还有 " + nLeft + " 位客人没进入房间(加载中)——等他们就绪会自动开始(不用再点)" });
+									startGateTimer = setInterval(function() {
+										var left = notReadyClients();
+										if (left === 0) {
+											clearInterval(startGateTimer);
+											startGateTimer = null;
+											bridgeApi().emit("info", { message: "客人已就绪,自动开始游戏" });
+											try { origResume.apply(env.game, gateArgs); } catch (eR0) { /* 引擎状态异常 */ }
+											return;
+										}
+										if (Date.now() - startGateArmedAt > 60000) {
+											clearInterval(startGateTimer);
+											startGateTimer = null;
+											bridgeApi().emit("info", { message: "等候 60 秒仍有 " + left + " 位客人没进来——照常开始(他可以在本局结束后自动进入)" });
+											try { origResume.apply(env.game, gateArgs); } catch (eR1) { /* 同上 */ }
+										}
+									}, 1000);
+									return;   /* 拦下这一次 */
+								}
+							}
+						} catch (eG) { /* 判定失败不拦:宁可放开也别把开局卡死 */ }
+						return origResume.apply(this, arguments);
+					};
+					env.game.resume.__nnkWrapped = true;
+				}
+			} catch (e) { /* 引擎没有 resume(极老版本)时跳过该门禁 */ }
+			/* 保留 startGame 钩子作双保险:某些版本/路径房主仍可能经它开局(见上) */
 			try {
 				var srv = env.lib.message && env.lib.message.server;
 				if (srv && typeof srv.startGame === "function" && !srv.startGame.__nnkWrapped) {
-					var origStartGame = srv.startGame;
-					var startRefusedAt = 0;
-					var startRefusedCount = 0;
+					var origStartGame2 = srv.startGame;
 					srv.startGame = function() {
 						try {
-							var notReady = 0;
-							var clients = (env.lib.node && env.lib.node.clients) || [];
-							for (var i = 0; i < clients.length; i++) {
-								var c = clients[i];
-								if (c && c.closed !== true && !c.inited) {
-									notReady++;
-								}
-							}
-							if (notReady > 0) {
-								var now = Date.now();
-								startRefusedCount = now - startRefusedAt < 30000 ? startRefusedCount + 1 : 1;
-								startRefusedAt = now;
-								if (startRefusedCount < 3) {
-									bridgeApi().emit("info", { message: "还有 " + notReady + " 位客人没进入房间(加载中)——已拦下开始;看到他们出现在房间里再点「开始游戏」(连点三次可强制开局)" });
+							if (env._status.waitingForPlayer) {
+								var nSrv = notReadyClients();
+								if (nSrv > 0) {
+									bridgeApi().emit("info", { message: "还有 " + nSrv + " 位客人没进入房间(加载中)——请稍等他们就绪后再试" });
 									return;
 								}
-								bridgeApi().emit("info", { message: "已强制开局:仍有 " + notReady + " 位客人没进入房间,他可以在本局结束后自动进入" });
 							}
-						} catch (e) { /* 判定失败不拦:宁可放开也别把开局卡死 */ }
-						return origStartGame.apply(this, arguments);
+						} catch (eS2) { /* 判定失败不拦 */ }
+						return origStartGame2.apply(this, arguments);
 					};
 					srv.startGame.__nnkWrapped = true;
 				}
-			} catch (e) { /* 引擎消息表结构异常时跳过该门禁 */ }
+			} catch (e2) { /* 引擎消息表结构异常时跳过 */ }
 			/* 跨重载接力 + 回房残留清理:
 			 * - 有 nnk_host_pending = 工坊刚点了创建、游戏正重载途中,恢复互联网建房;
 			 * - 没有时,必须清掉上次建房残留的 directstartmode/directstart——否则引擎
@@ -1083,7 +1142,7 @@
 				bridgeApi().emit("error", { message: "不支持的模式: " + mode });
 				return;
 			}
-			if (env.game.online) {
+			if (inOurOnlineGame(env)) {
 				bridgeApi().emit("error", { message: "游戏正在联机中,请先退出当前对局" });
 				return;
 			}
@@ -1100,7 +1159,7 @@
 			/* 单机对局中点创建:直接退出对局进联机界面(房间在重载落地后的大厅里
 			 * 自动建好)——顺带让之后的「载入到游戏」能走原地进房(秒级、不断线)。
 			 * 此前这里只是"大厅先建着",结果载入又被对局守卫拒绝,成了死角。 */
-			if (env.game.players && env.game.players.length && !env._status.over && !env._status.waitingForPlayer && !env.game.online) {
+			if (env.game.players && env.game.players.length && !env._status.over && !env._status.waitingForPlayer && !inOurOnlineGame(env)) {
 				hostState.stage = "lobby";
 				hostState.active = true;
 				hostState.roomMode = mode;
@@ -1289,7 +1348,7 @@
 				return;
 			}
 			if (env.game.players && env.game.players.length && !env._status.over && !env._status.waitingForPlayer) {
-				if (env.game.online) {
+				if (inOurOnlineGame(env)) {
 					bridgeApi().emit("error", { message: "对局还没打完,结束后再重开" });
 					return;
 				}

@@ -338,12 +338,14 @@ export default { name: "standard", character: characters, translate: translates 
   ok(guestSrc.includes('重新建房会换新房号'), '自动重回收场不再让用户拿旧房号白试')
 
   /* ── 10-09 实测两报(对局中重进变旁观 / 客人没就绪就开局)── */
-  ok(hostSrc.includes('game.saveConfig("connect_observe", false, "connect")'),
-    '建房替房主关掉「允许旁观」:引擎默认开,对局中来客会被收成旁观、视角挂房主(实测)')
-  ok(hostSrc.includes('srv.startGame.__nnkWrapped') && hostSrc.includes('没进入房间(加载中)'),
-    '「开始游戏」就绪门禁:客人没回 inited 就拦下并说明(引擎原生 startGame 不查这条)')
-  ok(hostSrc.includes('连点三次可强制开局') && hostSrc.includes('已强制开局'),
-    '门禁留强制通道(客人卡死时不把房主锁在等待房间)')
+  ok(hostSrc.includes('env.lib.configOL.observe = false') && hostSrc.includes('env.lib.configOL.choose_timeout = "60"') && !hostSrc.includes('game.saveConfig("connect_observe"'),
+    '房间设置写**活的 configOL**(旁观关/出牌时限 60):写 saveConfig 会落进没人读的桶=空转(审计复核)')
+  ok(hostSrc.includes('env.game.resume.__nnkWrapped') && hostSrc.includes('还有 " + nLeft + " 位客人没进入房间'),
+    '开局就绪门禁挂 game.resume(房主页的开始走本地分支,startGame 在房主页永不执行——审计复核)')
+  ok(hostSrc.includes('自动开始游戏') && hostSrc.includes('> 60000'),
+    '门禁拦下后自动重试 + 60 秒兜底(引擎开始按钮点一次就自删,不能让房主再点)')
+  ok(hostSrc.includes('function inOurOnlineGame(env)') && hostSrc.split('inOurOnlineGame(env)').length >= 4,
+    '三处"联机对局中"守卫换本地判据(game.online 在房主页恒 false,原判据三处全空转)')
 
   /* 10-09 报障(选将框卡退 / 5~6 秒高延迟):判死必须先问传输层,不能只看 JS 三路证据 */
   ok(rtcSrc.includes('function startPing(channel, onDead, peerTraffic, pcState)'),
@@ -361,8 +363,7 @@ export default { name: "standard", character: characters, translate: translates 
     '线路观测:5 秒一轮 getStats 取候选对(host/srflx/relay + RTT)')
   ok(bridgeSrc.includes('link: (function()') && clientSrc.includes('🔗 当前线路:'),
     '心跳上报线路 + 工坊内核卡显示「🔗 当前线路:直连/中继 · 往返 Nms」')
-  ok(hostSrc.includes('game.saveConfig("connect_choose_timeout", "60", "connect")'),
-    '出牌时限默认放宽到 60 秒(引擎默认 30,跨网环境常被自动托管)')
+  ok(hostSrc.includes('configOL.choose_timeout = "60"'), '出牌时限默认放宽到 60 秒(写在活的 configOL 上)')
   /* 群友"邀请码没用"的一大来源:码经过聊天软件带前后文/换行就认不出 */
   ok(rtcSrc.indexOf('^NNK1') === -1 && rtcSrc.includes('摘出'),
     '码解析容错:从粘贴内容里摘出 NNK1.<base64url>(不再要求整串恰好相等)')
