@@ -48,7 +48,14 @@ export function msysToNative(p) {
   return p
 }
 
-/** 归一化:去引号、统一分隔符、折叠 ..、去尾分隔符;小写便于比较。 */
+/** Win32 分量归一:尾部的点与空格在 Win32 解析时被忽略(「extension.」==「extension」),
+ *  不归一的话「写 …\extension.\包\x.js」这类写法就能绕过写保护(实测 PowerShell 可解析)。 */
+function stripWin32Tail(seg) {
+  if (!seg || seg === '.' || seg === '..') return seg
+  return seg.replace(/[. ]+$/, '')
+}
+
+/** 归一化:去引号、统一分隔符、折叠 ..、去尾分隔符、Win32 尾点/尾空格;小写便于比较。 */
 export function normalizePath(p, baseDir) {
   const raw0 = msysToNative(String(p ?? '').trim().replace(/^"|"$/g, ''))
   if (!raw0) return null
@@ -56,11 +63,20 @@ export function normalizePath(p, baseDir) {
   const full = isAbsolute(raw) ? raw : resolve(baseDir || process.cwd(), raw)
   let n = normalize(full)
   if (n.length > 3 && (n.endsWith('\\') || n.endsWith('/'))) n = n.slice(0, -1)
+  n = n.split('\\').map(stripWin32Tail).join('\\')
   return n.toLowerCase()
+}
+
+/** UNC(\\server\share)与 \\?\ 前缀:无法与保护前缀可靠比对(`\\?\` 更是把 Win32 归一
+ *  整个关掉,短名/尾点都成了字面量),按守卫「宁可多拦不漏拦」的既有取舍一律当命中。 */
+function isAliasForm(candidate) {
+  const raw = msysToNative(String(candidate ?? '').trim().replace(/^"|"$/g, '')).replace(/\//g, '\\')
+  return /^\\\\/.test(raw)
 }
 
 /** 归一化后的路径是否在保护根内(含根本身;`extension-backup` 这类同前缀目录不算)。 */
 export function isProtectedPath(candidate, protectRoot) {
+  if (isAliasForm(candidate)) return true
   const c = normalizePath(candidate, process.cwd())
   const r = normalizePath(protectRoot, process.cwd())
   if (!c || !r) return false

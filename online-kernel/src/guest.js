@@ -803,18 +803,25 @@
 					}
 				).then(function(mqttSession) {
 					session.mqtt = mqttSession;
-					/* 房主在线校验:retained 心跳会在 SUBSCRIBE 往返后送达。窗口 3.5→8 秒:
-					 * 计时是从 mqtt connect 起算的,订阅确认 + retained 投递在慢中继/移动
-					 * 网络下 1~3 秒是常态,3.5 秒会把活着的房主报成「没有找到在线主机」,
-					 * 还白扣一次重回预算(每轮成本仅 8~11 秒,8 轮约 80 秒就烧完) */
+					/* 房主在线校验:retained 心跳在 SUBSCRIBE 往返后送达。
+					 * **一收到就放行**——原先是一次性定时器在窗口末尾才判,成功路径也要
+					 * 干等满整个窗口(3.5 秒);窗口只作失败超时,3.5→8 秒是给慢中继留的:
+					 * 计时从 mqtt connect 起算,订阅确认 + retained 投递在移动网络下
+					 * 1~3 秒是常态,旧值会把活着的房主报成「没有找到在线主机」,
+					 * 还白扣一次重回预算(每轮成本仅 8~11 秒,8 轮约 80 秒就烧完)。 */
 					return new Promise(function(resolve, reject) {
-						setTimeout(function() {
-							if (!session.hostSeen) {
-								reject(new Error("没有找到该房号的在线主机(房号可能输错,或房主已离线)"));
-							} else {
-								resolve(mqttSession);   /* 传给下一步发提议用(参数作用域不跨 then) */
+						var waited = 0;
+						var poll = function() {
+							if (session.hostSeen) {
+								return resolve(mqttSession);   /* 传给下一步发提议用(参数作用域不跨 then) */
 							}
-						}, 8000);
+							waited += 250;
+							if (waited >= 8000) {
+								return reject(new Error("没有找到该房号的在线主机(房号可能输错,或房主已离线)"));
+							}
+							setTimeout(poll, 250);
+						};
+						poll();
 					});
 				}).then(function(mqttSession) {
 					return mqttSession.publish(signaling.roomTopic(code, "offer"), {

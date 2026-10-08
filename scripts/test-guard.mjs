@@ -53,6 +53,11 @@ const mustBlock = [
   ['touch 新建', 'touch D:/games/noname/resources/app/extension/pk/new.js'],
   ['mkdir 建目录', 'mkdir -p D:/games/noname/resources/app/extension/pk/sub'],
   ['无空格重定向(cd 后)', 'cd D:/games/noname/resources/app/extension/pk && echo x>extension.js'],
+  /* Win32 路径别名(第 5 轮审计实证:这几类写法原先全部放行,PS 实测能解析到真目录) */
+  ['尾随点目录(Windows 归一掉「extension.」)', 'echo x > D:/games/noname/resources/app/extension./pk/x.js'],
+  ['尾随空格目录', 'echo x > "D:/games/noname/resources/app/extension /pk/x.js"'],
+  ['UNC 形态', 'cat > \\\\localhost\\C$\\games\\noname\\resources\\app\\extension\\pk\\x.js'],
+  ['\\\\?\\ 前缀(关掉 Win32 归一)', 'echo x > \\\\?\\D:\\games\\noname\\resources\\app\\extension\\pk\\x.js'],
 ]
 for (const [name, cmd] of mustBlock) {
   const reason = bashGuardReason(cmd, ROOT, bases)

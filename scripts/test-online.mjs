@@ -317,8 +317,8 @@ export default { name: "standard", character: characters, translate: translates 
     '三条重载路径共享「主机重载中」通知(载入 / 打完一把回大厅;救援那条无会话可发)')
   ok(hostSrc.includes('45 秒仍未打通直连') && !hostSrc.includes('20 秒仍未打通直连'),
     '邀请码打通看门狗 20→45 秒(慢中继不再误杀能通的连接;客人侧本就是 3 分钟)')
-  ok(guestSrc.includes('}, 8000);') && !guestSrc.includes('}, 3500);'),
-    '房主在线校验窗口 3.5→8 秒(订阅确认+retained 投递在慢网要 1~3 秒)')
+  ok(guestSrc.includes('waited >= 8000') && !guestSrc.includes('}, 3500);'),
+    '房主在线校验:窗口 3.5→8 秒 + 事件驱动(收到心跳立即放行,不再干等满窗口)')
   ok(guestSrc.includes('主机正在载入游戏(心跳暂断)'),
     '载入窗口内的判死文案不再自相矛盾(不再喊"主机可能已关闭游戏")')
   ok(rtcSrc.includes('setTimeout(finish, 8000)') && !rtcSrc.includes('setTimeout(finish, 4000)'),

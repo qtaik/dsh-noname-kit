@@ -688,6 +688,31 @@ export function apply(ctx, config) {
        * 请求要求 Origin 为空(非浏览器)或为回环来源;来源可疑直接 403。
        * 注意:内核的 /online/bridge 轮询来自游戏页(location.origin 是游戏服务),
        * 不是普通网页——它带 token,单独放行在下面的分支里。 */
+      const isLoopbackName = (h) => h === '127.0.0.1' || h === 'localhost' || h === '[::1]' || h === '::1'
+      const originName = (o) => { try { return new URL(o).hostname } catch { return '' } }
+      /* 心跳桥(唯二的跨源调用方,来自游戏页 location.origin=游戏服务器,端口与插件不同)
+       * 单独一条规矩:Origin 必须为空(非浏览器)或**回环来源**,不看端口是否与 Host 一致。
+       * 必须查——桥的 token 就落在游戏静态目录里,而游戏自带
+       * Access-Control-Allow-Origin:*(懒人包 noname-server.js:55),用户浏览器里打开的任何
+       * 网页都能把 token 读走;原先这条路由在下面整段校验之外,拿到 token 的恶意页就能
+       * 伪造心跳/往工坊事件流灌内容/把命令队列掏空(审计实证) */
+      if (url.pathname === '/noname-kit-api/online/bridge') {
+        const origin = String(req.headers.origin || '')
+        if (origin && !isLoopbackName(originName(origin))) {
+          return json(403, { ok: false, error: '仅接受本机游戏页面的心跳(Origin 校验未通过)' })
+        }
+      }
+      /* GET 也要挡 DNS rebinding:恶意的 evil.com 解析到 127.0.0.1 后,浏览器会带
+       * Host: evil.com 打这些只读接口——/online/status 里有房号与邀请码正文、
+       * /extension 有扩展源码、/tasks 有任务登记。只认「IP 字面量或 localhost」的
+       * Host:局域网用 IP 访问照常,域名访问被拒(文案里说清怎么办) */
+      if (req.method === 'GET') {
+        const hostName = String(req.headers.host || '').replace(/:\d+$/, '')
+        const ipLiteral = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostName) || /^\[[0-9a-fA-F:]+\]$/.test(hostName)
+        if (hostName && !ipLiteral && !isLoopbackName(hostName)) {
+          return json(403, { ok: false, error: '请用 127.0.0.1、localhost 或本机 IP 打开工坊页面(当前域名访问被安全策略拒绝)' })
+        }
+      }
       if (req.method !== 'GET' && url.pathname !== '/noname-kit-api/online/bridge') {
         const origin = String(req.headers.origin || '')
         const host = String(req.headers.host || '')
@@ -695,7 +720,7 @@ export function apply(ctx, config) {
           if (!o) return true
           try {
             const u = new URL(o)
-            return (u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]') && u.host === host
+            return isLoopbackName(u.hostname) && u.host === host
           } catch { return false }
         }
         /* 无 Origin(非浏览器)不等于可信:DSH 支持绑 0.0.0.0(手机/局域网访问),
@@ -957,11 +982,20 @@ export function apply(ctx, config) {
           /* baseUrl 是写进内核、由游戏回连本插件的地址:取 Host 的端口,但只认
            * 回环(伪造的 Host 头会把内核指到别处,让状态永远显示离线) */
           const hostHeader = String(req.headers.host || '')
+          /* Host 解析必须严:原先只 cut 最后一个冒号,`127.0.0.1:1@evil.com` 能同时骗过
+           * 回环白名单与端口取值——写进内核的 baseUrl 变成 user:pass@evil.com,游戏下次
+           * 启动就把 token/状态 POST 给外站,并把对方的回包当工坊命令执行(远程接管内核)。
+           * 端口只认纯数字,Host 不许含 @ 与空白 */
+          if (/[@\s]/.test(hostHeader)) {
+            return json(400, { ok: false, error: `Host 头非法(含 @ 或空白),拒绝安装:收到「${hostHeader}」` })
+          }
           const hostName = hostHeader.includes(':') ? hostHeader.slice(0, hostHeader.lastIndexOf(':')) : hostHeader
-          if (hostName && !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(hostName)) {
+          if (hostName && !isLoopbackName(hostName)) {
             return json(400, { ok: false, error: `Host 必须是本机回环地址,收到「${hostHeader}」` })
           }
-          const port = hostHeader.includes(':') ? hostHeader.slice(hostHeader.lastIndexOf(':') + 1)
+          const rawPort = hostHeader.includes(':') ? hostHeader.slice(hostHeader.lastIndexOf(':') + 1) : ''
+          const port = /^\d{1,5}$/.test(rawPort)
+            ? rawPort
             : String((webCtx.webServer && webCtx.webServer.port) || 80)   /* Host 缺端口:用真实监听端口,别硬编码 80(审计发现) */
           const baseUrl = `http://127.0.0.1:${port}/noname-kit-api`
           const result = installKernel({ nonameDir, baseUrl, token: bridgeToken })
