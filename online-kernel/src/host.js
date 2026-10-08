@@ -11,6 +11,12 @@
 	var rtc;
 	var signaling;
 
+	/* 房间模式白名单(唯一来源:校验/人数表/UI 列表都用它)。
+	 * 引擎会在联机单挑局里把 _status.mode 原生改写成 "normal"(mode/single.js),
+	 * 任何把引擎当前模式当房间模式收下的路径都会被污染成非法值——
+	 * 实测症状:创建房间恒报「不支持的模式: normal」,刷新也解不开 */
+	var ROOM_MODES = ["identity", "guozhan", "versus", "doudizhu", "single"];
+
 	var hostState = nnk.state.host = {
 		active: false,        /* 本次启动里已进入"互联网建房"流程(含跨重载接力) */
 		signaling: "mqtt",    /* 恒为 mqtt:一体化房间必有房号门;邀请码是同一房间的第二道门,
@@ -289,7 +295,7 @@
 	 * 点其他模式也能立刻显示该模式能装几人 */
 	function modeCaps() {
 		var caps = {};
-		["identity", "guozhan", "versus", "doudizhu", "single"].forEach(function(m) {
+		ROOM_MODES.forEach(function(m) {
 			caps[m] = modeMaxPlayers(m);
 		});
 		return caps;
@@ -837,7 +843,11 @@
 								pendingStage = "lobby";
 							}
 							if (pendingTask.mode) {
-								hostState.roomMode = pendingTask.mode;
+								/* 续跑的 mode 过白名单:接力标记若被引擎改写的
+								 * _status.mode(联机单挑局="normal")污染,在这里拦下 */
+								if (ROOM_MODES.indexOf(pendingTask.mode) >= 0) {
+									hostState.roomMode = pendingTask.mode;
+								}
 							}
 						}
 					} catch (e) { /* 旧格式,按 loaded 处理 */ }
@@ -866,7 +876,7 @@
 						 * 只救一次:救援重载写入的 pending 带 rescued=true,带标记的开机
 						 * 不再重载级救援(防无限重载循环),只上报引导手动。
 						 * lobby 阶段不需要建房,看门狗不生效 */
-						var watchdogMode = (pendingTask && typeof pendingTask === "object" && pendingTask.mode) || "identity";
+						var watchdogMode = (pendingTask && typeof pendingTask === "object" && pendingTask.mode && ROOM_MODES.indexOf(pendingTask.mode) >= 0) ? pendingTask.mode : "identity";
 						var alreadyRescued = !!(pendingTask && typeof pendingTask === "object" && pendingTask.rescued);
 						setTimeout(function() {
 							if (!hostState.active || hostState.roomCode || env._status.waitingForPlayer || env._status.over) {
@@ -922,7 +932,11 @@
 				try {
 					if (hostState.active && hostState.roomCode
 						&& env._status.connectMode && env._status.over) {
-						var overMode = env._status.mode || "identity";
+						/* 不用 _status.mode:联机单挑局里引擎会把它原生改写成
+						 * "normal"(mode/single.js),写进接力标记会让下个开机把
+						 * 房间模式污染成非法值,创建房间恒报「不支持的模式:
+						 * normal」(实测)。回大厅保持房间的原模式才是正确语义 */
+						var overMode = hostState.roomMode || "identity";
 						/* 回大厅:重载后引擎停在联机菜单,stage=lobby,成员重连后
 						 * 停车等待下一次载入;directstartmode 故意不写(不自动进房) */
 						localStorage.setItem(env.lib.configprefix + "nnk_host_pending", JSON.stringify({ mode: overMode, signaling: "mqtt", stage: "lobby" }));
@@ -954,7 +968,7 @@
 			var env = nnk.env;
 			mode = String(mode || "identity");
 			hostState.signaling = "mqtt";
-			if (["identity", "guozhan", "versus", "doudizhu", "single"].indexOf(mode) < 0) {
+			if (ROOM_MODES.indexOf(mode) < 0) {
 				bridgeApi().emit("error", { message: "不支持的模式: " + mode });
 				return;
 			}
@@ -1047,7 +1061,7 @@
 		 * 主机本机状态不上报,客人永远看到旧模式(实测反馈) */
 		setRoomMode: function(mode) {
 			mode = String(mode || "");
-			if (["identity", "guozhan", "versus", "doudizhu", "single"].indexOf(mode) < 0) {
+			if (ROOM_MODES.indexOf(mode) < 0) {
 				bridgeApi().emit("error", { message: "不支持的模式: " + mode });
 				return;
 			}
@@ -1151,8 +1165,10 @@
 				bridgeApi().emit("error", { message: "还没有房间可以重开,先创建 P2P 房间" });
 				return;
 			}
-			mode = String(mode || env._status.mode || "identity");
-			if (["identity", "guozhan", "versus", "doudizhu", "single"].indexOf(mode) < 0) {
+			/* 兜底用房间原模式,不用 _status.mode:联机单挑局会把它原生改写成
+			 * "normal",拿它兜底会误报「不支持的模式」(实测) */
+			mode = String(mode || hostState.roomMode || "identity");
+			if (ROOM_MODES.indexOf(mode) < 0) {
 				bridgeApi().emit("error", { message: "不支持的模式: " + mode });
 				return;
 			}

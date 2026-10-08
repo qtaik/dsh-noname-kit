@@ -202,6 +202,15 @@ export default { name: "standard", character: characters, translate: translates 
   ok(iceGuard > 0 && guestSrc.slice(iceGuard, iceGuard + 400).includes('if (guestState.session !== session)'), 'ICE 失败回调有会话守卫(旧 pc 迟到报错不误杀新尝试)')
   ok(guestSrc.includes('lastIceFailAt'), '「直连建立失败」同文案 2 秒去重(实测双发)')
 
+  // ── 结构性回归锁:房间模式白名单单一来源(联机单挑局会把它原生改成
+  //    "normal",污染路径拦截,10-08 实测「创建房间恒报不支持的模式」) ──
+  const hostSrc = readFileSync(join(repoRoot, 'online-kernel', 'src', 'host.js'), 'utf8')
+  ok(hostSrc.includes('var ROOM_MODES = ["identity", "guozhan", "versus", "doudizhu", "single"]'), '房间模式白名单有唯一来源')
+  ok(hostSrc.split('["identity", "guozhan",').length === 2, '内联白名单只剩定义处一处(加模式只改一处)')
+  ok(!hostSrc.includes('env._status.mode || "identity"'), '对局结束接力不再收引擎被单挑局改写的模式(创建房间报 normal 的污染源)')
+  ok(hostSrc.includes('ROOM_MODES.indexOf(pendingTask.mode) >= 0'), '开机续跑对接力的 mode 过白名单(拦被污染的标记)')
+  ok(hostSrc.includes('ROOM_MODES.indexOf(pendingTask.mode) >= 0) ? pendingTask.mode : "identity"'), '看门狗救房的 mode 同样过白名单')
+
   console.log(`\n全部通过:${passed} 项`)
 } finally {
   rmSync(home, { recursive: true, force: true })
