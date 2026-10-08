@@ -129,6 +129,17 @@
 		guestState.session = null;
 	}
 
+	/* 自动重回彻底放弃:收场回干净菜单。房号/邀请码会话期内引擎的自毁重载
+	 * 被内核抑制(_nocallback),收场必须自己重载一次——否则客人冻死在断线的
+	 * 对局画面上(收场前令牌/会话都已清,重载包装不会再把这次当成"断线登记") */
+	function finishRejoin() {
+		try {
+			if (nnk.env._status.connectMode) {
+				nnk.env.game.reload();
+			}
+		} catch (e) { /* 忽略 */ }
+	}
+
 	/* 同房号自动重进(打完一把主机端重组后):连接突然断开且对局已结束,
 	 * 说明房主正在重载重建同一房间——隔几秒用原房号再敲一次门,给主机
 	 * 重载重建留出时间;次数用完或用户已取消/离开就明说,引导手动重进。
@@ -150,6 +161,7 @@
 				guestState.rejoinCode = null;
 				bridgeApi().setPhase("idle");
 				bridgeApi().emit("error", { message: "自动重回房间失败(房主可能已关闭游戏)——请让房主重新建房,或手动输入房号 " + code + " 重试" });
+				finishRejoin();
 			}
 			return;
 		}
@@ -183,6 +195,7 @@
 				guestState.rejoinBeatStreak = 0;
 				bridgeApi().setPhase("idle");
 				bridgeApi().emit("error", { message: "连续多轮收不到房主心跳——房间已解散或房主已关闭游戏,自动重回中止。让房主重新建房后再进(房号 " + code + ")" });
+				finishRejoin();
 				return;
 			}
 			/* 次数扣减:只有"真尝试过、连到房间层"才扣。信令服务器连不上
@@ -202,6 +215,7 @@
 				guestState.rejoinBeatStreak = 0;   /* 收场一并清连死计数:防跨链残留提前收场 */
 				bridgeApi().setPhase("idle");
 				bridgeApi().emit("error", { message: "信令服务器一直连不上,自动重回中止——请检查网络,或让房主发一张邀请码从另一道门进" });
+				finishRejoin();
 				return;
 			}
 			var deduct = signalOnlyNext ? 0 : (guestState.session ? 0 : 1);
@@ -325,6 +339,22 @@
 					}, 300);
 				}
 			} catch (e) { /* localStorage 不可用则无续跑 */ }
+			/* 引擎「退出房间」按钮:先清本内核的重连令牌再走引擎原流程——否则它
+			 * 触发的重载会被客机重载包装当成"断线"登记自动重回,用户点了退出还会
+			 * 被拉回原房间(实测)。清令牌+清会话后,重载包装看到空令牌就不登记了 */
+			if (env.ui && env.ui.click && typeof env.ui.click.exit === "function" && !env.ui.click.exit.__nnkExitWrapped) {
+				var origExit = env.ui.click.exit;
+				env.ui.click.exit = function() {
+					try {
+						guestState.rejoinCode = null;
+						guestState.rejoinGen = (guestState.rejoinGen || 0) + 1;
+						resetSession();
+						localStorage.removeItem(env.lib.configprefix + "nnk_guest_pending");
+					} catch (eX) { /* 忽略 */ }
+					return origExit.apply(this, arguments);
+				};
+				env.ui.click.exit.__nnkExitWrapped = true;
+			}
 		},
 
 		/* 工坊命令:粘贴主机的邀请码,生成回执码(事件 answer_ready 上报) */
@@ -450,13 +480,18 @@
 					if (guestState.session === session) {
 						guestState.session = null;
 						try { if (session.ping) session.ping.stop(); } catch (eP) { /* 忽略 */ }
-						/* 一体化房间:邀请码客人也拿着房号(内核随停车指令下发),
-						 * 断开后走房号门自动重回——恢复不再区分当初从哪道门进来 */
-						if (session.wasIn && session.code && nnk.env._status.connectMode) {
-							bridgeApi().setPhase("joining", { code: session.code });
-							autoRejoin(session.code, 8);
-							return;
-						}
+				/* 一体化房间:邀请码客人也拿着房号(内核随停车指令下发),
+				 * 断开后走房号门自动重回——恢复不再区分当初从哪道门进来 */
+				if (session.wasIn && session.code && nnk.env._status.connectMode) {
+					/* 抑制引擎的自毁重载(library:10396 的 _nocallback 开关):重载会
+					 * 丢 game.onlineID,重连被主机引擎当新客人拒「游戏已开始」形成
+					 * 弹窗循环(实测)。原位重连带旧 id→主机 reinit(原生断线重连);
+					 * 彻底放弃时由收场路径自己重载回干净菜单 */
+					session.fake._nocallback = true;
+					bridgeApi().setPhase("joining", { code: session.code });
+					autoRejoin(session.code, 8);
+					return;
+				}
 						bridgeApi().setPhase("idle");
 						bridgeApi().emit("room_closed", { side: "guest" });
 					}
@@ -608,13 +643,18 @@
 				if (guestState.session === session) {
 					guestState.session = null;
 					try { if (session.ping) session.ping.stop(); } catch (eP) { /* 忽略 */ }
-					/* 房号房间的通道断开(主机重组/换模式重载/掉线)一律自动重回:
-					 * 主机真退了的话重试穷尽后会给明确提示 */
-					if (session.wasIn && session.code && nnk.env._status.connectMode) {
-						bridgeApi().setPhase("joining", { code: session.code });
-						autoRejoin(session.code, 8);
-						return;
-					}
+				/* 房号房间的通道断开(主机重组/换模式重载/掉线)一律自动重回:
+				 * 主机真退了的话重试穷尽后会给明确提示 */
+				if (session.wasIn && session.code && nnk.env._status.connectMode) {
+					/* 抑制引擎的自毁重载(library:10396 的 _nocallback 开关):重载会
+					 * 丢 game.onlineID,重连被主机引擎当新客人拒「游戏已开始」形成
+					 * 弹窗循环(实测)。原位重连带旧 id→主机 reinit(原生断线重连);
+					 * 彻底放弃时由收场路径自己重载回干净菜单 */
+					session.fake._nocallback = true;
+					bridgeApi().setPhase("joining", { code: session.code });
+					autoRejoin(session.code, 8);
+					return;
+				}
 					bridgeApi().setPhase("idle");
 					bridgeApi().emit("room_closed", { side: "guest" });
 				}
@@ -696,10 +736,12 @@
 					});
 				}).then(function() {
 					bridgeApi().setPhase("waiting_host", { code: code });
-					/* 心跳快判:主机活着每 10 秒刷一次心跳;发完提议后 10 秒内
+					/* 心跳快判:主机活着每 10 秒刷一次心跳;发完提议后 14 秒内
 					 * 没见刷新=主机强关/掉线(只剩 broker 上的 retained 旧心跳),
 					 * 立刻收会话让自动重回续下一试——不干等 30 秒(实测:死主机
-					 * 时每轮都要耗满 30 秒,重试磨磨蹭蹭) */
+					 * 时每轮都要耗满 30 秒)。窗口 10→14 秒:主机开局/选将时
+					 * 主线程可能整段卡住,心跳跟着断供——这是"忙"不是"死",
+					 * 留足余量防误判(同族教训:客机刚进选将就被判死) */
 					setTimeout(function() {
 						if (!answered && guestState.session === session && !session.beatRefreshed) {
 							guestState.lastAttemptBeatDead = true;   /* 重回循环据此换文案 */
@@ -710,7 +752,7 @@
 							bridgeApi().setPhase("idle");
 							resetSession();
 						}
-					}, 10000);
+					}, 14000);
 					setTimeout(function() {
 						if (!answered && guestState.session === session) {
 							bridgeApi().emit("error", { message: "30 秒未收到房主应答(可能已掉线)——重新输入房号再试,或让房主发一张邀请码" });

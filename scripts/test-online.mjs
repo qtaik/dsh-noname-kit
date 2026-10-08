@@ -273,6 +273,16 @@ export default { name: "standard", character: characters, translate: translates 
   ok(rtcSrc.includes('virtualIps: virtualIps'), 'rtc 导出 virtualIps(工坊状态行数据源)')
   ok(bridgeSrc.includes('virtualIps: (function()'), '内核心跳 cfg 带虚拟网卡检测结果')
   ok(clientSrc.includes('虚拟网卡直连已就绪'), '面板显示虚拟网卡就绪状态(用户看得见,不再是隐形功能)')
+
+  // ── 结构性回归锁:开局瞬间误杀与「退出房间被拉回」(10-08 实测报障)──
+  ok(rtcSrc.includes('lastBuffered') && rtcSrc.includes('> 12000'), '心跳判死识别传输层 ACK 推进(对端主线程忙时不再误杀)')
+  ok(guestSrc.split('session.fake._nocallback = true').length === 3, '两道门的断线善后都抑制引擎自毁重载(保 game.onlineID,原位重连被主机 reinit 认回)')
+  ok(guestSrc.includes('function finishRejoin()') && guestSrc.split('finishRejoin();').length === 4, '收场路径自己重载回干净菜单(抑制了引擎重载就必须自己收尾)')
+  ok(guestSrc.includes('__nnkExitWrapped'), '引擎「退出房间」按钮清重连令牌(点了退出不再被拉回原房间)')
+
+  // ── 同族审计批:所有"JS 心跳判死/回执超时"给主线程卡顿留余量 ──
+  ok(guestSrc.includes('}, 14000);') && !guestSrc.includes('}, 10000);'), '房主心跳判死窗口 14 秒(主机开局/选将主线程卡住时不误判"房主已关")')
+  ok(txSrc.includes('var ACK_TIMEOUT = 6000') && txSrc.includes('var DONE_TIMEOUT = 12000'), '补传回执超时放宽(对端主线程忙时不误报"客人没响应")')
   ok(rtcSrc.includes('hosts: hosts && hosts.length ? hosts : undefined'), '邀请码载荷带直连地址(空则不带,旧内核收码也无害)')
   ok(guestSrc.split('rtc.directHosts(pc)').length === 3, '客人侧两处发出直连地址(房号提议 + 回执码)')
   ok(hostSrc.split('rtc.directHosts(pc)').length === 3, '主机侧两处发出直连地址(应答 + 邀请码)')

@@ -71,6 +71,7 @@
 	function startPing(channel, onDead) {
 		var stopped = false;
 		var lastSeen = Date.now();
+		var lastBuffered = null;
 		var timer = null;
 		function stop(dead) {
 			if (stopped) {
@@ -95,8 +96,19 @@
 			if (channel.readyState !== "open") {
 				return;   /* 还没打开,下一拍再看 */
 			}
-			if (Date.now() - lastSeen > 8000) {
-				stop(true);   /* 3 拍没来包=静默 */
+			/* 传输层活性:自己发送缓冲在推进(bufferedAmount 下降)=对方 SCTP 层
+			 * 在收在 ACK=链路活着。对端主线程忙(开局加载/渲染选将)时 JS 层的
+			 * 心跳会整段断供,但 ACK 照常——只看心跳会误杀整条链路(实测:
+			 * 点开始游戏后客机刚进选将就被判死,重载→新身份→「游戏已开始」循环) */
+			try {
+				var buf = channel.bufferedAmount || 0;
+				if (lastBuffered !== null && buf < lastBuffered) {
+					lastSeen = Date.now();
+				}
+				lastBuffered = buf;
+			} catch (eB) { /* 读不到就算了 */ }
+			if (Date.now() - lastSeen > 12000) {
+				stop(true);   /* 约 5 拍没来包、缓冲也不推进=静默 */
 				return;
 			}
 			try { channel.send("p"); } catch (e2) { /* 下一拍再判 */ }

@@ -31,8 +31,11 @@
 	var CHUNK = 48 * 1024;           /* 二进制块大小(b64 后 64KB,远小于 DC 消息上限) */
 	var BUFFER_LIMIT = 256 * 1024;   /* 通道积压超过 256KB 就等(保对局消息优先) */
 	var KERNEL_NAME = "联机助手";
-	var ACK_TIMEOUT = 3000;          /* 等客人 ready 回执的上限 */
-	var DONE_TIMEOUT = 8000;         /* 等客人 done 回执的上限 */
+	/* 回执上限:判的对象是"对端主线程何时跑到这条消息"——对端开局/选将
+	 * 等重载阶段主线程可能整段卡住,JS 回执跟着断供(同族教训:心跳判死
+	 * 被主线程卡顿骗)。给足余量,宁可慢判也不误报"客人没响应" */
+	var ACK_TIMEOUT = 6000;          /* 等客人 ready 回执的上限 */
+	var DONE_TIMEOUT = 12000;        /* 等客人 done 回执的上限 */
 	var STALL_TIMEOUT = 20000;       /* 背压等待的上限(对端半死时不再永久卡住) */
 
 	function bridgeApi() {
