@@ -104,7 +104,12 @@
 			exts: split(host.exts || [], guest.exts || []),
 			packs: split(host.packs || [], guest.packs || []),
 			cards: split(host.cards || [], guest.cards || []),
+			/* 两端内核版本:房号门(主题指纹,0.3.67 起)与自动补传(ready/done 双握手)
+			 * 都要求两端内核 ≥0.3.67 且版本一致才好排查——两边都要能拿到对方的版本号,
+			 * 工坊才提示得出来(guestKernel 加上后一直没人消费,是死字段:混装时用户
+			 * 只能看到"房主可能已关闭游戏"这类错误诊断) */
 			guestKernel: guest.kernel || null,
+			hostKernel: host.kernel || null,
 			/* 双向身份:房主工坊显示「👤 客人:某某」,客人侧显示房主身份——
 			 * P2P 连接识别 v1(名字随清单走,头像给显示名) */
 			guestIdentity: guest.identity || null,

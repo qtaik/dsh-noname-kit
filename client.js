@@ -1515,11 +1515,19 @@ window.__ModuleLoader__.load({
             break;
           }
         }
+        /* 两端内核版本不一致是混装故障的头号线索:房号门(主题指纹,0.3.67 起)与自动
+         * 补传都要求两端同为 0.3.67+,否则客人侧只会看到"房主可能已关闭游戏";版本随
+         * 清单互报(hostKernel/guestKernel),这里明说并给出唯一有效动作 */
+        var peerKernel = hostFlow ? (d.guestKernel || null) : (d.hostKernel || null);
+        var mineKernel = (bridge && bridge.kernelVersion) || null;
         return h('div', { className: 'nnk-card' },
           e('div', null, h('b', null, '📦 包体检')),
           e('div', 'nnk-hint', (bridge.cfg && bridge.cfg.root === false)
             ? '⚠️ 本机无法定位游戏目录,扩展分类已跳过(全部扩展会参与联机加载)。'
             : '联机只加载带武将/卡牌的扩展。'),
+          (peerKernel && mineKernel && peerKernel !== mineKernel)
+            ? e('div', 'nnk-err', '⚠️ 对方内核 v' + peerKernel + ',与本机 v' + mineKernel + ' 不一致——联机(房号门/自动补传)要求两端内核同为 0.3.67+;让对面在工坊「🌐 联机」页点「升级内核」并重启游戏。')
+            : null,
           peer && peer.name ? e('div', 'nnk-ok', '👤 对方(' + (hostFlow ? '客人' : '房主') + '):「' + peer.name + '」' + (peer.avatar ? '(头像:' + peer.avatar + ')' : '')) : null,
           stillMissing.length
             ? h('div', {},

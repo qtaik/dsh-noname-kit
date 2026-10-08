@@ -302,6 +302,15 @@ export default { name: "standard", character: characters, translate: translates 
   ok(guestSrc.includes('rtc.addInjected(pc, msg.hosts)') && guestSrc.includes('rtc.addInjected(pc, data.hosts)'), '客人侧两处收下对方直连地址(应答/邀请码)')
   ok(hostSrc.includes('rtc.addInjected(pc, msg.hosts)') && hostSrc.includes('rtc.addInjected(pc, data.hosts)'), '主机侧两处收下对方直连地址(提议/回执码)')
 
+  /* ── 混装(两端内核版本不一致)必须有明确诊断 ──
+   * 房号门(主题指纹,0.3.67 起)与自动补传(ready/done 双握手)都要求两端 ≥0.3.67;
+   * guestKernel 曾经算了却没人消费(死字段),用户只能看到"房主可能已关闭游戏"这类
+   * 错误诊断。锁住:差集两侧都报版本,工坊两处都消费。 */
+  ok(mfSrc.includes('guestKernel: guest.kernel || null') && mfSrc.includes('hostKernel: host.kernel || null'),
+    '包体检差集同时带双方内核版本(guestKernel/hostKernel)')
+  ok(clientSrc.includes('d.guestKernel') && clientSrc.includes('d.hostKernel'),
+    '工坊体检卡消费双方内核版本(混装时明说版本不一致 + 升级出路)')
+
   console.log(`\n全部通过:${passed} 项`)
 } finally {
   rmSync(home, { recursive: true, force: true })
