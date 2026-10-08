@@ -115,14 +115,14 @@ function readManifest(dir) {
  * 内核自检:state ok/stale/missing/unknown(语义同 preset;unknown = 插件自带
  * 源不完整,打包异常,此时不能催用户重装)。
  * 哈希缓存:此函数被工坊 1.5 秒一轮的 /online/status 反复调用,而内核目录
- * 405KB。自带源进程内冻结,算一次;已装副本按「目录签名」(文件名+大小+mtime,
- * 几个 stat 就能算)缓存内容哈希——内容没动不读盘、改动(含原地编辑)立刻
- * 现形,正确性与性能两全。
+ * 405KB。两侧都按「目录签名」(文件名+大小+mtime,几个 stat 就能算)缓存内容
+ * 哈希——内容没动不读盘、改动(含原地编辑)立刻现形。**自带源不能"进程内
+ * 冻结"**:link 安装时它就是源码目录、随时在变(曾因此漏报"该升级内核")。
  */
-let bundledHashCache = null
+let bundledHashCache = { sig: null, hash: null }
 let installedHashCache = { dir: '', sig: null, hash: null }
 
-function installedSignature(dir) {
+function dirSignature(dir) {
   try {
     const parts = []
     const walk = (d, rel) => {
@@ -145,18 +145,20 @@ function installedSignature(dir) {
 }
 
 export function kernelStatus({ nonameDir }) {
-  if (bundledHashCache === null) {
-    bundledHashCache = hashKernelDir(bundledKernelDir())
+  const bundledDir = bundledKernelDir()
+  const bundledSig = dirSignature(bundledDir)
+  if (bundledSig === null || bundledHashCache.sig !== bundledSig) {
+    bundledHashCache = { sig: bundledSig, hash: hashKernelDir(bundledDir) }
   }
-  const bundledHash = bundledHashCache
-  if (!bundledHash || !existsSync(join(bundledKernelDir(), 'extension.js'))) {
-    return { state: 'unknown', error: `插件自带的内核源不完整(缺 extension.js):${bundledKernelDir()}` }
+  const bundledHash = bundledHashCache.hash
+  if (!bundledHash || !existsSync(join(bundledDir, 'extension.js'))) {
+    return { state: 'unknown', error: `插件自带的内核源不完整(缺 extension.js):${bundledDir}` }
   }
   const target = kernelDirOf(nonameDir)
   if (!existsSync(target)) {
     return { state: 'missing', bundledHash, installedHash: null, installedAt: null, boundApi: null }
   }
-  const sig = installedSignature(target)
+  const sig = dirSignature(target)
   let installedHash
   if (sig !== null && installedHashCache.dir === target && installedHashCache.sig === sig) {
     installedHash = installedHashCache.hash
