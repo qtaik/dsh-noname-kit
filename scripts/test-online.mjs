@@ -363,6 +363,11 @@ export default { name: "standard", character: characters, translate: translates 
     '心跳上报线路 + 工坊内核卡显示「🔗 当前线路:直连/中继 · 往返 Nms」')
   ok(hostSrc.includes('game.saveConfig("connect_choose_timeout", "60", "connect")'),
     '出牌时限默认放宽到 60 秒(引擎默认 30,跨网环境常被自动托管)')
+  /* 群友"邀请码没用"的一大来源:码经过聊天软件带前后文/换行就认不出 */
+  ok(rtcSrc.indexOf('^NNK1') === -1 && rtcSrc.includes('摘出'),
+    '码解析容错:从粘贴内容里摘出 NNK1.<base64url>(不再要求整串恰好相等)')
+  ok(rtcSrc.includes('这看起来是 6 位房号') && rtcSrc.includes('可能被聊天软件截断'),
+    '码解析失败的文案分情况给出路(粘成房号/半截码/不像码)')
 
   console.log(`\n全部通过:${passed} 项`)
 } finally {

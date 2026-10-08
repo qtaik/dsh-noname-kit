@@ -469,11 +469,9 @@
 			} catch (err) {
 				resetSession();
 				bridgeApi().setPhase("idle");
-				var pMsg = err.message || "";
-				if (pMsg.indexOf("不是有效的联机助手码") >= 0 || pMsg.indexOf("码内容无法识别") >= 0) {
-					pMsg += "——码可能被聊天软件截断/加了表情,请让房主重新整段复制发一次";
-				}
-				bridgeApi().emit("error", { message: pMsg });
+				/* 码的诊断与出路由 rtc.decodeCode 统一给(容错摘取 + 分情况文案),
+				 * 这里不再叠加重复提示 */
+				bridgeApi().emit("error", { message: err.message || "码无法识别" });
 				return;
 			}
 			pc.ondatachannel = function(e) {

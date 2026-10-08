@@ -1251,11 +1251,8 @@
 					throw new Error("这不是回执码,请粘贴客人回发的「回执码」");
 				}
 			} catch (err) {
-				var aMsg = err.message || "";
-				if (aMsg.indexOf("不是有效的联机助手码") >= 0 || aMsg.indexOf("码内容无法识别") >= 0) {
-					aMsg += "——码可能被聊天软件截断/加了表情,请让客人重新整段复制发一次";
-				}
-				bridgeApi().emit("error", { message: aMsg });
+				/* 码的诊断与出路由 rtc.decodeCode 统一给,这里不再叠加重复提示 */
+				bridgeApi().emit("error", { message: err.message || "码无法识别" });
 				return;
 			}
 			pc.setRemoteDescription(data.sdp).then(function() {

@@ -45,15 +45,31 @@
 			hosts: hosts && hosts.length ? hosts : undefined
 		}));
 	}
+	/* 从粘贴内容里**摘出**码本体:聊天软件常给码加前后文(「邀请码:」/引号/表情)、
+	 * 换行、或把整条消息一起复制进来——原先要求整串恰好等于 NNK1.<base64url>,
+	 * 于是"码明明是对的却说无效"(群友报障"邀请码没用"的一大来源)。
+	 * 做法:去掉所有空白,再在全串里找第一段 NNK1.<base64url> */
 	function decodeCode(str) {
 		var clean = String(str || "").replace(/\s+/g, "");
-		var m = /^NNK1\.([A-Za-z0-9\-_]+)$/.exec(clean);
+		var m = /NNK1\.([A-Za-z0-9\-_]+)/.exec(clean);
 		if (!m) {
-			throw new Error("不是有效的联机助手码");
+			/* 常见手滑分个类,给具体出路,而不是一句"不是有效的码" */
+			if (/^[A-HJ-NP-Z2-9]{6}$/.test(clean)) {
+				throw new Error("这看起来是 6 位房号——请用「🚪 加入房间」入口;邀请码是 NNK1. 开头的一长串");
+			}
+			if (clean.indexOf("NNK1") >= 0) {
+				throw new Error("码里的 NNK1 段不完整(可能被聊天软件截断)——请让对方重新整段复制一次");
+			}
+			throw new Error("不是有效的联机助手码(码以 NNK1. 开头;确认复制的是对方的「邀请码」或「回执码」)");
 		}
-		var data = JSON.parse(decodeB64Url(m[1]));
+		var data;
+		try {
+			data = JSON.parse(decodeB64Url(m[1]));
+		} catch (e) {
+			throw new Error("码内容无法识别(可能被聊天软件截断或改动)——请让对方重新整段复制一次");
+		}
 		if (!data || data.v !== 1 || !data.sdp || !data.sdp.sdp) {
-			throw new Error("码内容无法识别");
+			throw new Error("码内容无法识别(可能被聊天软件截断或改动)——请让对方重新整段复制一次");
 		}
 		return data;
 	}
