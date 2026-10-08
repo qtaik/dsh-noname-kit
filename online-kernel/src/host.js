@@ -92,6 +92,13 @@
 		try {
 			game.saveConfig("check_versionLocal", false, "connect");
 			game.saveConfig("check_extension", false, "connect");
+			/* 「允许旁观」默认是**开**的(引擎 startMenu.js:177 connect_observe init:true),
+			 * 而引擎 init 处理器对**对局进行中**进来的新客户端会走旁观分支:
+			 * lib.node.observing.push + 发 reinit(observe=房主 playerid)——客人直接变成
+			 * 旁观、视角挂在房主身上(实测:客人掉线重进,屏幕上全是房主视角 + 「退出旁观」)。
+			 * 关掉它:对局中的来客改走 denied("gaming"),由内核既有的「房主正在对局中,
+			 * 本局结束后自动进入」处理(0.3.74 已验证的那条路) */
+			game.saveConfig("connect_observe", false, "connect");
 		} catch (e) { /* 个别版本无此键也不影响建房 */ }
 		uiE.create.roomInfo();
 		uiE.create.chat();
@@ -875,6 +882,46 @@
 				}
 				return origCreateServer.apply(env.game, arguments);
 			};
+			/* 开局就绪门禁:引擎的 init 处理器会**先**把客人摆进等待房间(分配 playerid +
+			 * initOL 渲染),客人回 `inited` 之后才算握手完成(客户端回 inited → 主机
+			 * lib.message.server.inited)。而原生 startGame 不查这一条(library/index.js
+			 * 只判 this.id == game.onlinezhu)——主机看到客人已经出现在等待房间就点开始,
+			 * 客人那侧可能还在加载:实测把客人卡成半截界面(座位/牌堆散着、出牌不同步),
+			 * 之后只能退出重进。这里补一道门:还有客人没 inited 就拦下并说明原因;
+			 * 连点三次仍拦不住时放行(客人卡死时别把房主锁在等待房间,他可以本局结束后
+			 * 自动进入——对局中的来客已被 connect_observe=false 改成排队等下一局) */
+			try {
+				var srv = env.lib.message && env.lib.message.server;
+				if (srv && typeof srv.startGame === "function" && !srv.startGame.__nnkWrapped) {
+					var origStartGame = srv.startGame;
+					var startRefusedAt = 0;
+					var startRefusedCount = 0;
+					srv.startGame = function() {
+						try {
+							var notReady = 0;
+							var clients = (env.lib.node && env.lib.node.clients) || [];
+							for (var i = 0; i < clients.length; i++) {
+								var c = clients[i];
+								if (c && c.closed !== true && !c.inited) {
+									notReady++;
+								}
+							}
+							if (notReady > 0) {
+								var now = Date.now();
+								startRefusedCount = now - startRefusedAt < 30000 ? startRefusedCount + 1 : 1;
+								startRefusedAt = now;
+								if (startRefusedCount < 3) {
+									bridgeApi().emit("info", { message: "还有 " + notReady + " 位客人没进入房间(加载中)——已拦下开始;看到他们出现在房间里再点「开始游戏」(连点三次可强制开局)" });
+									return;
+								}
+								bridgeApi().emit("info", { message: "已强制开局:仍有 " + notReady + " 位客人没进入房间,他可以在本局结束后自动进入" });
+							}
+						} catch (e) { /* 判定失败不拦:宁可放开也别把开局卡死 */ }
+						return origStartGame.apply(this, arguments);
+					};
+					srv.startGame.__nnkWrapped = true;
+				}
+			} catch (e) { /* 引擎消息表结构异常时跳过该门禁 */ }
 			/* 跨重载接力 + 回房残留清理:
 			 * - 有 nnk_host_pending = 工坊刚点了创建、游戏正重载途中,恢复互联网建房;
 			 * - 没有时,必须清掉上次建房残留的 directstartmode/directstart——否则引擎

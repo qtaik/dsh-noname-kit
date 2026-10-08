@@ -337,6 +337,14 @@ export default { name: "standard", character: characters, translate: translates 
     '空粘贴与码损坏分开说(两端)')
   ok(guestSrc.includes('重新建房会换新房号'), '自动重回收场不再让用户拿旧房号白试')
 
+  /* ── 10-09 实测两报(对局中重进变旁观 / 客人没就绪就开局)── */
+  ok(hostSrc.includes('game.saveConfig("connect_observe", false, "connect")'),
+    '建房替房主关掉「允许旁观」:引擎默认开,对局中来客会被收成旁观、视角挂房主(实测)')
+  ok(hostSrc.includes('srv.startGame.__nnkWrapped') && hostSrc.includes('没进入房间(加载中)'),
+    '「开始游戏」就绪门禁:客人没回 inited 就拦下并说明(引擎原生 startGame 不查这条)')
+  ok(hostSrc.includes('连点三次可强制开局') && hostSrc.includes('已强制开局'),
+    '门禁留强制通道(客人卡死时不把房主锁在等待房间)')
+
   console.log(`\n全部通过:${passed} 项`)
 } finally {
   rmSync(home, { recursive: true, force: true })
