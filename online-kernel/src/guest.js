@@ -488,6 +488,8 @@
 							try { session.fake.channel.close(); } catch (eD) { /* 忽略 */ }
 						}, function() {
 							return session.fake ? (session.fake._lastIn || 0) : 0;   /* 主通道来包=主机活着 */
+						}, function() {
+							return session.pc ? session.pc.connectionState : null;   /* 传输层判活(不依赖对端 JS) */
 						});
 					};
 					return;
@@ -676,6 +678,8 @@
 					try { channel.close(); } catch (eD) { /* 忽略 */ }
 				}, function() {
 					return session.fake ? (session.fake._lastIn || 0) : 0;   /* 主通道来包=主机活着 */
+				}, function() {
+					return session.pc ? session.pc.connectionState : null;   /* 传输层判活(不依赖对端 JS) */
 				});
 			};
 			fake.onUp(function() {

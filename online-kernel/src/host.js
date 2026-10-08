@@ -541,6 +541,8 @@
 						try { pc.close(); } catch (eD) { /* 忽略 */ }
 					}, function() {
 						return pc._nnkTrafficAt || 0;   /* 主通道来包=对端活着(开局狂发数据心跳饿死场景) */
+					}, function() {
+						return pc.connectionState;      /* 传输层(ICE consent)才是"链路死没死"的权威 */
 					});
 				};
 				return;
@@ -668,6 +670,8 @@
 				try { pc.close(); } catch (eD) { /* 忽略 */ }
 			}, function() {
 				return pc._nnkTrafficAt || 0;   /* 主通道来包=对端活着 */
+			}, function() {
+				return pc.connectionState;      /* 传输层(ICE consent)才是"链路死没死"的权威 */
 			});
 		};
 		channel.onopen = function() {

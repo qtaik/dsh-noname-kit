@@ -73,11 +73,12 @@
 	 *  开局时主通道正狂发数据,而它那侧的心跳定时器饿死——只看心跳必误杀,
 	 *  实测:房主点开始游戏客人机必掉线)。
 	 * 返回 { stop() }:主动关闭通道前先 stop(),避免把自己的关闭当成对端掉线。 */
-	function startPing(channel, onDead, peerTraffic) {
+	function startPing(channel, onDead, peerTraffic, pcState) {
 		var stopped = false;
 		var lastSeen = Date.now();
 		var lastBuffered = null;
 		var timer = null;
+		var disconnectedSince = 0;
 		function stop(dead) {
 			if (stopped) {
 				return;
@@ -112,10 +113,36 @@
 			if (peerTraffic) {
 				try { trafficAt = peerTraffic() || 0; } catch (eT) { trafficAt = 0; }
 			}
+			/* 三路 JS 证据全静默 ≠ 对端死了:选将框重渲染(大武将池)或 5~6 秒高延迟下,
+			 * 双方可能整段不产生 JS 流量——旧逻辑 20 秒到点就杀,实测把活着的客人误杀,
+			 * 客机引擎随即自毁重载(用户看到"一到选将框就卡退")。
+			 * 判死前先问传输层:connectionState 由 Chromium 网络线程按 ICE consent 维护,
+			 * **不依赖对端 JS**(SCTP ACK/STUN 都由网络进程收发,渲染线程卡住也照常),
+			 * 正是纪律里"必须留一条不依赖对端 JS 的活证"。 */
 			if (Date.now() - Math.max(lastSeen, trafficAt) > 20000) {
-				stop(true);   /* 约 8 拍全无动静=静默。阈值 20 秒:三路证据之外仍留余量
-				               * 给"对端静默加载"(慢机器开局十几秒不发送任何东西) */
-				return;
+				var st = null;
+				if (pcState) {
+					try { st = pcState() || null; } catch (eS) { st = null; }
+				}
+				if (st === "connected" || st === "new" || st === "connecting") {
+					lastSeen = Date.now();   /* 传输层说链路活着:重置计时继续等(对端只是忙) */
+					disconnectedSince = 0;
+				} else if (st === "disconnected") {
+					/* ICE 抖动会自愈,先给一段恢复期;持续断开才当死 */
+					if (!disconnectedSince) {
+						disconnectedSince = Date.now();
+						lastSeen = Date.now();
+					} else if (Date.now() - disconnectedSince > 20000) {
+						stop(true);
+						return;
+					} else {
+						lastSeen = Date.now();
+					}
+				} else {
+					/* failed/closed/取不到状态(pcState 缺省):维持旧行为,宁可真判死 */
+					stop(true);
+					return;
+				}
 			}
 			try { channel.send("p"); } catch (e2) { /* 下一拍再判 */ }
 		}, 2500);

@@ -345,6 +345,14 @@ export default { name: "standard", character: characters, translate: translates 
   ok(hostSrc.includes('连点三次可强制开局') && hostSrc.includes('已强制开局'),
     '门禁留强制通道(客人卡死时不把房主锁在等待房间)')
 
+  /* 10-09 报障(选将框卡退 / 5~6 秒高延迟):判死必须先问传输层,不能只看 JS 三路证据 */
+  ok(rtcSrc.includes('function startPing(channel, onDead, peerTraffic, pcState)'),
+    'startPing 增加传输层判活参数(pc.connectionState)')
+  ok(rtcSrc.includes('st === "connected"') && rtcSrc.includes('disconnectedSince'),
+    'JS 静默时:connected 继续等、disconnected 给恢复期、failed/closed 才判死')
+  ok(hostSrc.split('return pc.connectionState').length === 3 && guestSrc.split('session.pc.connectionState').length === 3,
+    '主机两处/客人两处判死都接上传输层状态')
+
   console.log(`\n全部通过:${passed} 项`)
 } finally {
   rmSync(home, { recursive: true, force: true })
