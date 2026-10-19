@@ -16,7 +16,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { installKernelFiles, kernelContentHash, kernelInstallPending } from './kernel-install.js'
+import { installKernelFiles, bindKernelBridgeFiles, kernelContentHash, kernelInstallPending } from './kernel-install.js'
 
 export const KERNEL_FOLDER = '联机助手'
 export const KERNEL_MANIFEST = '.nnk-kernel.json'
@@ -107,14 +107,20 @@ export function kernelStatus({ nonameDir, token }) {
   let tokenMatches = null
   /* 桥配置在不在:内容哈希刻意跳过 nnk-bridge.json(安装时写入、不属于内核内容),
    * 所以它丢了/坏了 state 照样报 ok——而心跳全靠它,表现只有「内核永久离线」,
-   * 界面上看不出原因。missing 时给界面一条准确出路(重装内核) */
+   * 界面用 missing/invalid 区分缺失或无效配置，并提供显式重新绑定入口。 */
   let bridgeConfig = 'missing'
   try {
     const bridgeCfg = JSON.parse(readFileSync(join(target, 'nnk-bridge.json'), 'utf8'))
-    bridgeConfig = 'ok'
-    boundApi = bridgeCfg.baseUrl || null
-    if (typeof bridgeCfg.token === 'string' && typeof token === 'string' && token) {
-      tokenMatches = bridgeCfg.token === token
+    bridgeConfig = 'invalid'
+    if (bridgeCfg && typeof bridgeCfg === 'object' && !Array.isArray(bridgeCfg)) {
+      const address = typeof bridgeCfg.baseUrl === 'string' && /^http:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::(\d{1,5}))?\/noname-kit-api\/?$/i.exec(bridgeCfg.baseUrl)
+      const portValid = address && (!address[1] || Number(address[1]) >= 1 && Number(address[1]) <= 65535)
+      const tokenValid = typeof bridgeCfg.token === 'string' && bridgeCfg.token.length > 0 && bridgeCfg.token.length <= 4096 && !/[\x00-\x20\x7f]/.test(bridgeCfg.token)
+      if (portValid && tokenValid) {
+        bridgeConfig = 'ok'
+        boundApi = bridgeCfg.baseUrl
+        if (typeof token === 'string' && token) tokenMatches = bridgeCfg.token === token
+      }
     }
   } catch { /* 没装桥配置(未安装/老版本/被删) */ }
   return {
@@ -147,6 +153,26 @@ export function installKernel({ nonameDir, baseUrl, token, intervalMs }) {
     version: bundledKernelVersion(), build: bundledKernelBuild() })
   if (!result.ok) result.error += ioHint(result)
   return result
+}
+
+/** Resolve the bridge destination from a loopback Host and the actual listening port. */
+export function bridgeBaseUrl({ hostHeader, localPort, serverPort }) {
+  const host = String(hostHeader || '')
+  const match = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::(\d{1,5}))?$/i.exec(host)
+  if (!match) throw new Error('Host 必须是合法的本机回环地址和端口')
+  const validPort = value => /^\d{1,5}$/.test(String(value)) && Number(value) >= 1 && Number(value) <= 65535
+  if (match[1] !== undefined && !validPort(match[1])) throw new Error('Host 端口必须在 1–65535 之间')
+  const listening = localPort ?? serverPort
+  if (listening !== undefined && listening !== null && !validPort(listening)) throw new Error('无法确认当前 DSH 的监听端口')
+  if (listening != null && match[1] !== undefined && Number(match[1]) !== Number(listening)) throw new Error('Host 端口与当前 DSH 的监听端口不一致')
+  const port = listening ?? match[1]
+  if (!validPort(port)) throw new Error('无法确认当前 DSH 的监听端口')
+  return `http://127.0.0.1:${Number(port)}/noname-kit-api`
+}
+
+/** Explicitly rebind an installed kernel without copying its code or changing its manifest. */
+export function bindKernelBridge({ nonameDir, baseUrl, token }) {
+  return bindKernelBridgeFiles({ root: nonameDir, baseUrl, token })
 }
 
 /**

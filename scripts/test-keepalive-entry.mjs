@@ -141,15 +141,17 @@ await test('Current per-peer native handshake evidence survives diagnostic ring 
 });
 await test('Bridge serially awaits async commands and reports rejected commands',async()=>{
  const intervals=new Map(),calls=[],posted=[],events=[],nnk={version:'test',build:'test',state:{},modules:{config:{get:()=>'',defaults:{}}}};
- let intervalSeq=0,postResolve;const ctx={window:{__nnk__:nnk,addEventListener(){}},location:{origin:'http://localhost'},document:{},console,AbortController,Date,Promise,fetch:(url,options)=>{
-   if(options?.method!=='POST')return Promise.resolve({ok:true,json:async()=>({baseUrl:'http://bridge',token:'t'})});posted.push(JSON.parse(options.body));return new Promise(resolve=>{postResolve=resolve;});},
+  async function waitUntil(predicate){for(let i=0;i<1000;i++){if(predicate())return;await Promise.resolve();}assert.fail('Bridge fixture did not reach the expected asynchronous state');}
+  let intervalSeq=0,postResolve;const ctx={window:{__nnk__:nnk,addEventListener(){}},location:{origin:'http://localhost'},document:{},console,AbortController,URL,Date,Promise,setTimeout,clearTimeout,fetch:(url,options)=>{
+    if(options?.method!=='POST')return Promise.resolve({ok:true,json:async()=>({baseUrl:'http://127.0.0.1:3081/noname-kit-api',token:'t'})});posted.push(JSON.parse(options.body));return new Promise(resolve=>{postResolve=resolve;});},
  setInterval(fn){intervals.set(++intervalSeq,fn);return intervalSeq;},clearInterval(id){intervals.delete(id);}};
  vm.runInNewContext(fs.readFileSync(path.join(out,'bridge.js'),'utf8'),ctx);
  await nnk.modules.bridge.init({dispatch:async cmd=>{calls.push('start '+cmd.action);await Promise.resolve();if(cmd.action==='bad')throw Error('async rejected');calls.push('end '+cmd.action);}});
- postResolve({ok:true,json:async()=>({commands:[{action:'bad'},{action:'good'}]})});for(let i=0;i<20;i++)await Promise.resolve();
+  await waitUntil(()=>posted.length===1);
+  postResolve({ok:true,json:async()=>({commands:[{action:'bad'},{action:'good'}]})});await waitUntil(()=>!nnk.modules.bridge.snapshot().polling);
  assert.deepEqual(calls,['start bad','start good','end good']);assert.equal(nnk.modules.bridge.snapshot().events,1);
- [...intervals.values()][0]();assert.equal(posted.at(-1).events[0].data.cmd,'bad');
- nnk.modules.bridge.stop('old');postResolve({ok:true,json:async()=>({commands:[{action:'late'}]})});for(let i=0;i<20;i++)await Promise.resolve();assert.equal(calls.includes('start late'),false);assert.equal(intervals.size,0);
+  [...intervals.values()][0]();await waitUntil(()=>posted.length===2);assert.equal(posted.at(-1).events[0].data.cmd,'bad');
+  nnk.modules.bridge.stop('old');postResolve({ok:true,json:async()=>({commands:[{action:'late'}]})});await waitUntil(()=>!nnk.modules.bridge.snapshot().polling);assert.equal(calls.includes('start late'),false);assert.equal(intervals.size,0);
 });
 fs.writeFileSync(path.join(out,'results.json'),JSON.stringify({scope:'Actual module behavior with synthetic external resources; no native/physical claim',tests},null,2));console.log(JSON.stringify({out,passed:tests.filter(x=>x.ok).length,total:tests.length}));if(tests.some(x=>!x.ok))process.exitCode=1;
 

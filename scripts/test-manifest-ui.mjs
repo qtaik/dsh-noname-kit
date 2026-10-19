@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url'
 const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
 const support = client.slice(client.indexOf('function onlinePickEvent('), client.indexOf('    function OnlinePanel('))
 const card = client.slice(client.indexOf('function renderManifestCard('), client.indexOf('      function leaveRoom('))
-const factory = new Function('bridge', 'h', 'e', 'sendCmd', 'setNote', support + card + ';return {card:renderManifestCard,text:onlineEventText,current:onlineManifestCheck}')
+const factory = new Function('bridge', 'h', 'e', 'sendCmd', 'setNote', 'renderTransferLimit', support + card + ';return {card:renderManifestCard,text:onlineEventText,current:onlineManifestCheck}')
 const h = (tag, props, ...children) => ({ tag, props: props || {}, children: children.flat() })
 const e = (tag, className, ...children) => h(tag, { className }, ...children)
 const nodes = tree => tree && typeof tree === 'object' ? [tree, ...tree.children.flatMap(nodes)] : []
@@ -16,7 +16,7 @@ const text = tree => tree && typeof tree === 'object' ? tree.children.map(text).
 
 /** Project actual UI copy from kernel events without launching or modifying DSH. */
 export function projectManifest(events, { online = true, hostFlow = false, state, inRoom = false } = {}) {
-  const commands = [], impl = factory({ online, cfg: {}, state }, h, e, (...args) => commands.push(args), () => {})
+  const commands = [], impl = factory({ online, cfg: {}, state }, h, e, (...args) => commands.push(args), () => {}, () => null)
   const card = impl.card(events, hostFlow, inRoom)
   return { cardText: text(card), feedText: events.map(ev => impl.text(ev, online ? events : [])), current: impl.current(events), card, commands }
 }

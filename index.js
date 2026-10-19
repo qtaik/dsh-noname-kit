@@ -30,7 +30,7 @@ import { listExtensionFolders } from './src/detect.js'
 import { copyAudios, audioTargetKind } from './src/audio.js'
 import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, setSkillAudioFiles, setDieAudioFiles, completeById, deleteTask, reopenTask, getTask } from './src/tasks.js'
 import { bundledPresetDir, hostHasDeclarativePreset, installPreset, presetDirOf, presetStatus } from './src/preset.js'
-import { bundledKernelVersion, createBridgeSession, installKernel, kernelStatus, kernelRuntimeStatus } from './src/online.js'
+import { bundledKernelVersion, createBridgeSession, installKernel, bindKernelBridge, bridgeBaseUrl, kernelStatus, kernelRuntimeStatus } from './src/online.js'
 import { cachedUpdate, checkForUpdate, detectInstall, installHint } from './src/update.js'
 import { bashGuardReason, powershellGuardReason, guardMessage, pathHitsProtected } from './src/guard.js'
 import { readJsonSafeSync, writeJsonAtomicSync } from './src/store.js'
@@ -187,7 +187,7 @@ export function apply(ctx, config) {
   // ── 0.6) 联机助手:心跳桥会话 ─────────────────────────────────
   // 游戏内核(online-kernel/,随插件打包)轮询本插件的 /online/bridge 上报
   // 状态并取回工坊命令。token 存进设置文件:DSH 重启后不变,内核不用重装
-  // (baseUrl 里的端口如变化,重装一次内核即可刷新)。
+  // (baseUrl 里的端口或凭据变化时,可显式「绑定到此 DSH」刷新桥配置)。
   const bridgeToken = (() => {
     const cur = readSettingsFile().onlineBridgeToken
     if (cur) return cur
@@ -1025,25 +1025,18 @@ export function apply(ctx, config) {
           const result=recoverBatch(nonameDir)
           return json(['busy','recovery_required'].includes(result.status) ? 409 : 200, result)
         }
-        // 联机助手:内核安装与命令下发(要写游戏目录,必须在 503 闸门之后)
-        if (req.method === 'POST' && url.pathname === '/noname-kit-api/online/kernel/install') {
-          // baseUrl 供游戏内核回连本插件:同机回环,取本请求的 host 端口最准
-          /* baseUrl 是写进内核、由游戏回连本插件的地址:取 Host 的端口,但只认
-           * 回环(伪造的 Host 头会把内核指到别处,让状态永远显示离线) */
-          const hostHeader = String(req.headers.host || '')
-          /* 严格解析回环 Host：端口必须为纯数字，拒绝 @ 与空白，避免将桥地址或令牌导向外站。 */
-          if (/[@\s]/.test(hostHeader)) {
-            return json(400, { ok: false, error: `Host 头非法(含 @ 或空白),拒绝安装:收到「${hostHeader}」` })
+        // Bridge binding and installation share the same verified local destination.
+        if (req.method === 'POST' && ['/noname-kit-api/online/kernel/install', '/noname-kit-api/online/bridge/bind'].includes(url.pathname)) {
+          let baseUrl
+          try { baseUrl = bridgeBaseUrl({ hostHeader: req.headers.host, localPort: req.socket?.localPort, serverPort: webCtx.webServer?.port }) }
+          catch (error) { return json(400, { ok: false, error: error.message }) }
+          if (url.pathname === '/noname-kit-api/online/bridge/bind') {
+            if (String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase() !== 'application/json') return json(415, { ok: false, error: '请求必须是 application/json' })
+            try { await readBody() }
+            catch (error) { return json(error.statusCode || 400, { ok: false, error: '绑定请求必须是有效的 JSON' }) }
+            const result = bindKernelBridge({ nonameDir, baseUrl, token: bridgeToken })
+            return json(result.ok ? 200 : 400, result)
           }
-          const hostName = hostHeader.includes(':') ? hostHeader.slice(0, hostHeader.lastIndexOf(':')) : hostHeader
-          if (hostName && !isLoopbackName(hostName)) {
-            return json(400, { ok: false, error: `Host 必须是本机回环地址,收到「${hostHeader}」` })
-          }
-          const rawPort = hostHeader.includes(':') ? hostHeader.slice(hostHeader.lastIndexOf(':') + 1) : ''
-          const port = /^\d{1,5}$/.test(rawPort)
-            ? rawPort
-            : String((webCtx.webServer && webCtx.webServer.port) || 80)   /* Host 缺端口:用真实监听端口,别硬编码 80 */
-          const baseUrl = `http://127.0.0.1:${port}/noname-kit-api`
           const result = installKernel({ nonameDir, baseUrl, token: bridgeToken })
           if (result.ok) {
             console.log(`[noname-kit] 联机内核已安装到 ${result.target}(重启游戏生效)${result.backup ? `,旧版备份到 ${result.backup}` : ''}`)

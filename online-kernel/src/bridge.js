@@ -12,7 +12,7 @@
 	var seq = 0;
 	var events = [];
 	var backlog = [];   /* 保存尚未确认送达的事件，下次心跳继续发送；应答异常时保留队列，确保邀请码等内容可重试送达。 */
-	var stopped = false, epoch = 0, controller = null, commandOverride = null, ordinaryOperations = null;
+	var stopped = false, epoch = 0, controller = null, configController = null, initializing = false, commandOverride = null, ordinaryOperations = null;
 	var confirmedTransferLimitMB = nnk.modules.config && nnk.modules.config.get("transferLimitMB");
 	var polling = false;   /* 串行化:0.7 秒一拍比一次请求快时,不让两轮并发 */
 	var state = { phase: "idle", ts: Date.now() };
@@ -32,9 +32,23 @@
 
 	function readBridgeConfig() {
 		var url = location.origin + "/extension/" + encodeURIComponent("联机助手") + "/nnk-bridge.json";
-		return fetch(url, { cache: "no-store" })
+		var abort = new AbortController();
+		configController = abort;
+		var deadline = setTimeout(function() { abort.abort(); }, 2500);
+		return fetch(url, { cache: "no-store", signal: abort.signal })
 			.then(function(r) { return r.ok ? r.json() : null; })
-			.catch(function() { return null; });
+			.then(function(value) {
+				if (!value || typeof value.token !== "string" || !value.token || typeof value.baseUrl !== "string") return null;
+				var endpoint = new URL(value.baseUrl);
+				if (endpoint.protocol !== "http:" || ["127.0.0.1", "localhost", "[::1]"].indexOf(endpoint.hostname) < 0 || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) return null;
+				return value;
+			})
+			.catch(function() { return null; })
+			.finally(function() { clearTimeout(deadline); if (configController === abort) configController = null; });
+	}
+
+	function sameBinding(a, b) {
+		return !!a && !!b && a.baseUrl === b.baseUrl && a.token === b.token;
 	}
 
 	async function dispatch(cmd) {
@@ -177,13 +191,21 @@
 		}
 	}
 
-	function poll() {
-		if (!cfg || polling || stopped) {
+	async function poll() {
+		if (polling || stopped) {
 			return;
 		}
 		polling = true;
 		var capturedEpoch = epoch;
+		var latest = await readBridgeConfig();
+		if (stopped || capturedEpoch !== epoch || !latest) { polling = false; return; }
+		/* 本地绑定文件是显式绑定的依据；切换凭据时不转送前一实例的私有事件。 */
+		if (cfg && cfg.token !== latest.token) { events = []; backlog = []; }
+		cfg = latest;
+		var binding = cfg;
 		controller = new AbortController();
+		var requestController = controller;
+		var deadline = setTimeout(function() { requestController.abort(); }, 2500);
 		var batch = backlog.concat(events.splice(0, events.length));
 		backlog = batch;   /* 先记账:这一批没确认送达前都算欠着 */
 		var req;
@@ -256,6 +278,7 @@
 			});
 		} catch (err) {
 			failures++;   /* fetch 同步抛错(地址非法等):下一轮照常重试 */
+			clearTimeout(deadline);
 			polling = false;
 			return;
 		}
@@ -268,10 +291,13 @@
 			return r.json();
 		}).then(async function(body) {
 			if (stopped || capturedEpoch !== epoch) return;
+			/* 旧端口的延迟应答不能在用户更换绑定后继续下发命令。 */
+			if (!sameBinding(binding, await readBridgeConfig()) || stopped || capturedEpoch !== epoch) return;
 			backlog = [];   /* 收到送达确认后清空本次发送的事件积压。 */
 			var cmds = body && body.commands || [];
 			for (var i = 0; i < cmds.length; i++) {
 				if (stopped || capturedEpoch !== epoch) break;
+				if (i && (!sameBinding(binding, await readBridgeConfig()) || stopped || capturedEpoch !== epoch)) break;
 				await dispatchSafe(cmds[i]);
 			}
 		}).catch(function(err) {
@@ -281,6 +307,8 @@
 				console.warn("[联机助手] 桥暂时不通(" + failures + " 次):", err && err.message);
 			}
 		}).then(function() {
+			clearTimeout(deadline);
+			if (controller === requestController) controller = null;
 			polling = false;
 		});
 	}
@@ -288,20 +316,20 @@
 	window.addEventListener("pagehide", function() { nnk.modules.bridge.stop("document retired"); }, {once: true});
 	nnk.modules.bridge = {
 		init: async function(options) {
-			if (timer || cfg) throw Error("同一窗口桥已启动");
+			if (timer || cfg || initializing) throw Error("同一窗口桥已启动");
+			initializing = true;
 			stopped = false; var initEpoch = ++epoch; commandOverride = options && options.dispatch || null;
 			var c = await readBridgeConfig();
+			initializing = false;
 			if (stopped || epoch !== initEpoch) return;
-			(function(c) {
-				if (!c || !c.baseUrl || !c.token) {
-					console.log("[联机助手] 未找到桥配置(nnk-bridge.json),无头待机(联机操作不可用,重新安装内核可修复)");
-					return;
-				}
-				cfg = c;
+			cfg = c;
+			if (c) {
 				console.log("[联机助手] 心跳桥就绪: " + c.baseUrl);
-				poll();
-				timer = setInterval(poll, c.intervalMs || 700);
-			})(c);
+			} else {
+				console.log("[联机助手] 等待有效桥配置，可在工坊绑定到当前 DSH");
+			}
+			poll();
+			timer = setInterval(poll, c && c.intervalMs || 700);
 		},
 		beforeTransition: async function() {
 			var deadline = Date.now() + 10000, capturedEpoch = epoch;
@@ -316,6 +344,7 @@
 		stop: function(reason) {
 			stopped = true; epoch++; if (timer) clearInterval(timer); timer = null;
 			if (controller) controller.abort(reason); controller = null; cfg = null; commandOverride = null;
+			if (configController) configController.abort(reason); configController = null;
 			if (ordinaryOperations) ordinaryOperations.dispose(reason); ordinaryOperations = null;
 		},
 		dispatchSafe: dispatchSafe,

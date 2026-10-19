@@ -1,7 +1,7 @@
 /** Kernel installation stages outside extension/; a journal lets a later install recover interrupted directory switches. */
 import * as fs from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
-import { join, resolve, relative, isAbsolute } from 'node:path'
+import { join, resolve, relative, isAbsolute, dirname, parse } from 'node:path'
 import batchFiles from '../online-kernel/lib/batch-files.cjs'
 
 const WORK = 'nnk-kernel-install'
@@ -46,8 +46,8 @@ export function kernelContentHash(dir) {
   for (const rel of files.sort()) hash.update(rel).update('\0').update(fs.readFileSync(join(dir, rel))).update('\0')
   return hash.digest('hex')
 }
-function durableWrite(path, data) {
-  const fd = fs.openSync(path, 'w')
+function durableWrite(path, data, flags = 'w') {
+  const fd = fs.openSync(path, flags)
   try { fs.writeFileSync(fd, data); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
 }
 function writeJournal(work, value) {
@@ -97,6 +97,7 @@ function recover(root) {
 function acquireLock(work) {
   const lock = join(work, 'install.lock')
   if (fs.existsSync(lock)) {
+    realFile(lock)
     const previous = JSON.parse(fs.readFileSync(lock, 'utf8'))
     if (!Number.isSafeInteger(previous.pid) || previous.pid < 1) throw new Error('安装锁无法识别，保留文件')
     try { process.kill(previous.pid, 0); throw new Error('另一个安装进程仍在运行') }
@@ -106,6 +107,85 @@ function acquireLock(work) {
   const fd = fs.openSync(lock, 'wx')
   try { fs.writeFileSync(fd, JSON.stringify({ pid: process.pid })); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
   return () => fs.unlinkSync(lock)
+}
+
+function realFile(path) {
+  const stat = fs.lstatSync(path)
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) throw new Error('文件含链接或不是普通文件: ' + path)
+  return stat
+}
+function optionalStat(path) {
+  try { return fs.lstatSync(path) } catch (error) { if (error.code === 'ENOENT') return null; throw error }
+}
+/** Binding changes only one configuration file and never installs or recovers a kernel. */
+export function bindKernelBridgeFiles({ root, baseUrl, token }) {
+  let release, batchLease, temporary
+  try {
+    const match = /^http:\/\/127\.0\.0\.1:(\d{1,5})\/noname-kit-api$/.exec(baseUrl)
+    if (!match || Number(match[1]) < 1 || Number(match[1]) > 65535) throw new Error('桥地址必须是有效的本机回环端口')
+    if (typeof token !== 'string' || !token || token.length > 4096) throw new Error('当前 DSH 的桥令牌不可用')
+    const resolved = resolve(root)
+    if (resolved === parse(resolved).root) throw new Error('不能将磁盘根目录作为游戏目录')
+    let current = resolved
+    while (true) {
+      realDirectory(current)
+      const parent = dirname(current)
+      if (parent === current) break
+      current = parent
+    }
+    const real = fs.realpathSync.native(resolved)
+    if ((process.platform === 'win32' ? real.toLowerCase() !== resolved.toLowerCase() : real !== resolved)) throw new Error('游戏目录包含重定向路径')
+    root = resolved
+    const extension = join(root, 'extension'), target = join(extension, FOLDER), config = join(target, BRIDGE)
+    realDirectory(extension)
+    if (!optionalStat(target)) throw Object.assign(new Error('尚未安装联机内核，请先安装内核'), { code: 'KERNEL_MISSING' })
+    realDirectory(target)
+    if (!optionalStat(join(target, 'extension.js'))) throw Object.assign(new Error('已安装的联机内核缺少入口，请先修复内核'), { code: 'KERNEL_MISSING' })
+    realFile(join(target, 'extension.js'))
+    const batches = join(root, 'nnk-batches')
+    if (optionalStat(batches)) realDirectory(batches)
+    if (optionalStat(join(batches, 'active'))) throw Object.assign(new Error('补传批次尚未恢复，请先执行离线恢复。'), { code: 'BATCH_RECOVERY_REQUIRED' })
+    if (process.platform === 'win32') batchLease = batchFiles.acquireWriteLease(root)
+    const work = join(root, WORK)
+    if (!optionalStat(work)) fs.mkdirSync(work)
+    realDirectory(work)
+    release = acquireLock(work)
+    if (optionalStat(join(work, 'active.json'))) throw Object.assign(new Error('内核安装尚未恢复，请先关闭游戏并恢复安装。'), { code: 'KERNEL_RECOVERY_REQUIRED' })
+    if (optionalStat(join(batches, 'active'))) throw Object.assign(new Error('补传批次尚未恢复，请先执行离线恢复。'), { code: 'BATCH_RECOVERY_REQUIRED' })
+    let previous = {}, recovered = false
+    const directories = [root, extension, target, work].map(path => ({ path, ino: fs.lstatSync(path, { bigint: true }).ino }))
+    if (optionalStat(config)) {
+      if (realFile(config).size > 65536) throw new Error('原桥配置过大，请检查后重试')
+      const original = fs.readFileSync(config)
+      try { previous = JSON.parse(original.toString('utf8')) } catch { previous = null }
+      if (!previous || typeof previous !== 'object' || Array.isArray(previous)) {
+        // Preserve exact corrupt bytes before replacing the configuration on explicit binding.
+        durableWrite(join(work, 'bridge-original-' + randomUUID() + '.json'), original, 'wx')
+        previous = {}
+        recovered = true
+      }
+    }
+    if (previous.baseUrl === baseUrl && previous.token === token) return { ok: true, bridgeBinding: { baseUrl, changed: false } }
+    const next = { ...previous, baseUrl, token }
+    if (next.intervalMs === undefined) next.intervalMs = 700
+    temporary = join(work, 'bridge-' + randomUUID() + '.tmp')
+    durableWrite(temporary, JSON.stringify(next, null, 2), 'wx')
+    batchLease?.check()
+    for (const directory of directories) {
+      realDirectory(directory.path)
+      if (fs.lstatSync(directory.path, { bigint: true }).ino !== directory.ino) throw new Error('绑定目录在写入期间发生变化，原绑定未覆盖')
+    }
+    if (optionalStat(config)) realFile(config)
+    fs.renameSync(temporary, config)
+    temporary = null
+    return { ok: true, bridgeBinding: { baseUrl, changed: true, ...(recovered ? { recovered: true } : {}) } }
+  } catch (error) {
+    return { ok: false, error: '绑定到此 DSH 失败: ' + error.message, ...(error.code ? { code: error.code } : {}) }
+  } finally {
+    if (temporary) { try { fs.unlinkSync(temporary) } catch { /* Keep an interrupted temporary write for diagnosis. */ } }
+    if (release) { try { release() } catch { /* A later operation can diagnose a retained lock. */ } }
+    if (batchLease) { try { batchLease.release() } catch { /* The bridge file has already been atomically committed or left unchanged. */ } }
+  }
 }
 /** Prepare, verify, then rename; ordinary failures restore the old directory, crashes recover on the next install. */
 export function installKernelFiles({ root, source, version, build, baseUrl, token, intervalMs }) {

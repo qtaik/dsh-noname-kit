@@ -4,12 +4,12 @@ import {readFileSync} from 'node:fs';
 const src=readFileSync(new URL('../client.js',import.meta.url),'utf8');
 const support=src.slice(src.indexOf('function onlinePickEvent('),src.indexOf('    function OnlinePanel('));
 const component=src.slice(src.indexOf('function renderManifestCard('),src.indexOf('      function leaveRoom('));
-const factory=new Function('bridge','evs','hostFlow','inRoom','h','e','sendCmd','setNote',support+component+';return renderManifestCard(evs,hostFlow,inRoom);');
+const factory=new Function('bridge','evs','hostFlow','inRoom','h','e','sendCmd','setNote','renderTransferLimit',support+component+';return renderManifestCard(evs,hostFlow,inRoom);');
 const h=(tag,props,...children)=>({tag,props:props||{},children:children.flat(Infinity)}),e=(tag,className,...children)=>h(tag,{className},...children),nodes=x=>x&&typeof x==='object'?[x,...x.children.flatMap(nodes)]:[],text=x=>x&&typeof x==='object'?x.children.map(text).join(''):String(x??'');
 const scope={carrierSessionId:'manual-ui-current-carrier',partyEpoch:2},peer={peerId:'actual-current-peer',name:'Guest A'};
 function draw({state={},host=true,role=host?'host':'guest',online=true,events=[],inRoom=true}={}){
  const commands=[],notes=[],bridge={role,online,state:{transferScope:scope,manifestScope:scope,transferAvailable:true,transferPeers:[peer],transferBusy:false,transferRequestPending:false,manifestAvailable:true,...state}};
- const tree=factory(bridge,events,host,inRoom,h,e,(...args)=>commands.push(args),note=>notes.push(note)),all=nodes(tree),manual=all.find(n=>n.props['data-nnk-manual-transfer']);
+ const tree=factory(bridge,events,host,inRoom,h,e,(...args)=>commands.push(args),note=>notes.push(note),()=>null),all=nodes(tree),manual=all.find(n=>n.props['data-nnk-manual-transfer']);
  return {tree,all,manual,commands,notes,copy:text(tree),buttons:manual?nodes(manual).filter(n=>n.tag==='button'):[],rows:manual?nodes(manual).filter(n=>Object.hasOwn(n.props,'data-nnk-transfer-peer')):[]};
 }
 function assertBlocked(options){const f=draw(options);assert.equal(f.buttons.length,1);assert.equal(f.buttons[0].props.disabled,true);f.buttons[0].props.onClick();assert.deepEqual(f.commands,[]);assert.deepEqual(f.notes,[]);return f;}

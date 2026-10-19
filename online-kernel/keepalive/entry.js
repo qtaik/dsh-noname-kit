@@ -71,7 +71,9 @@ export async function install(nnk,lease){
   let timer=setInterval(()=>{
     if(!lease.isCurrent()){clearInterval(timer);timer=null;return;}
     if(nnk.state.bootStage!=='ready'||nnk.env.lib.onload!==undefined||nnk.env._status.extensionLoading!==undefined||
-      !nnk.env.ui.window?.isConnected||document.readyState!=='complete')return;
+      document.readyState!=='complete')return;
+    // Ordinary documents can bridge from mode selection; engine endpoints need an actual arena.
+    if(info.role==='engine'&&!nnk.env.ui.window?.isConnected)return;
     if(sessionStorage.getItem('isJITReloaded')!=='true'||!['true','false'].includes(sessionStorage.getItem('canUseTs')))return;
     clearInterval(timer);timer=null;
     if(info.role==='ordinary'){
