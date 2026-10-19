@@ -1,3 +1,4 @@
+import {transferPeerDisplay} from './transfer-display.js';
 export const TRANSFER_PROTOCOL='nnk-transfer/2';
 export const TRANSFER_TYPES=new Set(['transfer-consent','transfer-file']);
 export const TRANSFER_MAX_BYTES=1073741824,TRANSFER_MAX_TTL_MS=900000;
@@ -37,7 +38,11 @@ export class CarrierTransfer {
  _gate(peer){try{const value=this.canTransfer(peer);return value?.available===true?{available:true,reason:''}:{available:false,reason:String(value?.reason||'当前不能补传').slice(0,240)};}catch{return {available:false,reason:'当前文件事务条件尚未确认'};}}
  _canRotate(r,d,queued=false){return !!r.remote&&d.scope.carrierSessionId===r.remoteScope?.carrierSessionId&&d.scope.partyEpoch>r.remoteScope.partyEpoch&&d.nonce!==r.remote&&d.nonce!==r.local&&!r.collecting&&!r.diskPending&&r.queueDepth<=(queued?1:0)&&!this.pendingCleanup&&!(r.q&&(active.has(r.q.status)||r.q.fileCommitted||irreversible.has(r.q.fileState?.status)))&&this._gate(r.peer).available;}
  _binding(r,q){return {session:r.local,peerSession:r.remote,proposal:q.id,digest:q.digest,peerId:r.peer,scope:clone(r.scope)};}
- _view(r,q){return {...this._binding(r,q),role:r.role,status:q.status,source:'房主',batch:{extensions:q.batch.extensions.map(e=>({name:e.name,fileCount:e.files.length})),total:q.batch.total,count:q.batch.count},ttlMs:q.ttlMs,expires:q.expires,reason:q.reason||'',transferPaused:false};}
+ _display(r,q){
+  if(!q.peerDisplay){const record=this.sessions.get(r.peer);q.peerDisplay=record?.connectionSessionId===r.connectionSessionId&&this.sessions.getOwner(r.peer)===r.owner?transferPeerDisplay(record,r.role):r.display||transferPeerDisplay(null,r.role);}
+  return clone(q.peerDisplay);
+ }
+ _view(r,q){return {...this._binding(r,q),...this._display(r,q),role:r.role,status:q.status,source:'房主',batch:{extensions:q.batch.extensions.map(e=>({name:e.name,fileCount:e.files.length})),total:q.batch.total,count:q.batch.count},ttlMs:q.ttlMs,expires:q.expires,reason:q.reason||'',transferPaused:false};}
  _emit(r,q){this.emit('batch_consent',this._view(r,q));}
  _send(r,op,fields={}){if(!this._actual(r))throw Error('原补传连接或会话已结束');const data={protocol:TRANSFER_PROTOCOL,partySessionId:null,roundId:null,operationId:null,requestId:this.newId(),connectionSessionId:r.connectionSessionId,scope:clone(r.scope),op,...fields};this.sessions.sendControl(r.peer,'transfer-consent',data);}
  _bound(r,q){return {from:r.local,to:r.remote,proposal:q.id,digest:q.digest};}
@@ -48,7 +53,7 @@ export class CarrierTransfer {
   if(known)this.forgetPeer(peer);const owner=this.sessions.getOwner(peer),record=this.sessions.get(peer),role=this.getRole(),scope=this._scope();
   if(!owner||!record||!this.sessions.isLive(peer)||!['host','guest'].includes(role)||owner.role!==role||this.sessions.peerForActualOwner(owner)!==peer||this.peers.size>=MAX_PEERS)return false;
   const local=this.newId();if(!nonce(local))throw Error('Fresh transfer nonce required');
-  const r={peer,owner,connectionSessionId:record.connectionSessionId,role,scope:clone(scope),local,remote:null,remoteScope:null,q:null,used:new Set(),seen:new Set(),fingerprints:new Set(),lastSequence:owner.snapshot().lastAcceptedControlSeq||0,queue:Promise.resolve(),queueDepth:0,collecting:null,diskPending:0,helloAttempts:0,helloTimer:null};this.peers.set(peer,r);this._hello(r);return true;
+  const r={peer,owner,connectionSessionId:record.connectionSessionId,display:transferPeerDisplay(record,role),role,scope:clone(scope),local,remote:null,remoteScope:null,q:null,used:new Set(),seen:new Set(),fingerprints:new Set(),lastSequence:owner.snapshot().lastAcceptedControlSeq||0,queue:Promise.resolve(),queueDepth:0,collecting:null,diskPending:0,helloAttempts:0,helloTimer:null};this.peers.set(peer,r);this._hello(r);return true;
  }
  _filePacket(packet,role){
   if(!plain(packet)||packet.nnk_files!==2||!nonce(packet.from)||!nonce(packet.to)||!nonce(packet.proposal)||!hash(packet.digest)||!Object.hasOwn(fileFields,packet.kind)||byteSize(packet)>MAX_FILE)return false;
@@ -134,7 +139,7 @@ export class CarrierTransfer {
   if(!this._authorized(r,q)||r.channel)return;
   const context=this._context(r,q);
   r.channel=this.createChannel({role:r.role,authorize:()=>this._authorized(r,q)?this._grant(r,q):null,send:raw=>{if(!this._actual(r)||r.q!==q)throw Error('原文件连接已结束');const packet=JSON.parse(raw);if(Object.hasOwn(packet,'reason'))packet.reason=packet.status==='unknown'?'文件结果尚未确认，请核对客机完整批次并重新体检。':packet.status==='recovery_required'?'本机文件恢复尚未完成，请先处理恢复状态。':packet.status==='activation_pending'?'整批文件已提交，正在保存客机扩展启用设置。':packet.status==='committed'?'客机已自动启用本批扩展，请完全退出并重启无名杀后重新体检。':packet.status==='committed_activation_required'?'整批文件已提交，自动启用结果需在客机确认；无需重新下载。':'本次文件操作未完成，请在对应设备查看本机提示。';if(byteSize(packet)>MAX_FILE)throw Error('文件帧超过上限');if((r.owner.link?.bufferedAmount||0)>2*1048576)throw Error('文件通道积压超过上限');this.sessions.sendControl(r.peer,'transfer-file',{protocol:TRANSFER_PROTOCOL,partySessionId:null,roundId:null,operationId:null,requestId:this.newId(),connectionSessionId:r.connectionSessionId,scope:clone(r.scope),packet});},
-   source:async grant=>{if(!this._authorized(r,q))throw Error('本批没有当前授权');return await this.source(grant,context);},receiver:async grant=>{if(!this._authorized(r,q))throw Error('本批没有客机当前授权');return await this.receiver(grant,context);},report:value=>{q.fileState=clone(value);q.fileCommitted=value.fileCommitted===true||q.fileCommitted===true;if(!q.fileCommitted&&terminal.has(value.status)){q.status=value.status;q.reason=value.reason||'';q.cancelRequested=true;this.clearTimer(q.timer);this.clearTimer(q.retryTimer);q.timer=q.retryTimer=null;this._emit(r,q);}this.emit('batch_files',{...value,...this._binding(r,q)});}});
+   source:async grant=>{if(!this._authorized(r,q))throw Error('本批没有当前授权');return await this.source(grant,context);},receiver:async grant=>{if(!this._authorized(r,q))throw Error('本批没有客机当前授权');return await this.receiver(grant,context);},report:value=>{q.fileState=clone(value);q.fileCommitted=value.fileCommitted===true||q.fileCommitted===true;if(!q.fileCommitted&&terminal.has(value.status)){q.status=value.status;q.reason=value.reason||'';q.cancelRequested=true;this.clearTimer(q.timer);this.clearTimer(q.retryTimer);q.timer=q.retryTimer=null;this._emit(r,q);}this.emit('batch_files',{...value,...this._binding(r,q),...this._display(r,q)});}});
   r.diskPending++;try{await r.channel.granted();}finally{r.diskPending--;}
  }
  _finish(r,q,status,reason,notify){return this._track(this._stop(r,q,status,reason,notify));}
@@ -145,7 +150,7 @@ export class CarrierTransfer {
   if(r.channel){r.diskPending++;this.pendingCleanup++;try{await r.channel.stop(status,String(reason));}finally{r.diskPending--;this.pendingCleanup--;}}
   this._emit(r,q);
  }
- _remember(r,q){this.history.push({proposal:this._view(r,q),file:q.fileState&&{...clone(q.fileState),...this._binding(r,q)}});while(this.history.length>32)this.history.shift();}
+ _remember(r,q){this.history.push({proposal:this._view(r,q),file:q.fileState&&{...clone(q.fileState),...this._binding(r,q),...this._display(r,q)}});while(this.history.length>32)this.history.shift();}
  _blocksRequest(r,peer){const completedOther=r.peer!==peer&&r.role==='host'&&r.q?.fileCommitted===true&&['committed','committed_activation_required'].includes(r.q.fileState?.status);return r.collecting||r.diskPending||r.queueDepth||!completedOther&&r.q&&(active.has(r.q.status)||r.q.fileCommitted||irreversible.has(r.q.fileState?.status));}
  requestBusy(peer){return this.isRequestPending()||this.operations.size>0||this.pendingCleanup>0||[...this.peers.values()].some(r=>this._blocksRequest(r,peer));}
  async _propose(r,names,explicit=false){
@@ -178,7 +183,7 @@ export class CarrierTransfer {
  availability(){const gate=this._gate();if(this.closed)return {available:false,reason:'补传控制器已结束',peers:[]};const peers=[...this.peers.values()].filter(r=>this._actual(r)&&r.remote).map(r=>r.peer);return {available:gate.available&&peers.length>0,reason:gate.available?(peers.length?'':'补传需要双方升级内核并完全重启无名杀'):gate.reason,peers};}
  busy(){return this.isRequestPending()||this.operations.size>0||this.pendingCleanup>0||[...this.peers.values()].some(r=>r.collecting||r.diskPending||r.queueDepth||r.q&&(active.has(r.q.status)||r.q.fileCommitted||irreversible.has(r.q.fileState?.status)));}
  canStart(){return !this.busy();}
- snapshot(){const proposals=this.history.map(x=>clone(x.proposal)),files=this.history.filter(x=>x.file).map(x=>clone(x.file));for(const r of this.peers.values())if(r.q){proposals.push(this._view(r,r.q));if(r.q.fileState)files.push({...clone(r.q.fileState),...this._binding(r,r.q)});}return {proposals,files,...this.availability(),busy:this.busy(),requestBusy:this.requestBusy(),resources:{peers:this.peers.size,history:this.history.length,pendingCleanup:this.pendingCleanup,pendingOperations:[...this.peers.values()].reduce((n,r)=>n+r.queueDepth+r.diskPending+Number(!!r.collecting),0)}};}
+ snapshot(){const proposals=this.history.map(x=>clone(x.proposal)),files=this.history.filter(x=>x.file).map(x=>clone(x.file));for(const r of this.peers.values())if(r.q){proposals.push(this._view(r,r.q));if(r.q.fileState)files.push({...clone(r.q.fileState),...this._binding(r,r.q),...this._display(r,r.q)});}return {proposals,files,...this.availability(),busy:this.busy(),requestBusy:this.requestBusy(),resources:{peers:this.peers.size,history:this.history.length,pendingCleanup:this.pendingCleanup,pendingOperations:[...this.peers.values()].reduce((n,r)=>n+r.queueDepth+r.diskPending+Number(!!r.collecting),0)}};}
  forgetPeer(peer){const r=this.peers.get(peer);if(!r)return Promise.resolve(false);this.peers.delete(peer);this.clearTimer(r.helloTimer);r.collecting?.controller.abort();if(r.q){r.q.cancelRequested=true;this.clearTimer(r.q.timer);this.clearTimer(r.q.retryTimer);if(!r.q.fileCommitted&&!irreversible.has(r.q.fileState?.status)){r.q.status='disconnected';r.q.reason='连接结束，旧授权不复用';}}
   this.pendingCleanup++;const done=Promise.allSettled([Promise.resolve().then(()=>r.channel?.close()),r.queue]).finally(()=>{if(r.q)this._remember(r,r.q);this.pendingCleanup--;});return done.then(()=>true);
  }

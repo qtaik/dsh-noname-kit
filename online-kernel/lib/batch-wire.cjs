@@ -15,7 +15,7 @@ class Channel {
   currentGrant(){const a=this.authorize();return a&&a.expires>this.now()?a:null}
   frame(ctx,kind,fields={}){if(this.closed)throw Error('File channel closed');this.send(JSON.stringify({nnk_files:VERSION,from:ctx.grant.session,to:ctx.grant.peerSession,proposal:ctx.grant.proposal,digest:ctx.grant.digest,kind,...fields}))}
   state(ctx,status,reason=''){if(ctx.fileCommitted&&['cancelled','failed','expired','disconnected'].includes(status))return;ctx.status=status;ctx.reason=String(reason).slice(0,200);try{this.report(this.snapshot(ctx))}catch(error){/* A UI listener cannot stop resource cleanup. */}}
-  snapshot(c=this.current){return c?{...c.grant,batch:{extensions:c.grant.batch.extensions.map(e=>({name:e.name,fileCount:e.files.length})),count:c.grant.batch.count,total:c.grant.batch.total},status:c.status,reason:c.reason||'',received:c.received||0,total:c.grant.batch.total,role:this.role,fileCommitted:!!c.fileCommitted,transactionId:c.transactionId}:null}
+  snapshot(c=this.current){return c?{...c.grant,batch:{extensions:c.grant.batch.extensions.map(e=>({name:e.name,fileCount:e.files.length})),count:c.grant.batch.count,total:c.grant.batch.total},status:c.status,reason:c.reason||'',received:c.received||0,...(this.role==='host'?{acknowledged:c.acknowledged||0}:{}),total:c.grant.batch.total,role:this.role,fileCommitted:!!c.fileCommitted,transactionId:c.transactionId}:null}
   live(ctx){return !this.closed&&!ctx.fileCommitted&&this.current===ctx&&!terminal.has(ctx.status)&&this.matches(ctx.grant,this.currentGrant())}
   committed(ctx,result={}){
     ctx.fileCommitted=true;ctx.transactionId=result.id||ctx.transactionId;this.clear(ctx);
@@ -45,7 +45,7 @@ class Channel {
     if(!this.matches(grant,this.currentGrant())||this.closed)return;
     if(this.current&&this.matches(this.current.grant,grant))return;
     if(this.current)this.clear(this.current);
-    const ctx={grant:JSON.parse(JSON.stringify(grant)),status:'starting',pending:new Map(),seen:new Map(),nextSeq:0,rxNext:0,rxFile:0,rxOffset:0,file:0,offset:0,received:0,finished:false};this.current=ctx;
+    const ctx={grant:JSON.parse(JSON.stringify(grant)),status:'starting',pending:new Map(),seen:new Map(),nextSeq:0,rxNext:0,rxFile:0,rxOffset:0,file:0,offset:0,received:0,acknowledged:0,finished:false};this.current=ctx;
     ctx.deadline=this.timers.setTimeout(()=>{if(this.current===ctx)this.stop('expired','文件授权已超时')},Math.max(0,grant.expires-this.now()));
     try{
       if(this.role==='guest'){
@@ -100,7 +100,14 @@ class Channel {
       }
       if(m.kind==='ack'){
         if(!Number.isSafeInteger(m.seq)||m.seq<0)throw Error('Invalid chunk acknowledgement');
-        this.ack(ctx,m.seq);await this.pump(ctx);return;
+        const pending=ctx.pending.get(m.seq);
+        if(this.ack(ctx,m.seq)&&pending&&typeof pending.packet.data==='string'){
+          // Only the first acknowledgement of a locally queued chunk advances the display.
+          ctx.acknowledged+=Buffer.byteLength(pending.packet.data,'base64');
+          const at=this.now(),complete=ctx.file===ctx.grant.batch.count&&ctx.pending.size===0;
+          if(ctx.status==='sending'&&(complete||ctx.lastProgressAt===undefined||at-ctx.lastProgressAt>=250)){ctx.lastProgressAt=at;this.state(ctx,'sending')}
+        }
+        await this.pump(ctx);return;
       }
       throw Error('Unexpected guest file frame');
     }

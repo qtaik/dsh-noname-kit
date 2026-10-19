@@ -14,7 +14,7 @@
 	}
 	window.__nnkLoaded = true;
 	if (!window.__nnk__) {
-		window.__nnk__ = { version: "0.3.91", build: "keepalive-transfer-2-1g15m-bridge-binding", modules: {}, env: null, state: {} };
+		window.__nnk__ = { version: "0.3.94", build: "keepalive-transfer-2-1g15m-multi-display", modules: {}, env: null, state: {} };
 	}
 
 	game.import("extension", function(lib, game, ui, get, ai, _status) {
@@ -38,9 +38,17 @@
 		nnk.env = { lib: lib, game: game, ui: ui, get: get, ai: ai, _status: _status };
 		/* 每完成一个启动步骤就记录启动位置，并随心跳上报，供工坊显示内核启动进度。 */
 		nnk.state.bootStage = "env-ready";
-		/* Synchronous capture precedes the first await and all legacy installs. */
-		var bootstrap = require(lib.node.path.join(window.__dirname, "extension", "联机助手", "lib", "keepalive-bootstrap.cjs"));
-		var lease = bootstrap.capture(nnk, { window: window, document: document });
+		/* Capture the actual Document before installing any engine compatibility hooks. */
+		var lease;
+		try {
+			var bootstrap = require(lib.node.path.join(window.__dirname, "extension", "联机助手", "lib", "keepalive-bootstrap.cjs"));
+			lease = bootstrap.capture(nnk, { window: window, document: document });
+		} catch (error) {
+			nnk.state.bootStage = "native-unavailable";
+			nnk.state.bootError = error && error.message ? error.message : String(error);
+			console.error("[联机助手] 无法初始化当前窗口，已跳过联机内核初始化：", error);
+			return;
+		}
 		if (!lease.isCurrent()) return;
 		var entry = await import(location.origin + "/extension/" + encodeURIComponent("联机助手") + "/keepalive/entry.js");
 		if (!lease.isCurrent()) return;
@@ -77,9 +85,17 @@
 		/* 各安装步骤独立兜底:一步炸了不能带走其余安装与心跳上报 */
 		/* Keepalive owns online entry. Legacy reload/autoRejoin hooks stay absent. */
 		nnk.state.bootStage = "inits-done";
-		/* 兼容层(开闸+垫片+隔离)与体检/补包的消息表登记——都在内容加载前
-		 * 装好:开闸必须在 onload 的 loadExtension 闸门检查之前生效 */
-		var installs = [["compat", nnk.modules.compat], ["manifest", nnk.modules.manifest], ["transfer", nnk.modules.transfer]];
+		/* 兼容补丁仅用于独立联机对局窗口；普通游戏保留原生扩展、出牌和技能流程。
+		 * 联机身份仍独立同步，体检与补传仅登记各自的消息类型。 */
+		var compat = nnk.modules.compat;
+		var scopedCompat = compat && { install: function() {
+			if (lease.info.role === "engine") {
+				compat.install();
+			} else if (lease.info.role === "ordinary") {
+				compat.applyIdentity();
+			}
+		} };
+		var installs = [["compat", scopedCompat], ["manifest", nnk.modules.manifest], ["transfer", nnk.modules.transfer]];
 		for (var j = 0; j < installs.length; j++) {
 			var mod = installs[j][1];
 			if (!mod) {

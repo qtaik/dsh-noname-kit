@@ -1,0 +1,15 @@
+// Real event text renderer with synthetic events; no bridge, game or transfer.
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const src=readFileSync(new URL('../client.js',import.meta.url),'utf8'),start=src.indexOf('function onlineEventText('),end=src.indexOf('    function onlineKernelOfflineHint(',start);
+assert.ok(start>=0&&end>start,'event renderer markers remain available');
+const render=new Function('ev',src.slice(start,end)+';return onlineEventText(ev, []);');
+let count=0;function test(name,fn){fn();count++;console.log('  ✓ '+name);}
+test('batch consent renders current authorization state and original reason',()=>{const text=render({type:'batch_consent',data:{status:'authorized_paused',reason:'原始说明🧩'}});assert.match(text,/本批已授权/);assert.match(text,/原始说明🧩/);assert.doesNotMatch(text,/batch_consent/);});
+test('host progress uses confirmed bytes and never the received counter',()=>{const text=render({type:'batch_files',data:{role:'host',status:'sending',received:999,acknowledged:50,total:100}});assert.match(text,/客机已确认接收 50%/);assert.doesNotMatch(text,/999|100%|batch_files/);assert.doesNotMatch(render({type:'batch_files',data:{role:'host',status:'sending',received:100,total:100}}),/\d+%/);});
+test('guest progress describes staging rather than submitted files',()=>{const text=render({type:'batch_files',data:{role:'guest',status:'receiving',received:25,total:100}});assert.match(text,/已接收至暂存区 25%/);assert.match(text,/尚未提交/);assert.doesNotMatch(text,/已自动启用/);});
+for(const role of['host','guest'])test(role+' 100 percent waits for the final file outcome',()=>{const text=render({type:'batch_files',data:{role,status:role==='host'?'sending':'receiving',received:100,acknowledged:100,total:100}});assert.match(text,/100%/);assert.match(text,/等待整批校验、提交及启用结果/);assert.doesNotMatch(text,/补传完成|已自动启用/);});
+for(const [status,expected] of Object.entries({committing:/尚未完成/,activation_pending:/自动启用尚未确认/,committed:/已自动启用/,committed_activation_required:/自动启用未能确认/,unknown:/提交结果待确认/,recovery_required:/离线恢复/,failed:/文件事务失败/,cancelled:/文件事务已取消/,expired:/文件授权已超时/,disconnected:/文件连接已断开/}))test(status+' remains explicit and preserves its reason',()=>{const text=render({type:'batch_files',data:{role:'guest',status,reason:'原始原因🧩'}});assert.match(text,expected);assert.match(text,/原始原因🧩/);});
+test('zero and malformed progress never produces a false percentage',()=>{for(const data of[{total:0,received:0},{total:100,received:NaN},{total:-1,received:10},{total:100,received:Infinity}])assert.doesNotMatch(render({type:'batch_files',data:{role:'guest',status:'receiving',...data}}),/NaN|Infinity|\d+%/);});
+test('unknown states and existing errors retain useful text',()=>{assert.match(render({type:'batch_files',data:{status:'future_state',reason:'原始原因'}}),/future_state；原始原因/);assert.match(render({type:'batch_consent',data:{status:'future_consent'}}),/future_consent/);assert.equal(render({type:'error',data:{message:'真实错误'}}),'❌ 真实错误');assert.match(render({type:'info',data:{message:'独立关键事件'}}),/独立关键事件/);assert.doesNotThrow(()=>render(null));});
+console.log(`\n全部通过: ${count} 项（实际动态文案+合成状态，不替代真实补传验收）`);

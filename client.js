@@ -1625,10 +1625,12 @@ window.__ModuleLoader__.load({
       }
       return { check: check, diff: diff, reference: reference, verified: !!(check && check.status === 'verified' && diff) };
     }
-    function onlineEventText(ev, evs) {
+    function onlineEventText(ev, evs, omitPeerLabel) {
       /* 空项防护:动态流是 events.map(onlineEventText),任何一环混进 null/非对象,
        * 这里读 .type 就炸整页(与 onlinePickEvent 同款防线) */
       if (!ev || typeof ev !== 'object') return String(ev || '(空事件)');
+      var eventPeerLabel = ev.data && ev.data.peerLabel;
+      if (!omitPeerLabel && typeof eventPeerLabel === 'string' && eventPeerLabel.trim()) return '[' + eventPeerLabel.trim().slice(0, 120) + '] ' + onlineEventText(ev, evs, true);
       switch (ev.type) {
         case 'invite_ready': return '📨 邀请码已生成';
         case 'answer_ready': return '📨 回执码已生成';
@@ -1687,6 +1689,23 @@ window.__ModuleLoader__.load({
           return line;
         }
         case 'info': return 'ℹ️ ' + ((ev.data && ev.data.message) || '');
+        case 'batch_consent': {
+          var consent = ev.data || {};
+          var consentLabels = { preparing: '正在核验本批文件', pending: '等待客机确认本批', accepting: '客机已发送同意，等待房主确认', rejecting: '客机已发送拒绝，等待房主确认', authorized_paused: '本批已授权，等待自动传输', declined: '客机已拒绝本批', cancelled: '本批已取消', expired: '本批已超时，授权失效', disconnected: '连接结束，授权失效', failed: '本批提议失败' };
+          return '📦 本批补传：' + (consentLabels[consent.status] || '授权状态：' + (consent.status || '未知')) + (consent.reason ? '；' + consent.reason : '');
+        }
+        case 'batch_files': {
+          var files = ev.data || {};
+          var fileLabels = { starting: '准备接收本批文件', waiting_receiver: '等待客机准备接收', receiving: '接收至独立暂存区，尚未提交', sending: '发送已授权文件', committing: '整批校验并提交，尚未完成', activation_pending: '文件已提交，自动启用尚未确认', committed: '本批扩展已自动启用，重启后生效', committed_activation_required: '文件已提交，自动启用未能确认', unknown: '最终回执未收到，提交结果待确认', recovery_required: '必须先完成离线恢复', failed: '文件事务失败', cancelled: '文件事务已取消', expired: '文件授权已超时', disconnected: '文件连接已断开' };
+          var value = files.role === 'host' ? files.acknowledged : files.received;
+          var total = files.total;
+          var valid = Number.isSafeInteger(value) && value >= 0 && Number.isSafeInteger(total) && total > 0;
+          var bounded = valid ? Math.min(value, total) : 0;
+          var pct = valid ? Math.floor(bounded * 1000 / total) / 10 : null;
+          var detail = pct === null ? '' : ' · ' + (files.role === 'host' ? '客机已确认接收 ' : '已接收至暂存区 ') + pct + '%';
+          if (pct === 100 && ['sending', 'receiving'].indexOf(files.status) >= 0) detail += '，等待整批校验、提交及启用结果';
+          return '📦 本批补传：' + (fileLabels[files.status] || '文件状态：' + (files.status || '未知')) + detail + (files.reason ? '；' + files.reason : '');
+        }
         case 'transfer_begin': return '📦 开始补传「' + ((ev.data && ev.data.name) || '') + '」';
         case 'transfer_progress': return '⏳ 补传中「' + ((ev.data && ev.data.name) || '') + '」' + ((ev.data && ev.data.pct) || 0) + '%';
         case 'transfer_done':
@@ -2130,17 +2149,88 @@ window.__ModuleLoader__.load({
         var fileBatches = Array.isArray(state.fileBatches) ? state.fileBatches.filter(Boolean).slice(-64) : [];
         var labels = { preparing: '正在核验本批文件', pending: '等待客机确认本批', accepting: '已发送同意，等待房主确认', rejecting: '已发送拒绝，等待房主确认', authorized_paused: available ? '本批已授权，准备自动传输' : '本批已授权，等待传输条件就绪', declined: '客机已拒绝本批', cancelled: '本批已取消', expired: '本批已超时，授权失效', disconnected: '连接结束，授权失效', failed: '本批提议失败' };
         var fileLabels = { starting: '准备接收本批文件', waiting_receiver: '等待客机准备接收', receiving: '接收至独立暂存区', sending: '发送已授权文件', committing: '整批校验并提交', activation_pending: '文件已提交，正在保存启用设置', committed: '本批扩展已自动启用，重启后生效', committed_activation_required: '文件已提交，自动启用未能确认', unknown: '最终回执未收到，提交结果待确认', recovery_required: '必须先完成离线恢复', failed: '文件事务失败', cancelled: '文件事务已取消', expired: '文件授权已超时', disconnected: '文件连接已断开' };
+        function transferBytes(value) {
+          if (value < 1024) return value + ' 字节';
+          var units = ['KiB', 'MiB', 'GiB'], size = value / 1024, unit = 0;
+          while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit++; }
+          return (Math.round(size * 10) / 10) + ' ' + units[unit];
+        }
         function sameScope(a, b) { return !!a && !!b && typeof a.carrierSessionId === 'string' && Number.isSafeInteger(a.partyEpoch) && a.carrierSessionId === b.carrierSessionId && a.partyEpoch === b.partyEpoch; }
-        function sameBatch(a, b) { return ['session', 'peerSession', 'proposal', 'digest'].every(function (k) { return a[k] === b[k]; }) && a.peerId === b.peerId && ((!a.scope && !b.scope) || sameScope(a.scope, b.scope)); }
+        function sameBatch(a, b) { return ['session', 'peerSession', 'proposal', 'digest'].every(function (k) { return a[k] === b[k]; }) && a.role === b.role && a.peerId === b.peerId && ((!a.scope && !b.scope) || sameScope(a.scope, b.scope)); }
         var rows = proposals.slice();
         fileBatches.forEach(function (f) { if (!rows.some(function (q) { return sameBatch(q, f); })) rows.push(f); });
-        return rows.map(function (q) {
-          var current = ['session', 'peerSession', 'proposal', 'digest'].every(function (key) { return typeof q[key] === 'string' && q[key].length > 0 && q[key].length <= 160; }) && /^[a-f0-9]{64}$/.test(q.digest) && typeof q.peerId === 'string' && !!q.peerId && sameScope(q.scope, scope);
+        var hasParticipants = Array.isArray(state.transferParticipants);
+        var participants = (hasParticipants ? state.transferParticipants : Array.isArray(state.transferPeers) ? state.transferPeers : []).filter(function (peer, index, list) {
+          return peer && typeof peer.peerId === 'string' && peer.peerId && (!hasParticipants || sameScope(peer.scope, scope)) && list.findIndex(function (other) { return other && other.peerId === peer.peerId; }) === index;
+        }).slice(0, 32);
+        function validBinding(q) { return ['session', 'peerSession', 'proposal', 'digest'].every(function (key) { return typeof q[key] === 'string' && q[key].length > 0 && q[key].length <= 160; }) && /^[a-f0-9]{64}$/.test(q.digest) && typeof q.peerId === 'string' && !!q.peerId && sameScope(q.scope, scope); }
+        function latestFor(peerId, role) {
+          for (var index = proposals.length - 1; index >= 0; index--) if (proposals[index].peerId === peerId && proposals[index].role === role && validBinding(proposals[index])) return proposals[index];
+          for (var fileIndex = rows.length - 1; fileIndex >= 0; fileIndex--) if (rows[fileIndex].peerId === peerId && rows[fileIndex].role === role && validBinding(rows[fileIndex])) return rows[fileIndex];
+          return null;
+        }
+        function currentRow(q) { return validBinding(q) && latestFor(q.peerId, q.role) === q && (!hasParticipants || participants.some(function (peer) { return peer.peerId === q.peerId; })); }
+        function peerLabel(peer, fallback) {
+          if (typeof peer.peerLabel === 'string' && peer.peerLabel.trim()) return peer.peerLabel.trim().slice(0, 120);
+          var name = peer.peerIdentity && peer.peerIdentity.name || peer.name;
+          var ordinal = Number.isSafeInteger(peer.peerOrdinal) && peer.peerOrdinal > 0 ? peer.peerOrdinal : null;
+          return (typeof name === 'string' && name.trim() ? name.trim().slice(0, 80) : ordinal ? '未命名' : fallback) + (ordinal ? '（客机 ' + ordinal + '）' : '');
+        }
+        function healthFor(peer) {
+          var events = Array.isArray(bridge.events) ? bridge.events : [], check = null, diff = null;
+          events.forEach(function (ev) {
+            var data = ev && ev.data;
+            if (!data || data.peerId !== peer.peerId || data.role !== 'host' || !sameScope(data.scope, scope)) return;
+            if (ev.type === 'manifest_check' && data.status === 'pending' && Number.isSafeInteger(data.request) && data.request > 0) { check = data; diff = null; }
+            else if (check && data.request === check.request) {
+              if (ev.type === 'manifest_check') check = data;
+              if (ev.type === 'manifest_diff' && data.verification === 'verified') diff = data;
+            }
+          });
+          if (check && check.status === 'pending') return '正在体检；尚未确认是否需要补包';
+          if (check && check.status === 'verified' && diff) {
+            var exts = diff.exts || {}, count = function (list) { return Array.isArray(list) ? list.length : 0; };
+            if (diff.inventoryVerified === false || count(exts.unverified)) return '体检尚未核验完成；等待处理';
+            if (count(exts.missing) || count(exts.changed)) return '体检发现缺包或文件差异；等待补传处理';
+            if (count(exts.disabled)) return '体检发现未启用扩展；等待处理';
+            return '体检结果已返回；当前没有补传批次';
+          }
+          return peer.transferCapable === false ? '待体检 / 等待处理；当前连接不支持新版补传' : '待体检 / 等待处理；尚未确认是否需要补包';
+        }
+        var overviewCounts = { sending: 0, consent: 0, waiting: 0, complete: 0, uncertain: 0, failed: 0, ended: 0 };
+        participants.forEach(function (peer) {
+          var q = latestFor(peer.peerId, 'host'), file = q && fileBatches.find(function (f) { return sameBatch(q, f); }), status = file ? file.status : q && q.status;
+          var category = file && ['sending', 'receiving'].indexOf(status) >= 0 ? 'sending' : file && status === 'committed' ? 'complete' : ['committing', 'activation_pending', 'committed_activation_required', 'unknown', 'recovery_required'].indexOf(status) >= 0 ? 'uncertain' : status === 'failed' ? 'failed' : ['declined', 'cancelled', 'expired', 'disconnected'].indexOf(status) >= 0 ? 'ended' : ['pending', 'accepting', 'rejecting'].indexOf(status) >= 0 ? 'consent' : 'waiting';
+          overviewCounts[category]++;
+        });
+        var overview = bridge.role === 'host' && participants.length ? h('div', { className: 'nnk-card', 'data-nnk-transfer-overview': true },
+          e('div', null, h('b', { className: 'nnk-ui-text' }, '📦 多人补包总览')),
+          e('div', 'nnk-hint', bridgeOnline ? participants.length + ' 位已连接客机 · 每人的阶段和进度独立显示；历史批次见下方。' : participants.length + ' 位客机的最近记录 · 内核离线，以下为离线前最近状态，不代表实时连接或进度。'),
+          h('div', { className: 'nnk-hint', 'data-nnk-transfer-counts': true }, (bridgeOnline ? '' : '离线前最近记录：') + '传输中 ' + overviewCounts.sending + ' · 待确认 ' + overviewCounts.consent + ' · 待体检或等待处理 ' + overviewCounts.waiting + ' · 已完成 ' + overviewCounts.complete + ' · 结果待确认 ' + overviewCounts.uncertain + ' · 失败 ' + overviewCounts.failed + ' · 已结束 ' + overviewCounts.ended),
+          h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '8px', marginTop: '8px' } }, participants.map(function (peer, index) {
+            var q = latestFor(peer.peerId, 'host'), file = q && fileBatches.find(function (f) { return sameBatch(q, f); });
+            var label = peerLabel(q || peer, peerLabel(peer, '客机 ' + (index + 1)));
+            var total = file && Number.isSafeInteger(file.total) && file.total > 0 ? file.total : null;
+            var value = file && file.acknowledged;
+            var progress = total !== null && Number.isSafeInteger(value) && value >= 0 ? Math.min(value, total) : null;
+            var percent = progress === null ? null : Math.floor(progress * 1000 / total) / 10;
+            var stage = q ? file ? fileLabels[file.status] || file.status : labels[q.status] || '未知状态' : healthFor(peer);
+            var terminal = q && ['declined', 'cancelled', 'expired', 'disconnected', 'failed', 'committed', 'committed_activation_required', 'unknown', 'recovery_required'].indexOf(file ? file.status : q.status) >= 0;
+            return h('div', { key: peer.peerId, 'data-nnk-transfer-summary-peer': peer.peerId, style: { border: '1px solid var(--nnk-border, rgba(127,127,127,.3))', borderRadius: '8px', padding: '10px', minWidth: 0 } },
+              h('b', { className: 'nnk-break', 'data-nnk-literal': true }, label),
+              e('div', 'nnk-hint', (!bridgeOnline ? '离线前阶段：' : q ? terminal ? '本次结果：' : '当前批次：' : '') + stage),
+              progress !== null ? h('div', {}, h('progress', { max: total, value: progress, 'aria-label': label + '已确认接收进度', 'aria-valuetext': '客机已确认接收 ' + percent + '%，' + transferBytes(progress) + ' / ' + transferBytes(total), style: { width: '100%' } }), e('div', 'nnk-hint', '客机已确认接收：' + percent + '% · ' + transferBytes(progress) + ' / ' + transferBytes(total))) : file && ['sending', 'waiting_receiver'].indexOf(file.status) >= 0 ? e('div', 'nnk-hint', '等待客机确认接收状态。') : null,
+              percent === 100 && file && file.status === 'sending' ? e('div', 'nnk-hint', '100% 不代表补传完成，等待整批校验、提交及启用结果。') : null,
+              q && !file && q.reason ? h('div', { className: 'nnk-hint nnk-break', 'data-nnk-literal': true }, q.reason) : null,
+              file && file.reason ? h('div', { className: 'nnk-hint nnk-break', 'data-nnk-literal': true }, file.reason) : null);
+          }))) : null;
+        var cards = rows.map(function (q) {
+          var current = currentRow(q);
           var binding = { session: q.session, peerSession: q.peerSession, proposal: q.proposal, digest: q.digest, peerId: q.peerId, scope: q.scope };
           var batch = q.batch || {};
           var extensions = Array.isArray(batch.extensions) ? batch.extensions.filter(function (ext) { return ext && typeof ext.name === 'string'; }) : [];
           var file = fileBatches.find(function (f) { return sameBatch(q, f); });
-          var key = JSON.stringify([q.session, q.peerSession, q.proposal, q.digest, q.peerId, q.scope]);
+          var key = JSON.stringify([q.role, q.session, q.peerSession, q.proposal, q.digest, q.peerId, q.scope]);
           var collapsed = typeof batchUi !== 'undefined' && batchUi[key];
           var finalFile = file && (file.fileCommitted || ['activation_pending', 'committed', 'committed_activation_required', 'unknown', 'recovery_required'].indexOf(file.status) >= 0);
           var choice = bridgeOnline && current && !file && q.role === 'guest' && q.status === 'pending' && (!Number.isFinite(q.expires) || Date.now() < q.expires);
@@ -2150,30 +2240,36 @@ window.__ModuleLoader__.load({
           var total = Number.isSafeInteger(file && file.total) && file.total >= 0 ? file.total : Number.isSafeInteger(batch.total) && batch.total >= 0 ? batch.total : 0;
           var received = file && (file.role === 'host' ? file.acknowledged : file.received);
           var progress = Number.isSafeInteger(received) && received >= 0 ? Math.min(received, total) : null;
-          var peerName = q.peerIdentity && q.peerIdentity.name || '';
+          var percent = progress !== null && total > 0 ? Math.floor(progress * 1000 / total) / 10 : null;
+          var progressLabel = file && file.role === 'host' ? '客机已确认接收' : '已接收至暂存区';
+          var progressNote = !file ? '' : file.status === 'activation_pending' ? '文件已提交，自动启用尚未确认。' : file.status === 'committing' ? '整批校验与提交尚未完成，接收进度不代表补传完成。' : percent === 100 && file.status === 'sending' ? '字节接收已确认，等待客机整批校验、提交及启用结果；100% 不代表补传完成。' : percent === 100 && file.status === 'receiving' ? '文件已接收至暂存区，等待整批校验与提交；尚未启用。' : '';
+          var peerName = peerLabel(q, q.role === 'host' ? '当前客机' : q.source || '当前房主');
           var ttlSeconds = Number.isSafeInteger(q.ttlMs) && q.ttlMs > 0 && q.ttlMs <= 900000 ? Math.ceil(q.ttlMs / 1000) : null;
           var duration = ttlSeconds === null ? '' : (Math.floor(ttlSeconds / 60) ? Math.floor(ttlSeconds / 60) + ' 分钟' : '') + (ttlSeconds % 60 ? (ttlSeconds >= 60 ? ' ' : '') + ttlSeconds % 60 + ' 秒' : '');
           var deadline = Number.isSafeInteger(q.expires) && q.expires > 0 && q.expires <= 8640000000000000 ? new Date(q.expires).toLocaleTimeString() : '';
-          if (collapsed) return h('div', { className: 'nnk-card', key: key }, e('div', 'nnk-hint', '补传提示已收起，本批处理状态保持。'), h('button', { className: 'nnk-copy', onClick: function () { setBatchUi(Object.assign({}, batchUi, { [key]: false })); } }, '展开补传提示'));
-          return h('div', { className: 'nnk-card', key: key, 'data-nnk-transfer': true },
+          if (collapsed) return h('div', { className: 'nnk-card', key: key }, h('div', { className: 'nnk-hint', 'data-nnk-literal': true }, peerName + ' · ' + (current ? bridgeOnline ? '当前批次' : '最近批次记录（内核离线）' : '历史批次') + ' · 补传提示已收起，本批处理状态保持。'), h('button', { className: 'nnk-copy', onClick: function () { setBatchUi(Object.assign({}, batchUi, { [key]: false })); } }, '展开补传提示'));
+          return h('div', { className: 'nnk-card', key: key, 'data-nnk-transfer': true, 'data-nnk-transfer-context': current ? 'current' : 'history' },
             e('div', null, h('b', { className: 'nnk-ui-text' }, '📦 本批扩展补传')),
-            e('div', 'nnk-hint', (q.role === 'host' ? '接收客机：' + (peerName || '当前客机') : '来源房主：' + (peerName || q.source || '当前房主')) + ' · ' + extensions.length + ' 个扩展 · ' + count + ' 个文件 · ' + total + ' 字节'),
+            h('div', { className: 'nnk-hint', 'data-nnk-literal': true }, (q.role === 'host' ? '接收客机：' : '来源房主：') + peerName + ' · ' + extensions.length + ' 个扩展 · ' + count + ' 个文件 · ' + total + ' 字节'),
+            e('div', 'nnk-hint', current ? bridgeOnline ? '当前批次 / 本次结果' : '最近批次记录（内核离线，不代表实时状态）' : '历史批次（不代表当前处理状态）'),
             extensions.map(function (ext) { return e('div', 'nnk-break', ext.name + '（' + (Array.isArray(ext.files) ? ext.files.length : Number.isSafeInteger(ext.fileCount) ? ext.fileCount : 0) + ' 个文件）'); }),
             !current ? e('div', 'nnk-hint', '历史或旧协议记录，不能授权或恢复到当前会话。') : null,
             choice ? e('div', 'nnk-hint', '扩展包含可执行代码。请确认信任房主后再同意；仅授权所列完整批次，不授权后续请求。') : null,
             current && !finalFile && duration ? e('div', 'nnk-hint', '本批时限：' + duration + '（含确认等待）' + (deadline ? '；截止 ' + deadline : '') + '。到期停止，不自动续期。') : null,
             choice ? e('div', 'nnk-hint', '同意后自动接收、整批校验并更新所列扩展，成功后自动启用；完成后需要完全退出并重启无名杀。') : null,
             e('div', 'nnk-hint', file ? fileLabels[file.status] || file.status : labels[q.status] || '未知状态'),
-            file && total > 0 && progress !== null ? h('div', {}, h('progress', { max: total, value: progress, 'aria-label': q.role === 'host' ? '本批已确认发送进度' : '本批接收进度', style: { width: '100%' } }), e('div', 'nnk-hint', progress + '/' + total + ' 字节')) : null,
+            file && total > 0 && progress !== null ? h('div', {}, h('progress', { max: total, value: progress, 'aria-label': file.role === 'host' ? '本批已确认发送进度' : '本批接收进度', 'aria-valuetext': progressLabel + ' ' + percent + '%，' + transferBytes(progress) + ' / ' + transferBytes(total), style: { width: '100%' } }), e('div', 'nnk-hint', progressLabel + '：' + percent + '% · ' + transferBytes(progress) + ' / ' + transferBytes(total))) : null,
+            file && total === 0 && progress !== null ? e('div', 'nnk-hint', progressLabel + '：0 字节 / 0 字节（空批次）') : null,
+            progressNote ? e('div', 'nnk-hint', progressNote) : null,
             file && file.role === 'host' && progress === null && ['waiting_receiver', 'sending'].indexOf(file.status) >= 0 ? e('div', 'nnk-hint', '等待客机确认接收状态。') : null,
             current && !available && !finalFile ? e('div', 'nnk-hint', state.transferUnavailableReason || '补传当前不可用；请在插件房间中核对双方内核与连接。') : null,
-            file && file.reason ? e('div', 'nnk-hint', file.reason) : null,
+            file && file.reason ? h('div', { className: 'nnk-hint', 'data-nnk-literal': true }, file.reason) : null,
             file && file.role === 'host' && file.status === 'committed' ? e('div', 'nnk-hint', '客机本批扩展已自动启用。请提醒客机完全退出并重启无名杀后重新体检；房主无需因此重启。') : null,
             file && file.role === 'guest' && file.status === 'committed' ? e('div', 'nnk-hint', '本批扩展已自动启用。请完全退出并重启无名杀后重新体检；Ctrl+R 不能代替重启，无需重新下载。') : null,
             file && file.role === 'guest' && file.status === 'committed_activation_required' ? e('div', 'nnk-hint', '文件已整批提交，自动启用未能确认。请在无名杀扩展设置中检查并手动启用所列扩展，再完全退出并重启无名杀后重新体检；无需重新下载。') : null,
             file && file.status === 'unknown' ? e('div', 'nnk-hint', '请先核对客机的提交结果，结果明确前不要重新传输。') : null,
             retryable ? h('button', { className: 'nnk-copy', onClick: function () { setNote('正在重新体检并申请补传，等待客机重新确认'); sendCmd('batch_request', { peerId: q.peerId, scope: { carrierSessionId: q.scope.carrierSessionId, partyEpoch: q.scope.partyEpoch } }); } }, '重新传输（需客机再次同意）') : null,
-            !finalFile && q.reason ? e('div', 'nnk-hint', q.reason) : null,
+            !finalFile && q.reason ? h('div', { className: 'nnk-hint', 'data-nnk-literal': true }, q.reason) : null,
             choice ? h('button', { className: 'nnk-copy', disabled: !available, onClick: function () { sendCmd('batch_decision', Object.assign({}, binding, { yes: true })); } }, '同意本批并接收') : null,
             choice ? h('button', { className: 'nnk-copy', onClick: function () { sendCmd('batch_decision', Object.assign({}, binding, { yes: false })); } }, '拒绝本批') : null,
             h('button', { className: 'nnk-copy', onClick: function () { setBatchUi(Object.assign({}, batchUi, { [key]: true })); } }, '收起提示'),
@@ -2182,6 +2278,7 @@ window.__ModuleLoader__.load({
               if (window.confirm(consequence + '\n确认终止本次补传吗？')) sendCmd('batch_cancel', binding);
             } }, '终止本次补传') : null);
         });
+        return overview ? [overview].concat(cards) : cards;
       }
 
       function renderManifestCard(evs, hostFlow, inRoom, showTransferLimit) {
@@ -2237,10 +2334,12 @@ window.__ModuleLoader__.load({
           return h('div', { 'data-nnk-manual-transfer': true, style: { marginTop: '8px' } },
             (peers.length ? peers : [null]).map(function (peer, index) {
               var name = peer && typeof peer.name === 'string' && peer.name.trim() ? peer.name.slice(0, 80) : peers.length > 1 ? '未命名' : '当前客机';
+              var stableLabel = peer && typeof peer.peerLabel === 'string' && peer.peerLabel.trim() ? peer.peerLabel.trim().slice(0, 120) : '';
+              var rowLabel = stableLabel || (peers.length > 1 ? '客机 ' + (index + 1) + '：' : '接收客机：') + name;
               var peerReason = requestReason(peer), disabled = !!peerReason || !peer;
               return h('div', { className: 'nnk-row', key: peer ? peer.peerId : 'unavailable', 'data-nnk-transfer-peer': peer ? peer.peerId : '', style: { marginTop: '6px', flexWrap: 'wrap' } },
-                peer ? h('span', { className: 'nnk-break', style: { flex: '1 1 160px', minWidth: 0 } }, (peers.length > 1 ? '客机 ' + (index + 1) + '：' : '接收客机：') + name) : null,
-                h('button', { className: 'nnk-copy', disabled: disabled, title: peerReason || '重新体检后申请新批次，仍需客机再次同意', 'aria-label': peers.length > 1 ? '重新传输给客机 ' + (index + 1) + '：' + name : '重新传输', onClick: function () {
+                peer ? h('span', { className: 'nnk-break', style: { flex: '1 1 160px', minWidth: 0 } }, rowLabel) : null,
+                h('button', { className: 'nnk-copy', disabled: disabled, title: peerReason || '重新体检后申请新批次，仍需客机再次同意', 'aria-label': stableLabel ? '重新传输给' + stableLabel : peers.length > 1 ? '重新传输给客机 ' + (index + 1) + '：' + name : '重新传输', onClick: function () {
                   if (disabled) return;
                   setNote('正在重新体检并申请补传，等待客机重新确认');
                   sendCmd('batch_request', { peerId: peer.peerId, scope: { carrierSessionId: scope.carrierSessionId, partyEpoch: scope.partyEpoch } });

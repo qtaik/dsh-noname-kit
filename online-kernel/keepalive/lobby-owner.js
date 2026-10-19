@@ -118,7 +118,7 @@ export class LobbyOwner {
  }
  resetSession(){if(this.sessions.list().length||this.lobby||this.joinAttempt||this.publication)throw Error('原会话尚未完全关闭');
   ++this.sessionEpoch;this.role='';this.members.clear();this.invites=[];this.pendingOffers.clear();this.acceptedRoomPeers.clear();this.offerTimes.clear();this._members();}
- async restartRoom(mode){if(!this.coordinator.restartRoom)throw Error('当前阶段尚未接入受控续局');return this.coordinator.restartRoom(modeOf(mode||this.nextMode));}
+ async restartRoom(mode){if(!this.coordinator.restartRoom)throw Error('当前联机环境不支持受控续局');return this.coordinator.restartRoom(modeOf(mode||this.nextMode));}
  setQueued(peerId,queued){if(!this.sessions.get(peerId))throw Error('Unknown actual registered peer');this.members.set(peerId,{queued:queued===true});this._members();}
  onSessionChanged(){for(const id of this.members.keys())if(!this.sessions.get(id))this.members.delete(id);for(const [key,id]of this.acceptedRoomPeers)if(!this.sessions.isLive(id))this.acceptedRoomPeers.delete(key);
   for(const row of this.invites)if(row.status==='used'&&row.peerId){const record=this.sessions.get(row.peerId);if(record)row.guest=record.identity.name||'';}this._members();}

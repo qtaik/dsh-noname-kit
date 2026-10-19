@@ -41,7 +41,7 @@ dsh plugin --profile web add https://github.com/qtaik/dsh-noname-kit.git
 
 ### 桌面版(DeepSeek Harness 桌面应用)
 
-NONAME-KIT 1.10.3 支持 DSH Desktop 0.2.1-rc.2 和 0.2.1-rc.1，并保留对 0.2.0-rc.2 的兼容。
+NONAME-KIT 1.10.4 支持 DSH Desktop 0.2.1-rc.2 和 0.2.1-rc.1，并保留对 0.2.0-rc.2 的兼容。
 包内同时声明 `engines.dsh` 和宿主依赖范围；其他版本以包内声明为准。
 
 打开桌面版，左侧「插件」面板 →「添加插件」→ 输入 `dsh-noname-kit` → 安装。

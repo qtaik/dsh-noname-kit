@@ -175,6 +175,30 @@ export function bindKernelBridge({ nonameDir, baseUrl, token }) {
   return bindKernelBridgeFiles({ root: nonameDir, baseUrl, token })
 }
 
+function batchEventBinding(event) {
+  const data = event?.type === 'batch_files' ? event.data : null
+  if (!data || !['host', 'guest'].includes(data.role)
+    || !['session', 'peerSession', 'proposal', 'digest', 'peerId'].every(key => typeof data[key] === 'string' && data[key].length > 0 && data[key].length <= 160)
+    || !/^[a-f0-9]{64}$/.test(data.digest) || typeof data.scope?.carrierSessionId !== 'string'
+    || !data.scope.carrierSessionId || !Number.isSafeInteger(data.scope.partyEpoch) || data.scope.partyEpoch < 0) return null
+  return JSON.stringify([data.role, data.session, data.peerSession, data.proposal, data.digest, data.peerId, data.scope.carrierSessionId, data.scope.partyEpoch])
+}
+
+// Progress replaces the last observation of the same phase; outcomes and phase changes remain in history.
+function appendBridgeEvent(events, event) {
+  const binding = batchEventBinding(event)
+  if (binding) {
+    for (let index = events.length - 1; index >= 0; index--) {
+      const previous = events[index]
+      if (batchEventBinding(previous) !== binding) continue
+      if (Number.isSafeInteger(event.seq) && Number.isSafeInteger(previous.seq) && event.seq <= previous.seq) return
+      if (previous.data.status === event.data.status && ['starting', 'waiting_receiver', 'sending', 'receiving', 'committing', 'activation_pending'].includes(event.data.status)) events.splice(index, 1)
+      break
+    }
+  }
+  events.push(event)
+}
+
 /**
  * 心跳桥会话(每插件实例一份,内存态,不落盘):
  * 内核轮询时上报状态与事件,取回到期命令;工坊经 pushCommand 下发命令。
@@ -242,7 +266,7 @@ export function createBridgeSession({ token, syncSource }) {
             lastPushed.identity = undefined
           }
         }
-        session.events.push(ev)
+        appendBridgeEvent(session.events, ev)
       }
       if (session.events.length > 200) session.events.splice(0, session.events.length - 200)
       const now = Date.now()

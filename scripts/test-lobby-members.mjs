@@ -12,15 +12,18 @@ const modal=source.slice(source.indexOf('function ModalFrame('),source.indexOf('
 const batchStart=source.indexOf('function renderBatchProposals('),batchEnd=source.indexOf('function renderManifestCard(',batchStart);
 assert.ok(batchStart>=0&&batchEnd>batchStart,'the actual shared transfer renderer must be extracted');
 const batch=source.slice(batchStart,batchEnd);
+const limitStart=source.indexOf('function renderTransferLimit(');
+assert.ok(limitStart>=0&&limitStart<batchStart,'the actual transfer limit renderer must be extracted');
+const limit=source.slice(limitStart,batchStart);
 const manifest=source.slice(source.indexOf('function renderManifestCard('),source.indexOf('function leaveRoom('));
 const room=source.slice(source.indexOf('function roomBrief()'),source.indexOf('      function renderOnlinePanel()'));
-const render=new Function('bridge','evs','isRoomHost','roomMode','onlineRound','onlineNext','onlineRoom','roomCode','MODE_MAX','ONLINE_MODES','SEAT_COLORS','h','e','sendCmd','setRoomMode','setRoomPopupOpen','setNote','copyText','leaveRoom','renderInviteCard','ModalFrame','roomOpenerRef','onlineScope','note','bridgeOnline','batchUi','setBatchUi','window',support+batch+manifest+room+';return renderRoomModal();');
+const render=new Function('bridge','evs','isRoomHost','roomMode','onlineRound','onlineNext','onlineRoom','roomCode','MODE_MAX','ONLINE_MODES','SEAT_COLORS','h','e','sendCmd','setRoomMode','setRoomPopupOpen','setNote','copyText','leaveRoom','renderInviteCard','ModalFrame','roomOpenerRef','onlineScope','note','bridgeOnline','batchUi','setBatchUi','window','status','transferLimitDraft','setTransferLimitDraft',support+limit+batch+manifest+room+';return renderRoomModal();');
 const caps={identity:8,guozhan:8,versus:8,doudizhu:3,single:2},modes=Object.keys(caps).map(id=>({id,name:id}));
 const h=(tag,props,...children)=>typeof tag==='function'?tag({...props,children:children.flat(Infinity)}):({tag,props:props||{},children:children.flat(Infinity)}),e=(tag,className,...children)=>h(tag,{className},...children);
 const ModalFrame=new Function('React','h',modal+';return ModalFrame;')({useRef:value=>({current:value}),useEffect(){}},h);
 const nodes=x=>x&&typeof x==='object'?[x,...x.children.flatMap(nodes)]:[],text=x=>x&&typeof x==='object'?x.children.map(text).join(''):String(x??'');
 const latest=k=>k.bridge.events.findLast(e=>e.type==='room_members')?.data;
-function draw(data,host=true){return render({},[{type:'room_members',data}],host,data.mode,null,null,null,data.roomCode,caps,modes,['red'],h,e,()=>{throw Error('Rendering must not send a command');},()=>{},()=>{},()=>{},()=>{},()=>{},()=>null,ModalFrame,{current:null},'lobby-members-room','',true,{},()=>{},{});}
+function draw(data,host=true){return render({cfg:{transferLimitMB:128}},[{type:'room_members',data}],host,data.mode,null,null,null,data.roomCode,caps,modes,['red'],h,e,()=>{throw Error('Rendering must not send a command');},()=>{},()=>{},()=>{},()=>{},()=>{},()=>null,ModalFrame,{current:null},'lobby-members-room','',true,{},()=>{},{},{batchRecovery:{status:'none'}},'128',()=>{throw Error('Rendering must not change the transfer-limit draft');});}
 async function connected(mode,profiles={}){
  const f=fixture(),runtimes=[];
  function make(name){const bridge=f.bridge(),native={onInvalidated:()=>()=>{},snapshot:async()=>({})},ipc={on(){},removeListener(){}},nnk={state:{},modules:{rtc:f.rtc,signaling:f.signaling,bridge}};
@@ -65,7 +68,10 @@ function simulatedDocuments(f){
 const cases=[];
 for(const [mode,capacity]of Object.entries(caps))cases.push(['first real carrier lobby '+mode+' shares two admitted members and correct capacity with its actual renderer',async()=>{
  const f=await connected(mode);try{const host=latest(f.host),guest=latest(f.guest);assert.equal(host.list.length,2);assert.equal(host.list.filter(p=>!p.queued).length,2);assert.equal(host.capacity,capacity);assert.equal(guest.capacity,capacity);assert.deepEqual(guest.list,host.list);assert.equal(host.list.some(p=>p.entered),false);
-  for(const [data,isHost]of [[host,true],[guest,false]]){const tree=draw(data,isHost),all=nodes(tree),grid=all.find(n=>n.props.className==='nnk-rm-seats');assert.equal(grid.children.length,capacity);assert.equal(all.filter(n=>n.props.className==='nnk-seat nnk-seat-empty').length,capacity-2);assert.match(text(tree),new RegExp('2/'+capacity+' 人在房'));}
+  for(const [data,isHost]of [[host,true],[guest,false]]){const tree=draw(data,isHost),all=nodes(tree),grid=all.find(n=>n.props.className==='nnk-rm-seats');assert.equal(grid.children.length,capacity);assert.equal(all.filter(n=>n.props.className==='nnk-seat nnk-seat-empty').length,capacity-2);assert.match(text(tree),new RegExp('2/'+capacity+' 人在房'));
+   const limitControls=all.filter(n=>n.props['data-nnk-transfer-limit']===true);assert.equal(limitControls.length,1,'the room manifest must render its real transfer limit control');
+   const limitNodes=nodes(limitControls[0]),limitInput=limitNodes.find(n=>n.tag==='input'),limitSave=limitNodes.find(n=>n.tag==='button');
+   assert.match(text(limitControls[0]),/本机单批补传上限（MiB）/);assert.equal(limitInput.props.min,1);assert.equal(limitInput.props.max,1024);assert.equal(limitInput.props.value,'128');assert.equal(limitSave.props.disabled,true,'an unchanged confirmed limit must not send a redundant write');}
   assert.equal(f.host.runtime.engines.current,null);assert.equal(f.guest.runtime.engines.current,null);assert.equal(f.host.runtime.coordinator.members.size,0);assert.equal(f.guest.bridge.phases.at(-1).phase,'lobby_waiting');
  }finally{await f.close();}
 }]);

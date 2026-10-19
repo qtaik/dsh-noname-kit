@@ -13,6 +13,7 @@ import { runInNewContext } from 'node:vm'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
+import { runBridgeSerializationChecks } from './test-bridge-rebinding.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -254,7 +255,7 @@ export default { name: "standard", character: characters, translate: translates 
   ok(sigSrc.includes('nnkSignal = true'), '信令层失败统一打标(nnkSignal)')
 
   ok(bridgeSrc.includes('var backlog = []') && bridgeSrc.includes('backlog = batch'), '桥事件有重发缓冲(送达确认前不丢)')
-  ok(bridgeSrc.includes('if (!cfg || polling || stopped)') && bridgeSrc.includes('polling = false'), '桥轮询串行化(fetch 慢时不让两轮并发)')
+  for (const check of await runBridgeSerializationChecks()) ok(check.ok, check.name)
 
 
   // ── 外围结构性回归锁:transfer/manifest/compat/index/client──
@@ -311,8 +312,17 @@ export default { name: "standard", character: characters, translate: translates 
   ok(txSrc.includes('补包需要官方版无名杀(Electron 外壳)'), '「没有 Node 文件能力」说明需要官方 Electron 版')
   ok(onlineSrc.includes("bridgeConfig = 'ok'") && onlineSrc.includes('bridgeConfig,'),
     '内核心跳状态上报桥配置在不在(内容哈希刻意跳过它,永久离线时看不见原因)')
-  ok(clientSrc.includes("kernel.bridgeConfig === 'missing'") && clientSrc.includes('以上都试过仍离线'),
-    '工坊离线提示点名桥配置缺失 + 恒定给出「重装内核」兜底出路')
+  const offlineHintStart = clientSrc.indexOf('function onlineKernelOfflineHint(')
+  const offlineHintEnd = clientSrc.indexOf('    function OnlinePanel(', offlineHintStart)
+  assert.ok(offlineHintStart >= 0 && offlineHintEnd > offlineHintStart)
+  const offlineHint = runInNewContext('(' + clientSrc.slice(offlineHintStart, offlineHintEnd).trim() + ')', { URL })
+  const pageLocation = { protocol: 'http:', port: '45678' }
+  const boundKernel = { state: 'ok', boundApi: 'http://127.0.0.1:45678/noname-kit-api', tokenMatches: true, bridgeConfig: 'ok' }
+  ok(/桥配置缺失.*绑定到此 DSH/.test(offlineHint({ ...boundKernel, bridgeConfig: 'missing', boundApi: null }, pageLocation)), '真实离线提示：缺失桥配置时提供独立绑定入口')
+  ok(/54258.*45678.*绑定到此 DSH/.test(offlineHint({ ...boundKernel, boundApi: 'http://127.0.0.1:54258/noname-kit-api' }, pageLocation)), '真实离线提示：错绑端口同时说明原端口和当前端口')
+  ok(/连接凭据.*绑定到此 DSH/.test(offlineHint({ ...boundKernel, tokenMatches: false }, pageLocation)), '真实离线提示：凭据不符时重新绑定当前实例')
+  ok(/联机助手.*已启用.*完全重启无名杀/.test(offlineHint(boundKernel, pageLocation)), '真实离线提示：绑定正常时检查启用状态并完整重启')
+  ok(/内核尚未安装.*安装内核/.test(offlineHint({ state: 'missing' }, pageLocation)), '真实离线提示：尚未安装时先安装内核')
   ok(onlineSrc.includes('function ioHint(error)'), '安装内核失败按错误码给人话与下一步(EPERM/EBUSY/ENOSPC)')
 
 

@@ -121,4 +121,38 @@ await test('idle rehandshake rejects a changed same-epoch nonce, lower epoch, di
 await test('pending consent and irreversible publication both reject higher-epoch rehandshake',async()=>{
  const w=await world();try{const choice=await w.offer(),n=w.nodes.guest;function changed(){const frame=w.frame('guest','hello',{nonce:'c'.repeat(32)});frame.data.scope.partyEpoch++;return frame;}assert.notEqual(w.g.validate(n.owner,changed()),true);w.g.decide({...choice,yes:true});await until(()=>w.g.snapshot().files.at(-1)?.status==='committed_activation_required');await drain();assert.notEqual(w.g.validate(n.owner,changed()),true);assert.equal(w.counts.commits,1);assert.equal(w.g.snapshot().files.at(-1).fileCommitted,true);}finally{await w.close();}
 });
+await test('registered participant labels reach local progress but never enter a consent or file frame',async()=>{
+ const w=await world(),sent=[];
+ try{
+  w.nodes.host.registry.setIdentity(w.nodes.host.peer,w.nodes.host.owner,{name:'同名客人',avatar:'caocao'});
+  w.nodes.guest.registry.setIdentity(w.nodes.guest.peer,w.nodes.guest.owner,{name:'测试房主',avatar:'liubei'});
+  for(const node of Object.values(w.nodes)){const original=node.registry.sendControl.bind(node.registry);node.registry.sendControl=(peer,type,data)=>{sent.push({type,data:clone(data)});return original(peer,type,data);};}
+  const choice=await w.offer();
+  const host=w.h.snapshot().proposals.at(-1),guest=w.g.snapshot().proposals.at(-1);
+  assert.equal(host.peerLabel,'同名客人（客机 1）');assert.equal(host.peerOrdinal,1);
+  assert.equal(guest.peerLabel,'测试房主（房主）');assert.equal(host.peerIdentity.name,'同名客人');
+  assert.equal(w.g.decide({...choice,yes:true}),true);
+  await until(()=>w.h.snapshot().files.at(-1)?.status==='committed_activation_required','host observes the real final outcome');await drain();
+  for(const event of w.events.filter(row=>row.type==='batch_files')){assert.equal(event.data.peerLabel,event.role==='host'?host.peerLabel:guest.peerLabel);assert.equal(event.data.peerOrdinal,1);}
+  assert.equal(w.h.snapshot().files.at(-1).peerLabel,host.peerLabel);
+  function check(value){if(!value||typeof value!=='object')return;for(const [key,item]of Object.entries(value)){assert.ok(!['peerLabel','peerIdentity','peerOrdinal','transferParticipants','peerDisplay'].includes(key),'local display field leaked to wire: '+key);check(item);}}
+  assert.ok(sent.some(frame=>frame.type==='transfer-file'));for(const frame of sent)check(frame.data);
+ }finally{await w.close();}
+});
+await test('a batch keeps its original participant label after rename, retry and disconnect',async()=>{
+ const w=await world();
+ try{
+  const node=w.nodes.host;node.registry.setIdentity(node.peer,node.owner,{name:'原来名字',avatar:''});
+  const oldChoice=await w.offer(),oldHost=w.h.snapshot().proposals.at(-1);
+  node.registry.setIdentity(node.peer,node.owner,{name:'新名字',avatar:''});
+  assert.equal(w.h.snapshot().proposals.at(-1).peerLabel,'原来名字（客机 1）');
+  assert.equal(w.g.decide({...oldChoice,yes:false}),true);await until(()=>w.h.snapshot().proposals.at(-1).status==='declined');
+  assert.equal(await w.h.retry(binding(w.h.snapshot().proposals.at(-1))),true);
+  await until(()=>w.g.snapshot().proposals.at(-1)?.proposal!==oldChoice.proposal,'new immutable batch arrives');
+  const current=w.h.snapshot().proposals.at(-1);assert.equal(current.peerLabel,'新名字（客机 1）');
+  assert.equal(w.h.snapshot().proposals.find(row=>row.proposal===oldHost.proposal).peerLabel,'原来名字（客机 1）');
+  node.registry.transportStopped(node.owner,'test disconnect');await w.h.forgetPeer(node.peer);
+  assert.equal(w.h.snapshot().proposals.find(row=>row.proposal===current.proposal).peerLabel,'新名字（客机 1）');
+ }finally{await w.close();}
+});
 console.log('\n全部通过: '+passed+' 项\n失败: 0 项');
