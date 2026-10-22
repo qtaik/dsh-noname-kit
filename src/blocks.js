@@ -134,21 +134,25 @@ export function scanBlocks(code, options = {}) {
   const anchored = new Map(scanEffectiveAnchored(code, options).map(b => [b.key, b]))
   const blocks = []
   for (const kind of [...CONTENT_KINDS, 'translate']) {
-    for (const b of virtualBlocks(code, kind, options)) {
-      const hit = anchored.get(b.key)
-      blocks.push({ key: b.key, kind: b.kind, id: b.id, lines: (hit?.text || b.text).split('\n').length, virtual: !hit })
+    const candidates = virtualCandidates(code, kind, options), counts = new Map()
+    for (const b of candidates) counts.set(b.key, (counts.get(b.key) || 0) + 1)
+    for (const b of candidates) {
+      const ambiguous = !!b.ambiguous || counts.get(b.key) > 1
+      const hit = !ambiguous && anchored.get(b.key)
+      blocks.push({ key: b.key, kind: b.kind, id: b.id, lines: (hit?.text || b.text).split('\n').length, virtual: !hit, ...(ambiguous ? { ambiguous: true, start: b.start, end: b.end } : {}) })
     }
   }
-  return { anchored: anchored.size > 0, blocks }
+  const model = sourceStructure(code, options)
+  return { anchored: anchored.size > 0, blocks, ...(model.parseError ? { error: model.parseError } : {}) }
 }
 
 /** Read true entries; invalid legacy marker keys cannot expose nested configuration. */
 export function extractBlock(code, kind, id, options = {}) {
   const key = kind + ':' + id
+  const choices = virtualCandidates(code, kind, options).filter(x => x.id === id)
+  if (choices.length !== 1 || choices[0].ambiguous) return null
   const hit = scanEffectiveAnchored(code, options).find(b => b.key === key)
-  if (hit) return hit.text
-  const b = virtualBlocks(code, kind, options).find(x => x.id === id)
-  return b ? b.text : null
+  return hit ? hit.text : choices[0].text
 }
 
 /** 内容块种类:skill / card / character 三种条目形状相同(区段: { 名字: {...} }),
@@ -179,7 +183,8 @@ function virtualCandidates(code, kind, options = {}) {
     for (const [id, parts] of groups) {
       const start = parts[0].start, end = parts[parts.length - 1].end
       const contiguous = parts.every((p, i) => i === 0 || p.index === parts[i - 1].index + 1)
-      out.push({ key: 'translate:' + id, kind, id, start, end, contiguous, readOnly: parts.some(p => p.readOnly || p.indirect),
+      const ambiguous = new Set(parts.map(p => p.name)).size !== parts.length
+      out.push({ key: 'translate:' + id, kind, id, start, end, contiguous, ambiguous, readOnly: ambiguous || parts.some(p => p.readOnly || p.indirect),
         text: contiguous ? code.slice(start, end + 1) : parts.map(p => code.slice(p.start, p.end + 1)).join(',\n') })
     }
   }

@@ -11,6 +11,8 @@ import { join, resolve, basename, relative, sep, dirname, parse } from 'node:pat
 import { validateExtensionCode, syntaxCheck, collectDefinedIds } from './validate.js'
 import { scanEffectiveAnchored, scanBlocks, extractBlock, assembleBlocks, checkFidelity, migrateCode, stripAnchors, findAllSections, sectionProperties, virtualCharacterBlocks, virtualCardBlocks, virtualBlocks, virtualTranslateBlocks, CONTENT_KINDS } from './blocks.js'
 
+import { loadPackageSources, packageBlocks, readCoverage, readGap, readBoundedUtf8, pageRead } from './package-read.js'
+
 const FOLDER_RE = /^[\w\u4e00-\u9fff-]{1,64}$/
 
 /** 多文件包扫描时跳过的目录(素材/备份/依赖,绝不会有条目)。 */
@@ -317,72 +319,69 @@ async function writeExtensionInner(nonameDir, { folder, file, code, blocks, edit
   return { ...verdict, wrote: true, path: relative(nonameDir, target).split('\\').join('/'), backup, infoWritten }
 }
 
-/**
- * 读取扩展内容。file 缺省 = extension.js。
- * - 默认:该文件全文整读(兼容)
- * - opts.listBlocks=true:未指定 file 时**聚合全包**(每块带 file 归属、顶层 files
- *   清单);指定 file 时只返回该文件的目录
- * - opts.block='kind:id':file 给定 → 只在该文件找;未给定 → 先 extension.js,
- *   找不到再按序扫全包,首个命中即返回(块带 file)
- */
+/** Bounded source reads share one static package graph and preserve physical origins. */
 export async function readExtension(nonameDir, folder, opts = {}) {
   const { full } = safeFolderPath(nonameDir, folder)
-  const entryPath = safeEntryFilePath(nonameDir, folder, opts.file)
-  const fileRel = entryPath.rel
-  const target = entryPath.full
+  const entryPath = safeEntryFilePath(nonameDir, folder, opts.file), fileRel = entryPath.rel
   const names = await readdir(full)
-  const result = { folder, file: fileRel, files: names.filter((n) => !n.startsWith('.')) }
-  let code
-  try { code = await readFile(target, 'utf8') } catch { /* 文件可能不存在(多文件包的壳可能极短或没有) */ }
-  if (opts.listBlocks) {
-    if (opts.file == null || opts.file === '') {
-      // 聚合全包:每个含条目的文件一段目录,块带 file 归属
-      const files = await listPackageJsFiles(nonameDir, folder)
-      const blocks = []
-      const fileSummaries = []
-      for (const f of files) {
-        let c
-        try { c = await readFile(join(full, f), 'utf8') } catch { continue }
-        const sb = scanBlocks(c, { file: f })
-        if (!sb.blocks.length) continue
-        fileSummaries.push({ file: f, anchored: sb.anchored, blocks: sb.blocks.length })
-        for (const b of sb.blocks) blocks.push({ ...b, file: f })
+  const result = { folder, file: fileRel, files: names.filter(n => !n.startsWith('.')), warnings: [] }
+  const scoped = opts.file != null && opts.file !== ''
+  try {
+    if (opts.listBlocks || opts.block) {
+      const state = packageBlocks(await loadPackageSources(full))
+      result.coverage = state.coverage
+      if (opts.snapshot && opts.snapshot !== state.coverage.snapshot) throw new Error('源码快照已变化，请从 offset:0 重新读取目录。')
+      let candidates = state.blocks.filter(b => !scoped || b.file === fileRel)
+      if (opts.listBlocks) {
+        const query = String(opts.query || '').trim().toLocaleLowerCase()
+        if (query) candidates = candidates.filter(b => `${b.key} ${b.file}`.toLocaleLowerCase().includes(query))
+        const paged = pageRead(candidates, opts, 'entries')
+        const summaries = [...state.modules.keys()].filter(file => !scoped || file === fileRel).map(file => {
+          const own = state.blocks.filter(b => b.file === file)
+          return { file, anchored: own.some(b => !b.virtual), blocks: own.length }
+        })
+        result.blocks = { anchored: candidates.some(b => !b.virtual), blocks: paged.value.map(b => {
+          const item = { key: b.key, kind: b.kind, id: b.id, file: b.file, start: b.start, end: b.end, lines: b.lines, virtual: b.virtual, readOnly: !!b.readOnly, ambiguous: !!b.ambiguous }
+          if (b.sources) item.sources = b.sources
+          return item
+        }), files: summaries }
+        result.pagination = paged.pagination
+        if (scoped && !state.modules.has(fileRel)) result.error = `文件 ${fileRel} 未能读取，不能把未扫描视为没有条目；请查看 coverage。`
+      } else {
+        const match = new RegExp('^(skill|card|character|translate):(' + ENTRY_ID_SOURCE + ')$', 'u').exec(String(opts.block))
+        if (!match || !isEntryId(match[2])) throw new Error('block 参数格式应为 kind:id，例如 skill:cs_tianfa。')
+        const exact = candidates.filter(b => b.key === opts.block)
+        if (exact.length !== 1 || exact[0].ambiguous && (exact[0].sources || []).length > 0) {
+          if (exact.length) {
+            result.ambiguous = { key: String(opts.block), sources: exact.flatMap(b => b.sources || [{ file: b.file, start: b.start, end: b.end }]) }
+            result.error = '同名区块有多个物理来源；跨文件请用 file 选择，同文件重复定义不能猜选。可按文件分页读取原文。'
+          } else result.error = result.coverage.complete ? `未找到区块「${opts.block}」（可用 listBlocks 查看目录）。` : `已扫描部分未找到区块「${opts.block}」；扫描不完整，不能判定不存在。请查看 coverage。`
+        } else {
+          const block = exact[0], paged = pageRead(block.text, opts)
+          result.file = block.file; result.code = paged.value; result.pagination = paged.pagination
+          result.block = { kind: block.kind, id: block.id, file: block.file }
+        }
       }
-      result.blocks = { anchored: fileSummaries.some((f) => f.anchored), blocks, files: fileSummaries }
     } else {
-      result.blocks = code !== undefined
-        ? scanBlocks(code, { file: fileRel })
-        : { anchored: false, blocks: [] }
+      result.coverage = readCoverage()
+      try {
+        const loaded = await readBoundedUtf8(full, entryPath.full)
+        result.coverage.filesRead = 1; result.coverage.bytesRead = loaded.bytes; result.coverage.snapshot = loaded.hash
+        if (opts.snapshot && opts.snapshot !== loaded.hash) throw new Error('源码快照已变化，请从 offset:0 重新读取。')
+        const paged = pageRead(loaded.code, opts)
+        result.code = paged.value; result.pagination = paged.pagination
+      } catch (error) { readGap(result.coverage, error.code || 'unreadable-file', fileRel, error.message); result.error = error.message }
     }
-  } else if (opts.block) {
-    const m = new RegExp('^(skill|card|character|translate):(' + ENTRY_ID_SOURCE + ')$', 'u').exec(String(opts.block))
-    if (!m || !isEntryId(m[2])) result.error = 'block 参数格式应为 kind:id,例如 skill:cs_tianfa。'
-    else {
-      let fileMissing = false
-      // 查找范围:指定 file → 只查该文件;未指定 → 先 extension.js,再扫全包
-      // (多文件包的壳 extension.js 里没有条目,不能因为它存在就停止查找)
-      let tryFiles
-      if (opts.file != null && opts.file !== '') tryFiles = [fileRel]
-      else tryFiles = ['extension.js', ...(await listPackageJsFiles(nonameDir, folder)).filter((f) => f !== 'extension.js')]
-      for (const f of tryFiles) {
-        let c
-        try { c = await readFile(join(full, f), 'utf8') } catch { if (f === fileRel) fileMissing = true; continue }
-        const text = extractBlock(c, m[1], m[2], { file: f })
-        if (text != null) { result.code = text; result.block = { kind: m[1], id: m[2], file: f }; break }
-      }
-      if (result.code === undefined) result.error = fileMissing ? `文件 ${fileRel} 不存在。` : `未找到区块「${opts.block}」(可用 listBlocks 查看目录)。`
-    }
-  } else if (code !== undefined) {
-    result.code = code
-  }
+  } catch (error) { result.error = error.message }
   if (names.includes('info.json')) {
     try {
-      const parsedInfo = JSON.parse(await readFile(join(full, 'info.json'), 'utf8'))
-      // 顶层必须是对象(写入通道不拦数组/字符串等非常规 JSON,但返回给工具前要
-      // 过 schema——info 声明为 object,非对象会让整个读取结果被拒收)
-      result.info = parsedInfo && typeof parsedInfo === 'object' && !Array.isArray(parsedInfo) ? parsedInfo : {}
-    } catch { result.info = {} }
+      const loaded = await readBoundedUtf8(full, join(full, 'info.json'), 256 * 1024), parsed = JSON.parse(loaded.code)
+      result.info = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) result.warnings.push('info.json 顶层不是对象，仅返回空元数据；源码读取结果不受影响。')
+    } catch (error) { result.warnings.push('info.json 未读取：' + error.message) }
   }
+  if (result.coverage && !result.coverage.complete) result.warnings.push('静态扫描不完整；coverage.gaps 中的文件或动态内容未被确认，不代表内容不存在。')
+  if (result.pagination && !result.pagination.complete) result.warnings.push('本页未显示完；请携带 coverage.snapshot 并用 pagination.nextOffset 继续。')
   return result
 }
 
@@ -580,59 +579,22 @@ function extractDisplayNames(code, sectionNames = ['translate'], options = {}) {
  * 只读,不写任何文件。
  */
 export async function listEntries(nonameDir, folder, kind) {
-  if (kind !== 'character' && kind !== 'card') {
-    return { ok: false, kind, entries: [], error: 'kind 应为 character 或 card。' }
-  }
-  const { full } = safeFolderPath(nonameDir, folder)
-  const files = await listPackageJsFiles(nonameDir, folder)
-  if (!files.length) return { ok: false, kind, entries: [], error: '扩展包里没有任何 .js 文件。' }
-  const names = new Map()
-  const codes = []
-  for (const f of files) {
-    let code
-    try { code = await readFile(join(full, f), 'utf8') } catch { continue }
-    codes.push({ f, code })
-    for (const [id, name] of extractDisplayNames(code, ['translate'], { file: f })) if (!names.has(id)) names.set(id, name)
-  }
-  const entries = []
-  const seenIds = new Set()
-  for (const { f, code } of codes) {
-    for (const b of scanBlocks(code, { file: f }).blocks) {
-      if (b.kind !== kind) continue
-      if (seenIds.has(b.id)) continue // 跨文件同名:保留先见文件(extension.js 优先)
-      seenIds.add(b.id)
-      entries.push({ id: b.id, lines: b.lines, name: names.get(b.id) || '', file: f })
-    }
-  }
-  if (!entries.length) {
-    const hasExt = files.includes('extension.js')
-    return { ok: true, kind, entries, error: hasExt ? undefined : '该扩展没有 extension.js。' }
-  }
-  return { ok: true, kind, entries }
+  if (kind !== 'character' && kind !== 'card') return { ok: false, kind, entries: [], error: 'kind 应为 character 或 card。' }
+  const { full } = safeFolderPath(nonameDir, folder), state = packageBlocks(await loadPackageSources(full))
+  const names = new Map(state.tables.filter(t => t.kind === 'translate' && typeof t.literalValue === 'string').map(t => [t.id, t.literalValue]))
+  const entries = state.blocks.filter(b => b.kind === kind).map(b => ({ id: b.id, lines: b.lines, name: names.get(b.id) || '', file: b.file, ambiguous: !!b.ambiguous }))
+  return { ok: entries.length > 0 || state.coverage.complete, kind, entries, coverage: state.coverage, ...(!state.coverage.complete ? { error: '静态扫描不完整，请查看 coverage；未读取的内容不能判定不存在。' } : {}) }
 }
 
-/** 列出某个条目(武将或卡牌——卡牌也可带 skills 字段)的技能(勾选候选):
- * id + translate 显示名(尽力,全包聚合——技能名常在别的文件里)。只读。 */
+/** Read character/card skill references from the same package graph as the entry list. */
 export async function listEntrySkills(nonameDir, folder, entryId) {
-  if (!isEntryId(entryId)) {
-    return { ok: false, skills: [], error: '条目 ID 格式无效。' }
-  }
-  const { full } = safeFolderPath(nonameDir, folder)
-  const files = await listPackageJsFiles(nonameDir, folder)
-  let entry = null
-  const names = new Map()
-  for (const f of files) {
-    let code
-    try { code = await readFile(join(full, f), 'utf8') } catch { continue }
-    for (const [id, name] of extractDisplayNames(code, ['translate'], { file: f })) if (!names.has(id)) names.set(id, name)
-    if (!entry) {
-      entry = virtualCharacterBlocks(code, { file: f }).find((b) => b.id === entryId)
-        || virtualCardBlocks(code, { file: f }).find((b) => b.id === entryId)
-    }
-  }
-  if (!entry) return { ok: true, skills: [] }
-  const skills = (entry.skillIds || []).filter(isEntryId).map((id) => ({ id, name: names.get(id) || '' }))
-  return { ok: true, skills }
+  if (!isEntryId(entryId)) return { ok: false, skills: [], error: '条目 ID 格式无效。' }
+  const { full } = safeFolderPath(nonameDir, folder), state = packageBlocks(await loadPackageSources(full))
+  const choices = state.tables.filter(t => ['character', 'card'].includes(t.kind) && t.id === entryId)
+  if (choices.length !== 1) return { ok: false, skills: [], coverage: state.coverage, error: choices.length ? '同名条目有多个物理来源，不能猜选其技能。' : state.coverage.complete ? '未找到指定条目。' : '扫描不完整，不能判定条目不存在。' }
+  const names = new Map(state.tables.filter(t => t.kind === 'translate' && typeof t.literalValue === 'string').map(t => [t.id, t.literalValue]))
+  const skills = (choices[0].skillIds || []).filter(isEntryId).map(id => ({ id, name: names.get(id) || '' }))
+  return { ok: true, skills, coverage: state.coverage, ...(choices[0].skillsDynamic ? { warning: '技能引用包含动态内容，仅列出静态可确认的部分。' } : {}) }
 }
 
 /** 深度枚举目录下全部 .js 绝对路径;目录不存在/读不了返回空。 */

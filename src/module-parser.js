@@ -424,7 +424,7 @@ export function sourceModel(code, options = {}) {
       if (physical.has(key)) continue
       physical.add(key)
       const data = propertyData(prop, m)
-      tables.push({ kind, id, file: m.file, start: prop.start, end: prop.end - 1, valueType: prop.value.type,
+      tables.push({ kind, id, file: m.file, start: prop.start, end: prop.end - 1, sectionStart: node.start, sectionEnd: node.end - 1, valueType: prop.value.type,
         readOnly: !!data.readOnly || derived || m.file !== file, indirect: derived || m.file !== file, skillIds: data.skillIds, skillsDynamic: data.skillsDynamic,
         ...(data.literalValue !== undefined ? { literalValue: data.literalValue } : {}), text: m.code.slice(prop.start, prop.end) })
     }
@@ -510,14 +510,14 @@ export function sourceModel(code, options = {}) {
     registered.add(token)
     if (flow.conditional) addIssue(m, 'Registration depends on a runtime condition', kind)
     if (!targets.length) {
-      registrations.push({ kind, id, descriptor: null, start: call.start, end: call.end - 1, dynamic: true })
+      registrations.push({ kind, id, file: m.file, descriptor: null, start: call.start, end: call.end - 1, dynamic: true })
       if (kind === 'mode') addIssue(m, 'Dynamic or unresolved mode registration', kind)
     } else for (const target of targets) {
       const isImport = members(call.callee)?.join('.') === 'game.import'
       const named = valueOf(target.node.properties.find(p => keyOf(p) === 'name')?.value, target.m)
       const effectiveId = isImport ? (isEntryId(named) ? named : null) : id
       if (kind === 'mode' && !effectiveId) addIssue(m, 'Mode identifier is dynamic', kind)
-      registrations.push({ kind, id: effectiveId,
+      registrations.push({ kind, id: effectiveId, file: m.file,
         descriptor: { file: target.m.file, open: target.node.start, close: target.node.end - 1 }, start: call.start, end: call.end - 1, dynamic: !effectiveId || flow.conditional,
         ...(flow.conditional ? { conditional: true } : {}) })
       descriptor(target.node, target.m)
@@ -553,7 +553,7 @@ export function sourceModel(code, options = {}) {
         if (type === 'mode' || modeFile) {
           for (const d of objectDescriptors(target.node, target.m)) {
             const id = valueOf(d.node.properties.find(p => keyOf(p) === 'name')?.value, d.m)
-            registrations.push({ kind: 'mode', id: isEntryId(id) ? id : null, descriptor: { file: d.m.file, open: d.node.start, close: d.node.end - 1 },
+            registrations.push({ kind: 'mode', id: isEntryId(id) ? id : null, file: d.m.file, descriptor: { file: d.m.file, open: d.node.start, close: d.node.end - 1 },
               start: d.node.start, end: d.node.end - 1, dynamic: !isEntryId(id) })
           }
         }

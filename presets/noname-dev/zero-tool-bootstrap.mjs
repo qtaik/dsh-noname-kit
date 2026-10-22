@@ -1,6 +1,7 @@
 /** Keep the first top-level request on an empty tool catalog, then expose configured resident tools and names unlocked by dev_tool_search. Promotion is reconstructed from durable session events. After compaction, expose shells and compactionTools until a new promotion signal appears. Filter configured context sources during controlled requests. Subagents start promoted unless includeSubagents is enabled; filter failures retain the full catalog. Adapted from xiaobright/dsh-anchored-standard (MIT). */
 
 import { createEpochPromotion } from './compaction-epoch.mjs'
+import { createSessionState, stateSchema } from './session-state.mjs'
 
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'zero-tool-bootstrap'
@@ -41,8 +42,10 @@ export function apply(ctx, config) {
   const residentTools = stringListOrEmpty(config?.residentTools, 'residentTools')
   const suppressedSources = sourceList(config?.suppressedContextSources, 'suppressedContextSources', DEFAULT_SUPPRESSED_SOURCES)
 
-  const promotion = createEpochPromotion(['assistant/message'], { includeSubagents: config?.includeSubagents === true })
+  const promotion = createEpochPromotion(['assistant/message'], { ctx, includeSubagents: config?.includeSubagents === true })
   ctx.on('session/event', (session, event) => promotion.observe(session, event))
+
+  const selectedCounts = new WeakMap()
 
   let warned = false
   const warnOnce = (message) => {
@@ -55,34 +58,32 @@ export function apply(ctx, config) {
     }
   }
 
-  /**
-   * Tool names the model explicitly unlocked via `dev_tool_search` for one
-   * session. Derived from durable `tool/call` events so resume/reload keeps
-   * them. The event's `arguments` is the raw JSON string the model produced;
-   * we parse it defensively and read the `toolNames` array.
-   */
-  const unlockedFor = (session) => {
-    const unlocked = new Set()
-    if (session === undefined || !Array.isArray(session.events)) return unlocked
-    for (const event of session.events) {
-      if (event.type !== 'tool/call') continue
-      if (event.data?.name !== 'dev_tool_search') continue
+  /** Requested tool names remain visible across resume; assembly still filters them by the current callable catalog. */
+  const unlocks = createSessionState(ctx, {
+    key: 'noname-kit:tool-unlocks',
+    stateVersion: 1,
+    stateSchema: stateSchema((value) => value !== null && typeof value === 'object'
+      && Array.isArray(value.names) && value.names.every((item) => typeof item === 'string' && item.length > 0), 'tool unlocks'),
+    init: () => ({ names: [] }),
+    apply(state, event) {
+      if (event.type !== 'tool/call' || event.data?.name !== 'dev_tool_search') return state
       let args
-      try {
-        args = JSON.parse(event.data.arguments)
-      } catch {
-        continue
-      }
-      if (args === null || typeof args !== 'object' || Array.isArray(args)) continue
-      const names = args.toolNames
-      if (Array.isArray(names)) for (const name of names) if (typeof name === 'string' && name.length > 0) unlocked.add(name)
-    }
-    return unlocked
-  }
+      try { args = typeof event.data.arguments === 'string' ? JSON.parse(event.data.arguments) : event.data.arguments } catch { return state }
+      if (args === null || typeof args !== 'object' || Array.isArray(args) || !Array.isArray(args.toolNames)) return state
+      const names = [...new Set([...state.names, ...args.toolNames.filter((item) => typeof item === 'string' && item.length > 0)])]
+      return names.length === state.names.length ? state : { names }
+    },
+  })
+  ctx.on('session/event', (session, event) => unlocks.observe(session, event))
+  const unlockedFor = (session) => session === undefined ? [] : unlocks.state(session).names
 
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
     // Downstream errors propagate untouched; only this filter's own logic is guarded.
     const assembled = await next()
+    const select = (tools) => {
+      if (context.agent !== undefined) selectedCounts.set(context.agent, tools.length)
+      return { ...assembled, tools }
+    }
     try {
       const status = promotion.status(context.agent)
       if (status.promoted) {
@@ -96,16 +97,13 @@ export function apply(ctx, config) {
           'str_replace_editor', ...RESIDENT_DISCOVERY_TOOLS,
           ...residentTools, ...unlockedFor(context.agent?.session),
         ])
-        return {
-          ...assembled,
-          tools: assembled.tools.filter((tool) => keep.has(tool.name)),
-        }
+        return select(assembled.tools.filter((tool) => keep.has(tool.name)))
       }
       const { boundary } = status
       // First request (no compaction yet): zero tools, the "we" anchor.
-      if (boundary < 0) return { ...assembled, tools: [] }
+      if (boundary < 0) return select([])
       // Post-compaction: core work set so mid-task work can continue.
-      if (compactionTools.length === 0) return { ...assembled, tools: [] }
+      if (compactionTools.length === 0) return select([])
       const available = new Set(assembled.tools.map((tool) => tool.name))
       const selectedShells = SHELLS.filter((toolName) => available.has(toolName))
       const missing = compactionTools.filter((toolName) => !available.has(toolName))
@@ -118,10 +116,7 @@ export function apply(ctx, config) {
         return assembled
       }
       const keep = new Set([...selectedShells, ...compactionTools])
-      return {
-        ...assembled,
-        tools: assembled.tools.filter((tool) => keep.has(tool.name)),
-      }
+      return select(assembled.tools.filter((tool) => keep.has(tool.name)))
     } catch (error) {
       // A filter bug must never brick a session: degrade to the full catalog.
       warnOnce(`${name}: bootstrap filter failed, exposing the full catalog: ${String((error && error.message) || error)}`)
@@ -134,13 +129,23 @@ export function apply(ctx, config) {
     const decision = await next()
     if (decision.kind === 'reject') return decision
     try {
-      if (promotion.status(agent).promoted || suppressedSources.size === 0) return decision
-      if (!Array.isArray(decision.messages)) return decision
-      const kept = decision.messages.filter((message) => {
+      const status = promotion.status(agent)
+      let selected = decision
+      // A zero-tool anchor has no inline declaration baseline. Start the resident
+      // series once so the host does not defer every newly exposed tool.
+      const session = agent?.session
+      if (status.promoted && selectedCounts.get(agent) > 0 && typeof session?.requestHeader === 'function'
+        && session.requestHeader() !== undefined) {
+        const baseline = typeof session.toolHistory === 'function' ? session.toolHistory()?.tools : session.requestHeader().tools
+        if (!Array.isArray(baseline) || baseline.length === 0) selected = { ...decision, startsRequestSeries: true }
+      }
+      if (status.promoted || suppressedSources.size === 0) return selected
+      if (!Array.isArray(selected.messages)) return selected
+      const kept = selected.messages.filter((message) => {
         const kind = message?.source?.kind
         return typeof kind !== 'string' || !suppressedSources.has(kind)
       })
-      return kept.length === decision.messages.length ? decision : { ...decision, messages: kept }
+      return kept.length === selected.messages.length ? selected : { ...selected, messages: kept }
     } catch (error) {
       // A filter bug must never eat context: degrade to keeping every message.
       warnOnce(`${name}: pre-step context filter failed, keeping injected context: ${String((error && error.message) || error)}`)

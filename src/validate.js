@@ -158,7 +158,7 @@ export function validateExtensionCode({ code, style, kind, folder, idPrefix }) {
   const errors = []
   const warnings = []
   if (typeof code !== 'string' || code.trim().length === 0) {
-    return { ok: false, style, errors: [{ message: '代码为空' }], warnings }
+    return { ok: false, style: style === 'module' ? 'module' : 'classic', errors: [{ message: '代码为空' }], warnings }
   }
 
   const detected = detectStyle(code)

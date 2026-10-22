@@ -75,7 +75,7 @@ function parentPath(path) {
 /** Register the post-promotion instruction-hint injector. */
 export function apply(ctx, config) {
   const promoteEvents = parsePromoteOn(config.promoteOn)
-  const promotion = createEpochPromotion(promoteEvents)
+  const promotion = createEpochPromotion(promoteEvents, { ctx })
   ctx.on('session/event', (session, event) => promotion.observe(session, event))
 
   /** Session/directory pairs that already received the hint. */

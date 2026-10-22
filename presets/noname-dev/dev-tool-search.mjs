@@ -33,6 +33,7 @@ function toJsonSchema(spec) {
   for (const [key, meta] of Object.entries(spec || {})) {
     const prop = { type: meta.type }
     if (meta.description) prop.description = meta.description
+    if (meta.items) prop.items = meta.items
     properties[key] = prop
     if (meta.required) required.push(key)
   }
@@ -75,51 +76,73 @@ export function apply(ctx) {
     parameters: toJsonSchema({
       query: { type: 'string', required: false, description: 'search keywords (e.g. "web", "subagent")' },
       toolNames: { type: 'array', required: false, description: 'exact tool names to unlock', items: { type: 'string' } },
+      offset: { type: 'integer', required: false, description: 'zero-based matching result offset; use nextOffset to continue' },
+      limit: { type: 'integer', required: false, description: 'results per page, 1–25; default 25' },
     }),
     output: {
-      schema: { type: 'object', additionalProperties: false, properties: { text: { type: 'string' } }, required: ['text'] },
+      schema: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          text: { type: 'string' }, total: { type: 'integer' }, offset: { type: 'integer' }, limit: { type: 'integer' },
+          hasMore: { type: 'boolean' }, nextOffset: { type: 'integer' },
+          unlocked: { type: 'array', items: { type: 'string' } }, unavailable: { type: 'array', items: { type: 'string' } },
+        }, required: ['text'],
+      },
       render: (_a, v) => [{ type: 'text', text: v.text }],
     },
     async execute(args, exec) {
       const query = typeof args.query === 'string' ? args.query.trim() : ''
-      const unlock = Array.isArray(args.toolNames) ? args.toolNames.filter((name) => typeof name === 'string' && name.length > 0) : []
-
-      const lines = []
-      if (unlock.length > 0) {
-        lines.push(`Unlocked for the next request: ${unlock.join(', ')}`)
+      const unlock = [...new Set(Array.isArray(args.toolNames) ? args.toolNames.filter((name) => typeof name === 'string' && name.length > 0) : [])]
+      const offset = args.offset ?? 0
+      const limit = args.limit ?? MAX_RESULTS
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > MAX_RESULTS) {
+        return { text: 'Provide offset as a nonnegative safe integer and limit as an integer from 1 to 25.' }
       }
       if (query.length === 0 && unlock.length === 0) {
-        lines.push('Provide `query` to search the catalog, or `toolNames` to unlock tools.')
-        return { text: lines.join('\n') }
+        return { text: 'Provide `query` to search the catalog, or `toolNames` to unlock tools.' }
       }
-      if (query.length === 0) {
-        return { text: lines.join('\n') || 'Nothing to do.' }
-      }
-
       try {
-        // Use the executing agent as the registry viewing scope so keyword discovery includes both global and preset-provided tools.
-        const schemas = ctx.tools.schemas(exec?.agent)
-        const wanted = query.toLowerCase().split(/[^a-z0-9_]+/).filter(Boolean)
-        const matches = schemas
-          .filter((schema) => {
-            const haystack = `${schema.name} ${schema.description ?? ''}`.toLowerCase()
+        // Read through the executing scope, retaining registry restrictions and presentation rules.
+        const schemas = ctx.tools.schemas(exec?.agent).filter((schema) => {
+          if (typeof ctx.tools.resolveExecution === 'function') {
+            return ctx.tools.resolveExecution(schema.name, exec?.agent, exec?.parent !== undefined) !== undefined
+          }
+          return typeof ctx.tools.get !== 'function' || ctx.tools.get(schema.name, exec?.agent) !== undefined
+        })
+        const available = new Set(schemas.map((schema) => schema.name))
+        const unlocked = unlock.filter((name) => available.has(name))
+        const unavailable = unlock.filter((name) => !available.has(name))
+        const result = { text: '', unlocked, unavailable }
+        const lines = []
+        if (unlocked.length > 0) lines.push(`Unlocked for the next request: ${unlocked.join(', ')}`)
+        if (unavailable.length > 0) lines.push(`Unavailable in this calling scope; not unlocked: ${unavailable.join(', ')}`)
+        if (query.length > 0) {
+          const normalized = query.toLocaleLowerCase()
+          const wanted = normalized.match(/[\p{L}\p{N}_-]+/gu) ?? [normalized]
+          const matches = schemas.filter((schema) => {
+            const haystack = `${schema.name} ${schema.description ?? ''}`.toLocaleLowerCase()
             return wanted.every((token) => haystack.includes(token))
           })
-          .slice(0, MAX_RESULTS)
-        if (matches.length === 0) {
-          lines.push(`No tools match "${query}".`)
-        } else {
-          lines.push(`Matching tools (${matches.length}):`)
-          for (const schema of matches) {
-            const desc = (schema.description || '').split('\n')[0].slice(0, 90)
-            lines.push(`- ${schema.name}: ${desc}`)
+          const page = matches.slice(offset, offset + limit)
+          const hasMore = offset + page.length < matches.length
+          Object.assign(result, { total: matches.length, offset, limit, hasMore, ...(hasMore ? { nextOffset: offset + page.length } : {}) })
+          if (matches.length === 0) lines.push(`No tools match "${query}".`)
+          else if (page.length === 0) lines.push(`No tools at offset ${offset}; ${matches.length} total matches.`)
+          else {
+            lines.push(`Matching tools (${offset + 1}–${offset + page.length} of ${matches.length}):`)
+            for (const schema of page) {
+              const desc = (schema.description || '').split('\n')[0].slice(0, 90)
+              lines.push(`- ${schema.name}: ${desc}`)
+            }
           }
-          lines.push('Unlock with dev_tool_search({"toolNames": ["<exact name>"]}).')
+          if (hasMore) lines.push(`Continue with the same query, offset=${result.nextOffset} and limit=${limit}.`)
+          if (matches.length > 0) lines.push('Unlock with dev_tool_search({"toolNames": ["<exact name>"]}).')
         }
+        result.text = lines.join('\n')
+        return result
       } catch (error) {
-        lines.push(`catalog search unavailable: ${String((error && error.message) || error)}`)
+        return { text: `Catalog search/unlock unavailable: ${String((error && error.message) || error)}`, unlocked: [], unavailable: unlock }
       }
-      return { text: lines.join('\n') }
     },
   })
 }

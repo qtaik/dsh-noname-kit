@@ -65,7 +65,7 @@
             config:
               suppressedContextSources: [agent-instructions, skill-catalog]
               residentTools: [noname_list_catalog, noname_read_catalog, noname_search_reference, noname_validate, noname_read_extension, noname_write_extension, noname_skills_written, noname_copy_images, noname_copy_audio]
-              compactionTools: [read, glob, grep, noname_list_catalog, noname_read_catalog, noname_search_reference, noname_validate, noname_read_extension, noname_write_extension, noname_skills_written, noname_copy_images, noname_copy_audio]
+              compactionTools: [read, glob, grep, dev_tool_search, skill_search, skill_load, noname_list_catalog, noname_read_catalog, noname_search_reference, noname_validate, noname_read_extension, noname_write_extension, noname_skills_written, noname_copy_images, noname_copy_audio]
 
           - id: anchor-turn
             name: dsh-noname-kit/presets/noname-dev/anchor-turn.mjs

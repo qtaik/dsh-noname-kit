@@ -1,6 +1,6 @@
 /** Register a Windows-capable bash tool through ctx.subprocess.spawn without requiring a PTY. Resolve bashPath explicitly or locate bash through PATH. Each command uses a fresh bash -c process with bounded output and reported exit status. Windows execution does not provide sandbox confinement. */
 
-import { resolve } from 'node:path'
+import { posix, win32 } from 'node:path'
 import { ensureWorkingDirectory } from './working-directory.mjs'
 
 /** Cordis plugin name used by loader diagnostics. */
@@ -69,28 +69,170 @@ function detectGitBash() {
   return 'bash'
 }
 
-/** 拒绝从文件系统根、盘符根或 ~ 发起递归检索，以及直接列出这些根目录；带具体子路径的操作照常检查。判断前排除引号中的内容，避免将普通字符串误当作检索起点。 */
-export function rootSearchIssue(command) {
-  // 引号内整体恰好是根形态的,摘引号前先单独拦(find "/" / grep -r x '~' ——
-  // 引号摘除防误伤的副作用是这类命令会漏,它们正是要拦的盘根检索)
-  if (/(["'])\s*(\/|\/[a-z]\/?|[a-z]:[\\\/]?|~)\s*\1/i.test(String(command || ''))) {
-    return '检索起点是文件系统根(写在引号里也一样),会扫到大量无关内容。游戏与扩展的路径已在系统提示的「当前环境」小节里给出:核对引擎源码直接在给出的目录下窄窗口 grep,检索官方实现用 noname_search_reference——不需要寻找路径,也不许再列盘根。'
+/** Read shell words without treating quoted search patterns as filesystem paths. */
+function shellSegments(command) {
+  const segments = [[]]
+  let value = ''
+  let active = false
+  let quote = ''
+  const finish = () => {
+    if (active) segments[segments.length - 1].push(value)
+    value = ''
+    active = false
   }
-  // 先摘掉引号字符串:里面的 "/" 是文案不是检索起点
-  const text = String(command || '')
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
-  // 同时拦截 ls 与 dir 对盘符根的非递归列举，避免将无关目录加入上下文。
-  const RE = /(?:^|[\s;&(])(find|grep|rg|du|fd|locate|ls|dir)\b([^;|&>]*)/g
-  let m
-  while ((m = RE.exec(text))) {
-    // 起点是根:/ 本身、/c 或 /c/ 盘符根(带不带尾斜杠都算,但 /c/ 后必须直接结束
-    // ——/c/Users/x 这类真实子路径放行)、C:\ C:/ 盘符写法、或 ~
-    if (/(?:^|[\s'"(=(])(?:\/(?![\w.])|\/[a-z]\/(?![\w.\-])|\/[a-z](?![\w.\-\/])|[a-z]:[\\/](?![\w.\-\/])|~(?![\w.\-\/]))/i.test(m[2])) {
-      return '检索/列目录的起点是文件系统根(' + m[1] + ' …),会扫到大量无关内容。游戏与扩展的路径已在系统提示的「当前环境」小节里给出:核对引擎源码直接在给出的目录下窄窗口 grep,检索官方实现用 noname_search_reference——不需要寻找路径,也不许再列盘根。'
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]
+    if (quote) {
+      if (ch === quote) quote = ''
+      else if (quote === '"' && ch === '\\' && /["\\$\x60\n]/.test(command[i + 1] || '')) value += command[++i]
+      else value += ch
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      active = true
+    } else if (ch === '\\' && !/^[a-z]:$/i.test(value) && /[\s'";&|()<>\\]/.test(command[i + 1] || '')) {
+      value += command[++i]
+      active = true
+    } else if (/\s/.test(ch)) {
+      finish()
+      if (ch === '\n') segments.push([])
+    } else if (/[;&|()<>]/.test(ch)) {
+      finish()
+      segments.push([])
+    } else {
+      value += ch
+      active = true
+    }
+  }
+  finish()
+  return segments
+}
+
+function isRootPath(value) {
+  return /^(?:\/+|\/[a-z]\/*|[a-z]:(?:[\\/]+)?|~\/*)$/i.test(value)
+}
+
+/** Inspect path operands; grep/rg/fd patterns and find predicates are not search roots. */
+function searchPaths(tool, args) {
+  if (tool === 'find') {
+    const paths = []
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i]
+      if (paths.length === 0 && (arg === '--' || /^-(?:[HLP]|O[0-3])$/.test(arg))) continue
+      if (paths.length === 0 && arg === '-D') { i++; continue }
+      if (arg.startsWith('-') || arg === '!' || arg === '(') break
+      paths.push(arg)
+    }
+    return paths
+  }
+  if (!['grep', 'rg', 'fd', 'fdfind'].includes(tool)) return args.filter((arg) => !arg.startsWith('-'))
+  let patternGiven = false
+  let optionsEnded = false
+  let filesOnly = false
+  const paths = []
+  const valueOptions = new Set([
+    '-A', '-B', '-C', '-m', '-g', '-t', '-T', '-E', '-O', '-j',
+    '--after-context', '--before-context', '--context', '--max-count', '--max-depth',
+    '--maxdepth', '--mindepth', '--min-depth', '--max-filesize', '--encoding',
+    '--glob', '--iglob', '--type', '--type-not',
+    '--type-add', '--type-clear', '--sort', '--sortr', '--threads', '--pre',
+    '--pre-glob', '--ignore-file', '--path-separator', '--field-match-separator',
+    '--field-context-separator', '--context-separator', '--replace', '-r',
+    '--color', '--colors', '--engine', '--dfa-size-limit', '--regex-size-limit',
+    '--exclude', '--exclude-dir', '--include', '--exclude-from',
+    '--extension', '--size',
+    '--changed-within', '--changed-before', '--owner', '--format',
+  ])
+  // These grep flags take no following value, unlike similarly named rg options.
+  if (tool === 'grep') for (const flag of ['-r', '-E', '-T', '--color']) valueOptions.delete(flag)
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (!optionsEnded && arg === '--') { optionsEnded = true; continue }
+    if (!optionsEnded && arg === '--files') { filesOnly = true; continue }
+    if (!optionsEnded && ['fd', 'fdfind'].includes(tool) && ['--search-path', '--base-directory'].includes(arg)) { paths.push(args[++i] ?? ''); continue }
+    if (!optionsEnded && ['fd', 'fdfind'].includes(tool) && /^--(?:search-path|base-directory)=/.test(arg)) { paths.push(arg.slice(arg.indexOf('=') + 1)); continue }
+    if (!optionsEnded && ['-e', '--regexp', '-f', '--file'].includes(arg)) {
+      patternGiven = true
+      i++
+      continue
+    }
+    if (!optionsEnded && (/^--(?:regexp|file)=/.test(arg) || /^-[ef].+/.test(arg))) { patternGiven = true; continue }
+    if (!optionsEnded && valueOptions.has(arg)) { i++; continue }
+    if (!optionsEnded && arg.startsWith('-') && arg !== '-') continue
+    if (!patternGiven && !filesOnly) patternGiven = true
+    else paths.push(arg)
+  }
+  return paths
+}
+
+/** Reject explicit filesystem-root queries while allowing literal root-shaped search patterns. */
+export function rootSearchIssue(command) {
+  const searchTools = new Set(['find', 'grep', 'rg', 'du', 'fd', 'fdfind', 'locate', 'ls', 'dir'])
+  for (const words of shellSegments(String(command || ''))) {
+    let i = 0
+    const wrappers = new Set(['command', 'builtin', 'exec', 'sudo', 'env', 'then', 'do', 'if', 'while', 'until', '!', 'time', 'nice', 'nohup'])
+    const wrapperValues = {
+      sudo: new Set(['-u', '-g', '-h', '-p', '-C', '-D', '-R', '-T', '--user', '--group', '--host', '--prompt', '--close-from', '--chdir', '--chroot', '--command-timeout']),
+      env: new Set(['-u', '-C', '-S', '--unset', '--chdir', '--split-string']),
+      exec: new Set(['-a']),
+      time: new Set(['-f', '-o', '--format', '--output']),
+      nice: new Set(['-n', '--adjustment']),
+    }
+    while (i < words.length) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) { i++; continue }
+      if (!wrappers.has(words[i])) break
+      const wrapper = words[i++]
+      while (words[i]?.startsWith('-')) {
+        const option = words[i++]
+        if (wrapperValues[wrapper]?.has(option)) i++
+      }
+    }
+    const tool = (words[i] || '').split(/[\\/]/).pop()
+    if (searchTools.has(tool) && searchPaths(tool, words.slice(i + 1)).some(isRootPath)) {
+      return '检索/列目录的起点是文件系统根(' + tool + ' …),会扫到大量无关内容。游戏与扩展的路径已在系统提示的「当前环境」小节里给出:核对引擎源码直接在给出的目录下窄窗口 grep,检索官方实现用 noname_search_reference——不需要寻找路径,也不许再列盘根。'
     }
   }
   return null
+}
+
+/** Translate Git Bash drive paths before native Windows cwd resolution. */
+export function resolveBashWorkdir(cwd, workdir, platform = process.platform) {
+  if (typeof workdir !== 'string' || workdir.length === 0) return cwd
+  if (platform !== 'win32') return posix.resolve(cwd ?? process.cwd(), workdir)
+  const drivePath = workdir.replace(/^\/([a-z])(?:\/|$)/i, (_whole, drive) => drive + ':/')
+  return win32.resolve(cwd ?? process.cwd(), drivePath)
+}
+
+function abortError(signal) {
+  const reason = signal.reason
+  return reason instanceof Error ? reason : new Error(String(reason ?? 'bash tool call aborted'))
+}
+
+/** An aborted preparation must never proceed to spawning a command. */
+async function abortable(pending, signal) {
+  if (signal.aborted) throw abortError(signal)
+  let onAbort
+  const aborted = new Promise((_resolve, reject) => {
+    onAbort = () => reject(abortError(signal))
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try { return await Promise.race([pending, aborted]) }
+  finally { signal.removeEventListener('abort', onAbort) }
+}
+
+function readOutput(handle, channel) {
+  try {
+    const result = handle.collected?.[channel]?.readFrom(0)
+    if (typeof result?.text !== 'string') throw new Error('collected output reader is unavailable or returned invalid text')
+    const notes = []
+    if (result.truncated === true || result.lossy === true) notes.push('[' + channel + ' output truncated; full output: ' + (result.spillPath ?? '(unavailable)') + ']')
+    else if (result.spillPath) notes.push('[' + channel + ' full output: ' + result.spillPath + ']')
+    return { text: [result.text, ...notes].filter(Boolean).join('\n') }
+  } catch (error) {
+    const text = '[' + channel + ' output could not be read: ' + String(error) + ']'
+    return { text, failed: true }
+  }
 }
 
 /** Register the model-facing `bash` tool. */
@@ -107,11 +249,11 @@ export function apply(ctx, config) {
     description: [
       'Run commands in a bash shell (Git Bash on Windows)',
       '* When invoking this tool, the contents of the "command" parameter does NOT need to be XML-escaped.',
-      "* You don't have access to the internet via this tool.",
-      '* You do have access to a mirror of common linux and python packages via apt and pip.',
+      '* Available commands, packages, and network access depend on the host environment.',
       '* State does NOT persist across command calls: each call runs in a fresh shell.',
       "* To inspect a particular line range of a file, e.g. lines 10-25, try 'sed -n 10,25p /path/to/the/file'.",
-      '* Please avoid commands that may produce a very large amount of output.',
+      '* Output is bounded; truncation and a full-output path are reported when the host provides them.',
+      '* The configured deadline stops the managed command; cancellation waits for managed process cleanup.',
       '* NOTE: runs without OS sandbox confinement on Windows (no landlock); treat output as untrusted.',
     ].join('\n'),
     parameters: commandSchema,
@@ -130,47 +272,78 @@ export function apply(ctx, config) {
       // 全盘检索闸:先于执行判断,拒绝时把替代做法写给模型(见 rootSearchIssue)
       const guard = rootSearchIssue(args.command)
       if (guard) throw new Error('已拒绝执行(全盘检索闸): ' + guard)
-      const shell = await ctx.subprocess.resolveExecutable(bashPath, undefined, exec?.signal)
-      const signal = exec?.signal
-      const cwd = await ensureWorkingDirectory(ctx, exec?.agent, signal)
-      const workdir = typeof args.workdir === 'string' && args.workdir.length > 0
-        ? resolve(cwd ?? process.cwd(), args.workdir)
-        : cwd
-      const handle = ctx.subprocess.spawn({
-        argv: [shell, '-c', args.command],
-        ...workdir !== undefined ? { cwd: workdir } : {},
-        stdio: {
-          stdin: 'ignore',
-          stdout: { maxBytes: maxOutputBytes },
-          stderr: { maxBytes: maxOutputBytes },
-        },
-        ...signal !== undefined ? { signal } : {},
-        graceMs: 3000,
-      })
-      let outcome
+      const controller = new AbortController()
+      const signal = controller.signal
+      let handle
+      let timedOut = false
+      let terminationFailure
+      const terminate = () => {
+        if (!handle) return
+        try { handle.terminate() }
+        catch (error) { terminationFailure = error }
+      }
+      const stop = (reason) => {
+        if (!signal.aborted) controller.abort(reason)
+        terminate()
+      }
+      const onAbort = () => stop(exec.signal.reason ?? new Error('bash tool call aborted'))
+      exec?.signal?.addEventListener('abort', onAbort, { once: true })
+      const timer = setTimeout(() => {
+        timedOut = true
+        stop(new Error('bash timed out after ' + timeoutMs + 'ms'))
+      }, timeoutMs)
       try {
-        outcome = await handle.done
-      } catch (error) {
-        // A spawn-level failure (bad executable, EPERM) surfaces as a throw,
-        // which the runtime turns into an isError result.
-        throw new Error(`bash spawn failed: ${String(error)}`)
+        if (exec?.signal?.aborted) onAbort()
+        if (signal.aborted) throw abortError(signal)
+        const shell = await abortable(ctx.subprocess.resolveExecutable(bashPath, undefined, signal), signal)
+        const cwd = await abortable(ensureWorkingDirectory(ctx, exec?.agent, signal), signal)
+        if (signal.aborted) throw abortError(signal)
+        const workdir = resolveBashWorkdir(cwd, args.workdir)
+        handle = ctx.subprocess.spawn({
+          argv: [shell, '-c', args.command],
+          ...workdir !== undefined ? { cwd: workdir } : {},
+          stdio: {
+            stdin: 'ignore',
+            stdout: { maxBytes: maxOutputBytes },
+            stderr: { maxBytes: maxOutputBytes },
+          },
+          signal,
+          graceMs: 3000,
+        })
+        if (signal.aborted) terminate()
+        let outcome
+        let failure
+        try { outcome = await handle.done }
+        catch (error) { failure = new Error('bash spawn failed: ' + String(error)); terminate() }
+        try {
+          if (typeof handle.waitForExit !== 'function') throw new Error('subprocess provider does not expose waitForExit')
+          await handle.waitForExit()
+        } catch (error) {
+          terminate()
+          let cleanupDetail = String(error)
+          if (typeof handle.waitForExit === 'function') {
+            try { await handle.waitForExit() }
+            catch (retryError) { cleanupDetail += '; exit could not be confirmed after termination: ' + String(retryError) }
+          }
+          failure = new Error((failure ? String(failure) + '\n' : '') + 'bash process cleanup failed: ' + cleanupDetail)
+        }
+        const stdout = readOutput(handle, 'stdout')
+        const stderr = readOutput(handle, 'stderr')
+        const body = [stdout.text, stderr.text ? '[stderr]\n' + stderr.text : ''].filter(Boolean).join('\n') || '(no output)'
+        const markers = []
+        if (timedOut) markers.push('[timed out after ' + timeoutMs + 'ms]')
+        else if (signal.aborted) markers.push('[aborted: ' + String(signal.reason ?? 'tool call cancelled') + ']')
+        if (outcome?.signal != null) markers.push('[killed by signal: ' + outcome.signal + ']')
+        if (outcome?.exitCode !== 0) markers.push('[exit code: ' + (outcome?.exitCode ?? 'unknown') + ']')
+        if (terminationFailure) markers.push('[process termination failed: ' + String(terminationFailure) + ']')
+        if (failure) markers.push(String(failure))
+        const text = [body, ...markers].join('\n')
+        if (signal.aborted || failure || terminationFailure || stdout.failed || stderr.failed || outcome?.exitCode !== 0 || outcome?.signal != null) throw new Error(text)
+        return { text }
+      } finally {
+        clearTimeout(timer)
+        exec?.signal?.removeEventListener('abort', onAbort)
       }
-      let stdout = ''
-      let stderr = ''
-      try {
-        stdout = handle.collected.stdout.readFrom(0).text
-        stderr = handle.collected.stderr.readFrom(0).text
-      } catch {
-        // Collected readers may be unavailable on some backends; tolerate.
-      }
-      const text = [stdout, stderr].filter((part) => part.length > 0).join('\n')
-      const tail = text.length > 0 ? text : `exit code: ${outcome.exitCode} (no output)`
-      if (outcome.exitCode !== 0) {
-        // Non-zero exit is a reported failure, not a throw: the model sees the
-        // command output plus the exit code.
-        throw new Error(tail)
-      }
-      return { text: tail }
     },
   })
 }

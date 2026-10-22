@@ -7,12 +7,17 @@
  *    (官方包与 extension/ 下用户扩展都在索引里)
  * 2. 中文归一化匹配(全角→半角、小写、去空格),多关键词 AND;ID 精确匹配权重最高
  * 3. 命中 ID 后,在源码里做花括号配对提取,返回完整的技能/武将/卡牌定义对象
- * 4. 兜底:目录没命中时退回关键词全文评分(老行为)
+ * 4. 普通文件按关键词评分兜底；大文件使用固定内存分块搜索，并返回明确覆盖范围和续搜位置
  */
-import { readdir, readFile, stat } from 'node:fs/promises'
-import { join, relative } from 'node:path'
+import { readdir, lstat, open } from 'node:fs/promises'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { join, relative, resolve } from 'node:path'
+import { REFERENCE_MAX_FILE_BYTES, REFERENCE_STREAM_BUDGET_BYTES, searchStreamReferences } from './reference-stream.js'
 
-const MAX_FILE_BYTES = 900_000
+const MAX_INDEX_FILE_BYTES = 8 * 1024 ** 2
+const MAX_INDEX_BYTES = 64 * 1024 ** 2
+const INDEX_TTL_MS = 15_000
+const CURSOR_KEY = randomBytes(32)
 const MAX_DEPTH = 5
 const MAX_FILES = 1200
 const CONTEXT_LINES = 10
@@ -26,19 +31,24 @@ function rootsFor(type) {
   return ['noname/library', 'character', 'card', 'gnc', 'extension']
 }
 
-async function collectFiles(root, depth, out) {
-  if (depth > MAX_DEPTH || out.length > MAX_FILES) return
+async function collectFiles(root, depth, out, scan) {
+  if (depth > MAX_DEPTH) { scan.depthLimited = true; return }
+  if (out.length >= MAX_FILES) { scan.fileLimited = true; return }
   let entries
-  try { entries = await readdir(root, { withFileTypes: true }) } catch { return }
+  try { entries = await readdir(root, { withFileTypes: true }) }
+  catch (error) {
+    if (error.code !== 'ENOENT') scan.skipped.push({ file: relative(scan.root, root).split('\\').join('/'), bytes: 0, reason: '目录不可读取' })
+    return
+  }
   for (const entry of entries) {
+    if (out.length >= MAX_FILES) { scan.fileLimited = true; break }
     const full = join(root, entry.name)
     if (entry.isDirectory()) {
       if (['node_modules', 'assets', 'audio', 'font', 'image', 'themes', '_virtual', 'dist', 'backup'].includes(entry.name)) continue
       if (/voice/i.test(entry.name)) continue
-      await collectFiles(full, depth + 1, out)
+      await collectFiles(full, depth + 1, out, scan)
     } else if (entry.isFile() && entry.name.endsWith('.js') && !entry.name.endsWith('.min.js') && !/voice/i.test(entry.name)) {
       out.push(full)
-      if (out.length > MAX_FILES) return
     }
   }
 }
@@ -56,14 +66,14 @@ function lineOf(text, index) {
   return line
 }
 
-function putEntry(catalog, id, value, relFile, line) {
+function putEntry(catalog, id, value, relFile, line, offset = 0) {
   if (id.endsWith('_info')) {
     const base = id.slice(0, -5)
-    const e = catalog.get(base) || { name: '', info: '', file: relFile, line }
+    const e = catalog.get(base) || { name: '', info: '', file: relFile, line, offset }
     if (!e.info) e.info = value
     catalog.set(base, e)
   } else {
-    const entry = catalog.get(id) || { name: '', info: '', file: relFile, line: 0 }
+    const entry = catalog.get(id) || { name: '', info: '', file: relFile, line, offset }
     if (!entry.name && /[\u4e00-\u9fff]/.test(value)) entry.name = value
     if (!entry.file) { entry.file = relFile; entry.line = line }
     catalog.set(id, entry)
@@ -72,17 +82,51 @@ function putEntry(catalog, id, value, relFile, line) {
 
 /** 扫描 translate 记录,填充目录索引。 */
 function extractTranslateEntries(text, relFile, catalog) {
-  // 形式一:lib.translate.xxx = '中文名' / xxx_info = '描述'
-  const re1 = /lib\.translate\.([A-Za-z_$][\w$]*)\s*=\s*(['"])([^'"]{1,500})\2/g
-  let m
-  while ((m = re1.exec(text)) !== null) putEntry(catalog, m[1], m[3], relFile, lineOf(text, m.index))
-  // 形式二:对象内键值对 "xxx": '中文' / xxx_info: '描述'(translate/character 包常这样写)
-  const re2 = /(['"]?)([A-Za-z][\w]*)\1\s*:\s*(['"])([^'"]{1,500})\3/g
-  while ((m = re2.exec(text)) !== null) {
-    const key = m[2]
-    const val = m[4]
-    if (/[\u4e00-\u9fff]/.test(val) || key.endsWith('_info')) putEntry(catalog, key, val, relFile, lineOf(text, m.index))
+  const patterns = [
+    /lib\.translate\.([A-Za-z_$][\w$]{0,255})\s*=\s*(['"])([^'"]{1,500})\2/g,
+    /(?<![\w$])(['"]?)([A-Za-z_$][\w$]{0,255})\1\s*:\s*(['"])([^'"]{1,500})\3/g,
+  ]
+  for (let pass = 0; pass < patterns.length; pass++) {
+    let last = 0, line = 1, match
+    while ((match = patterns[pass].exec(text)) !== null) {
+      for (; last < match.index; last++) if (text[last] === '\n') line++
+      const key = pass === 0 ? match[1] : match[2]
+      const value = pass === 0 ? match[3] : match[4]
+      if (pass === 0 || /[\u4e00-\u9fff]/.test(value) || key.endsWith('_info')) putEntry(catalog, key, value, relFile, line, match.index)
+    }
   }
+}
+
+/** Keep source excerpts bounded even when an entire file is one minified line. */
+function numberedExcerpt(text, firstLine, maxChars = 12000) {
+  const clipped = text.slice(0, maxChars)
+  const lines = clipped.split('\n')
+  const selected = lines.slice(0, MAX_DEF_LINES)
+  let output = selected.map((line, i) => String(firstLine + i).padStart(5) + ' | ' + line).join('\n')
+  const truncated = clipped.length < text.length || selected.length < lines.length || output.length > maxChars
+  output = output.slice(0, maxChars)
+  if (/[\uD800-\uDBFF]$/.test(output)) output = output.slice(0, -1)
+  return output + (truncated ? '\n…(片段已截断，可按文件或区块继续读取)' : '')
+}
+
+function excerptAround(text, offset) {
+  let start = offset
+  for (let i = 0; i < 5; i++) {
+    const previous = text.lastIndexOf('\n', start - 1)
+    if (previous < 0) { start = 0; break }
+    start = previous
+  }
+  start = Math.max(start, offset - 1500, 0)
+  if (text[start] === '\n') start++
+  if (/[\uDC00-\uDFFF]/.test(text[start] || '')) start++
+  let end = offset
+  for (let i = 0; i < CONTEXT_LINES; i++) {
+    const following = text.indexOf('\n', end + 1)
+    if (following < 0) { end = text.length; break }
+    end = following
+  }
+  end = Math.min(end, offset + 10000)
+  return numberedExcerpt(text.slice(start, end), lineOf(text, start))
 }
 
 /**
@@ -110,11 +154,7 @@ function extractDefinition(text, relFile, id) {
     if (depth !== 0) continue
     const startLine = lineOf(text, braceStart)
     const block = text.slice(braceStart, i + 1)
-    if (block.length > 30_000) {
-      return { file: relFile, line: startLine, snippet: block.slice(0, 30_000) + '\n…(过长截断)' }
-    }
-    const numbered = block.split('\n').map((l, idx) => `${String(startLine + idx).padStart(5)} | ${l}`).join('\n')
-    return { file: relFile, line: startLine, snippet: numbered }
+    return { file: relFile, line: startLine, snippet: numberedExcerpt(block, startLine) }
   }
   return null
 }
@@ -143,65 +183,129 @@ function containmentRatio(queryGrams, targetGrams) {
   return hit / queryGrams.size
 }
 
-/** 进程级缓存:同一 DSH 进程内多次调用不重复扫描(首调约 5 秒)。 */
+/** 普通源码缓存有固定字节预算；超出预算的文件仅保留流式检索元数据。 */
 let cachedIndex = null
+
+async function readIndexFile(file, info) {
+  const handle = await open(file, 'r')
+  try {
+    const current = await handle.stat()
+    if (current.size !== info.size || current.mtimeMs !== info.mtimeMs || current.ino !== info.ino) throw new Error('文件已变更')
+    const buffer = Buffer.alloc(info.size)
+    let position = 0
+    while (position < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, position, buffer.length - position, position)
+      if (!bytesRead) throw new Error('文件读取不完整')
+      position += bytesRead
+    }
+    const after = await handle.stat()
+    if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) throw new Error('文件读取期间发生变更')
+    return buffer.toString('utf8')
+  } finally { await handle.close() }
+}
 
 async function buildSearchIndex(nonameDir) {
   const files = []
-  for (const root of rootsFor('any')) await collectFiles(join(nonameDir, root), 0, files)
-  // 用户扩展的 extension.js 也是好参考(用户扩展也是语料)
-  try {
-    const extFiles = []
-    await collectFiles(join(nonameDir, 'extension'), 2, extFiles)
-    files.push(...extFiles.filter((f) => f.endsWith('extension.js')))
-  } catch { /* extension 目录可能不存在 */ }
-
-  const byId = new Map()
-  const loaded = []
-  for (const path of files) {
+  const scan = { root: nonameDir, fileLimited: false, depthLimited: false, skipped: [] }
+  for (const root of rootsFor('any')) await collectFiles(join(nonameDir, root), 0, files, scan)
+  const byId = new Map(), loaded = [], streamFiles = [], metadata = []
+  let indexedBytes = 0
+  for (const file of files) {
+    const rel = relative(nonameDir, file).split('\\').join('/')
+    let info
+    try { info = await lstat(file) }
+    catch { scan.skipped.push({ file: rel, bytes: 0, reason: '文件不可读取' }); continue }
+    if (!info.isFile() || info.isSymbolicLink()) { scan.skipped.push({ file: rel, bytes: info.size, reason: '不是普通源码文件' }); continue }
+    metadata.push([rel, info.size, info.mtimeMs])
+    if (info.size > REFERENCE_MAX_FILE_BYTES) {
+      scan.skipped.push({ file: rel, bytes: info.size, reason: '超过单文件 5 GiB 搜索上限' })
+      continue
+    }
+    if (info.size > MAX_INDEX_FILE_BYTES || indexedBytes + info.size > MAX_INDEX_BYTES) {
+      streamFiles.push({ path: file, rel, size: info.size, mtimeMs: info.mtimeMs })
+      continue
+    }
     let text
-    try {
-      const info = await stat(path)
-      if (info.size > MAX_FILE_BYTES) continue
-      text = await readFile(path, 'utf8')
-    } catch { continue }
-    const rel = relative(nonameDir, path).split('\\').join('/')
-    loaded.push({ path, rel, text })
+    try { text = await readIndexFile(file, info) }
+    catch { scan.skipped.push({ file: rel, bytes: info.size, reason: '文件不可读取或读取期间已变更' }); continue }
+    indexedBytes += info.size
+    loaded.push({ path: file, rel, text })
     extractTranslateEntries(text, rel, byId)
   }
-  return { nonameDir, byId, loaded }
+  return { nonameDir, byId, loaded, streamFiles, indexedBytes, scan,
+    snapshot: createHash('sha256').update(JSON.stringify(metadata)).digest('hex') }
 }
 
 async function getIndex(nonameDir) {
-  if (cachedIndex && cachedIndex.nonameDir === nonameDir) return cachedIndex
-  cachedIndex = await buildSearchIndex(nonameDir)
-  return cachedIndex
+  if (cachedIndex && cachedIndex.nonameDir === nonameDir && (cachedIndex.pending || Date.now() - cachedIndex.at < INDEX_TTL_MS)) return cachedIndex.promise
+  const record = { nonameDir, at: Date.now(), pending: true, promise: null }
+  record.promise = buildSearchIndex(nonameDir).then(index => { record.at = Date.now(); record.pending = false; return index }).catch(error => {
+    if (cachedIndex === record) cachedIndex = null
+    throw error
+  })
+  cachedIndex = record
+  return record.promise
 }
 
-/**
- * 搜索官方/扩展实现:v2(目录索引 + 中文匹配 + 完整定义提取)。
- * @param {string} nonameDir - 游戏本体目录。
- * @param {object} input
- * @param {string} input.query - 中文名(天罚)、ID(juedou / cs_tianfa)、
- *   或空格分隔多关键词("摸牌 damage draw")。
- * @param {'any'|'skill'|'character'|'card'} [input.type]
- * @param {number} [input.limit]
- */
-export async function searchReference(nonameDir, { query, type = 'any', limit = 5 }) {
-  if (!nonameDir) {
-    // 游戏目录未配置时返回工坊设置页的配置指引，不触发无范围的文件系统搜索。
-    return { ok: false, error: '未配置 nonameDir(游戏本体目录),noname_search_reference 无法搜索。请让用户在工坊「⚙ 设置」页配置游戏本体目录;配置之前不要用 bash 在磁盘/系统目录里检索源码——那会全盘扫描,耗时极长。' }
+function cursorScope(index, raw, type) {
+  return createHash('sha256').update(JSON.stringify([resolve(index.nonameDir), raw, type, index.snapshot])).digest('hex')
+}
+
+function encodeCursor(index, raw, type, start, unreadableFiles, matchedStops) {
+  const body = Buffer.from(JSON.stringify({ v: 1, scope: cursorScope(index, raw, type), start, unreadableFiles, matchedStops })).toString('base64url')
+  const signature = createHmac('sha256', CURSOR_KEY).update(body).digest('base64url')
+  return body + '.' + signature
+}
+
+async function decodeCursor(cursor, index, raw, type) {
+  if (typeof cursor !== 'string' || cursor.length > 2048) throw new Error('无效的续搜位置，请不带 cursor 重新搜索。')
+  const parts = cursor.split('.')
+  if (parts.length !== 2) throw new Error('无效的续搜位置，请不带 cursor 重新搜索。')
+  const expected = createHmac('sha256', CURSOR_KEY).update(parts[0]).digest()
+  const signature = Buffer.from(parts[1], 'base64url')
+  if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) throw new Error('续搜位置已失效，请不带 cursor 重新搜索。')
+  let payload
+  try { payload = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8')) }
+  catch { throw new Error('无效的续搜位置，请重新搜索。') }
+  if (payload.v !== 1 || payload.scope !== cursorScope(index, raw, type)) throw new Error('查询或源码快照已变更，请不带 cursor 重新搜索。')
+  if (!Number.isSafeInteger(payload.unreadableFiles) || payload.unreadableFiles < 0 || payload.unreadableFiles > MAX_FILES ||
+      !Number.isSafeInteger(payload.matchedStops) || payload.matchedStops < 0 || payload.matchedStops > MAX_FILES) throw new Error('无效的续搜统计，请重新搜索。')
+  const start = payload.start
+  if (!start || !Number.isSafeInteger(start.index) || start.index < 0 || start.index >= index.streamFiles.length ||
+      !Number.isSafeInteger(start.offset) || start.offset < 0 || start.offset > index.streamFiles[start.index].size ||
+      !Number.isSafeInteger(start.line) || start.line < 1 || start.line > start.offset + 1) throw new Error('无效的续搜位置，请重新搜索。')
+  for (const file of index.streamFiles) {
+    let info
+    try { info = await lstat(file.path) }
+    catch { throw new Error('源码文件已变更或不可读，请不带 cursor 重新搜索。') }
+    if (!info.isFile() || info.isSymbolicLink() || info.size !== file.size || info.mtimeMs !== file.mtimeMs) throw new Error('源码文件已变更，请不带 cursor 重新搜索。')
   }
-  const raw = String(query || '').trim()
-  if (!raw) {
-    return { ok: false, error: 'query 不能为空:支持中文名(天罚)、ID(juedou)、或空格分隔的多关键词(摸牌 damage)。' }
+  return { start, unreadableFiles: payload.unreadableFiles, matchedStops: payload.matchedStops }
+}
+
+function coverageOf(index, stream, priorUnreadable, priorMatchedStops) {
+  const skipped = [...index.scan.skipped, ...(stream.unreadable || []).map(x => ({ file: x.file, bytes: 0, reason: x.reason }))]
+  const pending = stream.next ? index.streamFiles.length - stream.next.index : 0
+  const matchStops = priorMatchedStops + stream.filesStoppedAfterMatch
+  const partial = !!(pending || skipped.length || priorUnreadable || matchStops || index.scan.fileLimited || index.scan.depthLimited)
+  return {
+    partial, indexedFiles: index.loaded.length, indexedBytes: index.indexedBytes,
+    largeFiles: index.streamFiles.length, largeFilesPending: pending,
+    streamBytesRead: stream.bytesRead, streamFilesExhausted: stream.filesExhausted,
+    skippedFiles: skipped.length + priorUnreadable, skipped: skipped.slice(0, 10),
+    streamFilesStoppedAfterMatch: matchStops, largeFileMatchWindowBytes: 16 * 1024,
+    fileLimitReached: index.scan.fileLimited, depthLimitReached: index.scan.depthLimited,
+    maxFileBytes: REFERENCE_MAX_FILE_BYTES, scanBudgetBytes: REFERENCE_STREAM_BUDGET_BYTES,
+    stopReason: stream.stopReason,
   }
-  const index = await getIndex(nonameDir)
+}
+
+function searchIndexed(index, raw, maxMatches) {
   const keywords = raw.split(/\s+/).map(normalize).filter(Boolean)
 
-  const maxMatches = Math.max(1, Math.min(limit, 10))
   const matches = []
   let simHitsTruncated = 0
+  let fallbackLimited = false
 
   // 按目录索引匹配中文名、描述与 ID，并提取完整定义块。
   const candidates = []
@@ -237,14 +341,8 @@ export async function searchReference(nonameDir, { query, type = 'any', limit = 
       // 定义提取失败:退回 translate 记录处的行窗口(至少给出 ID 与中文名的位置)
       const fe = index.loaded.find((f) => f.rel === cand.entry.file)
       if (!fe) continue
-      const lines = fe.text.split('\n')
-      const s = Math.max(0, cand.entry.line - 3)
-      def = {
-        file: cand.entry.file,
-        line: cand.entry.line,
-        snippet: lines.slice(s, Math.min(lines.length, cand.entry.line + 8))
-          .map((l, i) => `${String(s + i + 1).padStart(5)} | ${l}`).join('\n') + '\n…(定义块提取失败,仅显示 translate 位置)',
-      }
+      def = { file: cand.entry.file, line: cand.entry.line,
+        snippet: excerptAround(fe.text, cand.entry.offset || 0) + '\n…(定义块提取失败，仅显示翻译附近片段)' }
     }
     seen.add(cand.id)
     matches.push({
@@ -265,7 +363,13 @@ export async function searchReference(nonameDir, { query, type = 'any', limit = 
       let allHit = true
       for (const token of keywords) {
         const t = token.toLowerCase()
-        const count = lower.split(t).length - 1
+        let count = 0, position = 0
+        while (count < 30) {
+          const found = lower.indexOf(t, position)
+          if (found < 0) break
+          count++
+          position = found + t.length
+        }
         if (count === 0) allHit = false
         score += Math.min(count, 30)
       }
@@ -276,12 +380,13 @@ export async function searchReference(nonameDir, { query, type = 'any', limit = 
         if (idx >= 0 && (bestIndex === -1 || idx < bestIndex)) bestIndex = idx
       }
       if (bestIndex < 0) continue
-      const line = file.text.slice(0, bestIndex).split('\n').length
-      const lines = file.text.split('\n')
-      const snippet = lines.slice(Math.max(0, line - 5), Math.min(lines.length, line + CONTEXT_LINES))
-        .map((l, i) => `${String(Math.max(0, line - 5) + i + 1).padStart(5)} | ${l}`).join('\n')
+      const line = lineOf(file.text, bestIndex)
+      const snippet = excerptAround(file.text, bestIndex)
       matches.push({ id: '', name: '', info: '', file: file.rel, line, snippet })
-      if (matches.length >= maxMatches) break
+      if (matches.length >= maxMatches) {
+        fallbackLimited = file !== index.loaded[index.loaded.length - 1]
+        break
+      }
     }
   }
 
@@ -324,13 +429,44 @@ export async function searchReference(nonameDir, { query, type = 'any', limit = 
     }
   }
 
-  // 无损 JSON 要求:不得携带显式 undefined 字段(序列化会丢键,被判为有损)
-  const result = { ok: matches.length > 0, matches, scanned: index.loaded.length, query: raw }
-  if (simHitsTruncated > 0) {
-    result.truncated = `${simHitsTruncated} 条相似度结果因 limit=${maxMatches} 被截断——收窄关键词,或传更大的 limit(上限 10)。`
+  return { matches, truncated: simHitsTruncated > 0 || candidates.length > seen.size || fallbackLimited }
+}
+
+/** 搜索源码参考；大文件按固定内存分段读取，nextCursor 只能用于同一查询及源码快照。 */
+export async function searchReference(nonameDir, { query, type = 'any', limit = 5, cursor } = {}) {
+  if (!nonameDir) return { ok: false, error: '未配置 nonameDir(游戏本体目录)，请在工坊设置页配置游戏本体目录。' }
+  const raw = String(query || '').trim()
+  if (!raw) return { ok: false, error: 'query 不能为空：支持中文名、ID、空格分隔关键词或效果描述。' }
+  if (raw.length > 1024) return { ok: false, error: 'query 超过 1024 字符，请缩短关键词。' }
+  const maxMatches = Number.isSafeInteger(limit) ? Math.max(1, Math.min(limit, 10)) : 5
+  const index = await getIndex(nonameDir)
+  let start = { index: 0, offset: 0, line: 1 }, priorUnreadable = 0, priorMatchedStops = 0
+  if (cursor !== undefined) {
+    try {
+      const decoded = await decodeCursor(cursor, index, raw, type)
+      start = decoded.start; priorUnreadable = decoded.unreadableFiles; priorMatchedStops = decoded.matchedStops
+    }
+    catch (error) { return { ok: false, matches: [], query: raw, error: error.message } }
   }
-  if (matches.length === 0) {
-    result.error = '未命中:可尝试——①中文技能名;②技能/卡牌 ID;③空格分隔的效果关键词;④整句效果描述(相似度≥50% 才列出,条数可能很多)。'
+  const indexed = cursor === undefined ? searchIndexed(index, raw, maxMatches) : { matches: [], truncated: false }
+  const matches = indexed.matches
+  let stream = { matches: [], next: null, bytesRead: 0, filesVisited: 0, filesExhausted: 0, filesStoppedAfterMatch: 0, unreadable: [], stopReason: 'complete' }
+  if (index.streamFiles.length) {
+    const remaining = maxMatches - matches.length
+    if (remaining > 0) stream = await searchStreamReferences(index.streamFiles, { query: raw, limit: remaining, start })
+    else stream = { ...stream, next: start, stopReason: 'limit' }
+    matches.push(...stream.matches)
   }
+  const coverage = coverageOf(index, stream, priorUnreadable, priorMatchedStops)
+  const result = { ok: matches.length > 0, matches, scanned: index.loaded.length + stream.filesVisited, query: raw, coverage }
+  if (indexed.truncated) result.truncated = '结果达到 limit=' + maxMatches + '，仍有匹配未展示；可收窄关键词或提高 limit（上限 10）。'
+  if (stream.next) result.nextCursor = encodeCursor(index, raw, type, stream.next, priorUnreadable + stream.unreadable.length, priorMatchedStops + stream.filesStoppedAfterMatch)
+  if (coverage.partial) {
+    result.warning = '本轮搜索范围不完整。' + (stream.next ? '保持 query/type 不变并传 nextCursor 作为 cursor 可继续大文件搜索。' : '') +
+      (coverage.skippedFiles ? '有文件不可检索或被跳过，原因见当前及此前结果的 coverage.skipped。' : '') +
+      (coverage.streamFilesStoppedAfterMatch ? '大文件仅返回每文件首个命中片段，命中后的内容未继续扫描；可使用更精确的 ID 或关键词。' : '') +
+      (coverage.fileLimitReached || coverage.depthLimitReached ? '目录枚举达到数量或深度上限。' : '')
+  }
+  if (!matches.length) result.error = coverage.partial ? '本轮已扫描部分未命中；尚未检索的内容不能视为不存在。' : '未命中：可尝试中文技能名、技能/卡牌 ID、效果关键词或完整效果描述。'
   return result
 }

@@ -1,6 +1,8 @@
 import { lstat, readdir, realpath, open } from 'node:fs/promises'
 import { join, resolve, relative, isAbsolute, basename } from 'node:path'
 import { sourceModel } from './module-parser.js'
+import { createHash } from 'node:crypto'
+import { pageRead } from './package-read.js'
 
 const KINDS = ['character', 'card', 'mode']
 const SOURCES = ['builtin', 'extension']
@@ -33,13 +35,14 @@ async function safeReal(root, target, directory = false) {
   return { actual, info }
 }
 
-async function readJs(root, target) {
+async function readJs(root, target, remaining = LIMITS.bytes) {
   const checked = await safeReal(root, target)
+  if (checked.info.size > remaining) throw new Error('本次读取总量超过只读目录上限。')
   if (checked.info.size > LIMITS.fileBytes) throw new Error('文件超过只读目录的大小上限。')
   const handle = await open(checked.actual, 'r')
   try {
     const info = await handle.stat()
-    if (!info.isFile() || info.size > LIMITS.fileBytes || info.dev !== checked.info.dev || info.ino !== checked.info.ino) throw new Error('读取期间文件已更换。')
+    if (!info.isFile() || info.size > Math.min(LIMITS.fileBytes, remaining) || info.dev !== checked.info.dev || info.ino !== checked.info.ino) throw new Error('读取期间文件已更换或超过本次读取预算。')
     const buffer = Buffer.alloc(Math.min(info.size + 1, LIMITS.fileBytes + 1))
     let length = 0
     while (length < buffer.length) {
@@ -64,6 +67,7 @@ function issue(coverage, code, file, message) {
 
 async function walkFiles(root, directory, coverage, budget) {
   const out = []
+  let fileLimitReached = false, filesSeen = 0
   async function visit(dir, depth) {
     if (depth > LIMITS.depth) { issue(coverage, 'depth-limit', relative(root, dir), '递归深度超过只读目录上限。'); return }
     let entries
@@ -71,15 +75,15 @@ async function walkFiles(root, directory, coverage, budget) {
     catch (error) { issue(coverage, 'unreadable-directory', relative(root, dir), error.message); return }
     entries.sort((a, b) => a.name.localeCompare(b.name))
     for (const entry of entries) {
-      if (budget.stopped) return
+      if (budget.stopped || fileLimitReached) return
       if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue
       const target = join(dir, entry.name), file = slash(relative(root, target))
       if (entry.isSymbolicLink()) { issue(coverage, 'symlink-skipped', file, '未跟随符号链接。'); continue }
       if (entry.isDirectory()) { await visit(target, depth + 1); continue }
       if (!entry.isFile() || !entry.name.endsWith('.js') || /\.\d{8}-\d{6}(?:-\d+)?\.js$/.test(entry.name)) continue
-      if (out.length >= LIMITS.files) { issue(coverage, 'file-limit', file, '包内文件数超过只读目录上限。'); return }
+      if (++filesSeen > LIMITS.files) { fileLimitReached = true; issue(coverage, 'file-limit', file, '包内文件数超过只读目录上限。'); return }
       try {
-        const loaded = await readJs(root, target)
+        const loaded = await readJs(root, target, LIMITS.bytes - budget.bytes)
         if (budget.bytes + loaded.bytes > LIMITS.bytes) { budget.stopped = true; issue(coverage, 'byte-limit', file, '本次读取总量超过只读目录上限。'); return }
         budget.bytes += loaded.bytes; out.push({ file, code: loaded.code })
       } catch (error) { issue(coverage, 'unreadable-file', file, error.message) }
@@ -126,7 +130,7 @@ async function collectPackages(root, options, coverage, budget) {
       if (directory) files = await walkFiles(root, join(categoryDir, entry.name), coverage, budget)
       else {
         const file = slash(relative(root, join(categoryDir, entry.name)))
-        try { const loaded = await readJs(root, join(categoryDir, entry.name)); if (budget.bytes + loaded.bytes > LIMITS.bytes) { budget.stopped = true; issue(coverage, 'byte-limit', file, '本次读取总量超过只读目录上限。'); return } budget.bytes += loaded.bytes; files = [{ file, code: loaded.code }] }
+        try { const loaded = await readJs(root, join(categoryDir, entry.name), LIMITS.bytes - budget.bytes); if (budget.bytes + loaded.bytes > LIMITS.bytes) { budget.stopped = true; issue(coverage, 'byte-limit', file, '本次读取总量超过只读目录上限。'); return } budget.bytes += loaded.bytes; files = [{ file, code: loaded.code }] }
         catch (error) { issue(coverage, 'unreadable-file', file, error.message); files = [] }
       }
       const expected = directory ? slash(relative(root, join(categoryDir, entry.name, source === 'extension' ? 'extension.js' : 'index.js'))) : files[0]?.file
@@ -168,7 +172,7 @@ function modelPackage(candidate, coverage) {
       }
       const key = item.descriptor
         ? `${item.kind}:${item.id}:${item.descriptor.file}:${item.descriptor.open}:${item.descriptor.close}`
-        : `${item.kind}:${item.id}:${f.file}:${item.start}`
+        : `${item.kind}:${item.id}:${item.file || f.file}:${item.start}`
       if (registrationKeys.has(key)) continue
       registrationKeys.add(key); registrations.push(item)
       if (item.dynamic || !item.id) issue(coverage, 'dynamic-registration', f.file, '注册 ID 或描述符无法完全静态确定。')
@@ -192,14 +196,14 @@ function summaries(candidate, options) {
   const categories = candidate.source === 'builtin' ? [candidate.kind] : KINDS.filter(kind => kind === 'mode' ? candidate.registrations.some(r => r.kind === 'mode' && r.id) : candidate.tables.some(t => t.kind === kind))
   return categories.filter(kind => options.kind === 'all' || options.kind === kind).map(kind => {
     const entries = candidate.tables.map(publicEntry)
-    const modes = candidate.registrations.filter(r => r.kind === 'mode' && r.id).map(r => ({ kind: 'mode', id: r.id, name: candidate.names.get(r.id) || '', file: r.descriptor?.file || candidate.entryFile, ...(r.descriptor ? { start: r.descriptor.open, end: r.descriptor.close } : {}), readOnly: true, dynamic: !!r.dynamic }))
+    const modes = candidate.registrations.filter(r => r.kind === 'mode' && r.id).map(r => ({ kind: 'mode', id: r.id, name: candidate.names.get(r.id) || '', file: r.descriptor?.file || r.file || candidate.entryFile, ...(r.descriptor ? { start: r.descriptor.open, end: r.descriptor.close } : {}), ...(Number.isInteger(r.start) ? { registrationStart: r.start } : {}), ...(Number.isInteger(r.end) ? { registrationEnd: r.end } : {}), readOnly: true, dynamic: !!r.dynamic }))
     const types = ['character','card','skill','translate']
     const counts = Object.fromEntries(types.map(type => [type, new Set(entries.filter(e => e.kind === type).map(e => e.id)).size]))
     const definitionCounts = Object.fromEntries(types.map(type => [type, entries.filter(e => e.kind === type).length]))
     counts.mode = new Set(modes.map(mode => mode.id)).size; definitionCounts.mode = modes.length
     const groups = new Map()
     for (const entry of [...entries, ...modes]) { const key = `${entry.kind}:${entry.id}`; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(entry) }
-    const ambiguities = [...groups.values()].filter(group => group.length > 1).map(group => ({ kind: group[0].kind, id: group[0].id, sources: group.map(({ file, start, end }) => ({ file, start, end })) }))
+    const ambiguities = [...groups.values()].filter(group => group.length > 1).map(group => ({ kind: group[0].kind, id: group[0].id, sources: group.map(({ file, start, end, registrationStart, registrationEnd }) => ({ ...(typeof file === 'string' ? { file } : {}), ...(Number.isInteger(start) ? { start } : {}), ...(Number.isInteger(end) ? { end } : {}), ...(Number.isInteger(registrationStart) ? { registrationStart } : {}), ...(Number.isInteger(registrationEnd) ? { registrationEnd } : {}) })) }))
     const result = { source: candidate.source, kind, pack: candidate.pack, readOnly: true, inventoryScope: candidate.source === 'builtin' ? 'registered-entry' : 'available-static-source', entryFile: candidate.entryFile, files: candidate.files.map(f => f.file), counts, definitionCounts, ambiguousIds: ambiguities.length, modes }
     if (options.includeEntries) { result.entries = entries; result.ambiguities = ambiguities }
     return result
@@ -213,24 +217,49 @@ async function catalogState(nonameDir, options) {
   const seen = new Set()
   coverage.gaps = coverage.gaps.filter(g => { const key = `${g.code}:${g.file}:${g.message}`; if (seen.has(key)) return false; seen.add(key); return true })
   coverage.bytesRead = budget.bytes; coverage.complete = coverage.gaps.length === 0
+  coverage.limits = LIMITS
+  const snapshot = createHash('sha256')
+  for (const candidate of candidates) for (const file of candidate.files) snapshot.update(file.file).update('\0').update(file.code).update('\0')
+  snapshot.update(JSON.stringify(coverage.gaps))
+  coverage.snapshot = snapshot.digest('hex')
   return { root, packages, coverage }
 }
 
 /** Static content inventory only. Official files never enter the extension write channel. */
 export async function listCatalog(nonameDir, options = {}) {
+  let coverage
   try {
     const normalized = normalizeOptions(options), state = await catalogState(nonameDir, normalized)
-    const packs = state.packages.flatMap(candidate => summaries(candidate, normalized))
-    return { ok: !normalized.pack || packs.length > 0, readOnly: true, source: normalized.source, kind: normalized.kind, packs, coverage: state.coverage, ...(!packs.length && normalized.pack ? { error: '未找到指定内容包。' } : {}) }
-  } catch (error) { return { ok: false, readOnly: true, packs: [], error: error.message } }
+    coverage = state.coverage
+    if (options.snapshot && options.snapshot !== coverage.snapshot) throw new Error('源码快照已变化，请从 offset:0 重新读取目录。')
+    const all = state.packages.flatMap(candidate => summaries(candidate, normalized)), query = String(options.query || '').trim().toLocaleLowerCase()
+    let packs, pagination
+    if (normalized.pack && normalized.includeEntries) {
+      const pool = new Map()
+      for (const pack of all) for (const entry of [...pack.entries, ...pack.modes]) {
+        const key = `${entry.kind}:${entry.id}:${entry.file}:${entry.start}:${entry.end}:${entry.registrationStart}`
+        if ((!query || `${entry.kind}:${entry.id} ${entry.name || ''} ${entry.file}`.toLocaleLowerCase().includes(query)) && !pool.has(key)) pool.set(key, entry)
+      }
+      const page = pageRead([...pool.values()], options, 'entries'), selected = new Set(page.value.map(e => `${e.kind}:${e.id}`))
+      pagination = page.pagination
+      packs = all.map(pack => ({ ...pack, entries: page.value.filter(e => e.kind !== 'mode'), modes: page.value.filter(e => e.kind === 'mode'), ambiguities: pack.ambiguities.filter(a => selected.has(`${a.kind}:${a.id}`)) }))
+    } else {
+      const filtered = all.filter(pack => !query || `${pack.pack} ${pack.kind} ${pack.source}`.toLocaleLowerCase().includes(query)), page = pageRead(filtered, options, 'packs')
+      packs = page.value; pagination = page.pagination
+    }
+    return { ok: !normalized.pack || all.length > 0, readOnly: true, source: normalized.source, kind: normalized.kind, packs, pagination, coverage, ...(!all.length && normalized.pack ? { error: coverage.complete ? '未找到指定内容包。' : '扫描不完整，不能判定指定内容包不存在；请查看 coverage。' } : {}) }
+  } catch (error) { return { ok: false, readOnly: true, packs: [], ...(coverage ? { coverage } : {}), error: error.message } }
 }
 
 export async function readCatalog(nonameDir, options = {}) {
+  let coverage
   try {
     const normalized = normalizeOptions(options, true), file = options.file == null ? null : relativeJs(options.file)
     const state = await catalogState(nonameDir, normalized)
+    coverage = state.coverage
+    if (options.snapshot && options.snapshot !== coverage.snapshot) throw new Error('源码快照已变化，请从 offset:0 重新读取。')
     const candidates = state.packages.filter(candidate => summaries(candidate, normalized).length)
-    if (candidates.length !== 1) throw new Error(candidates.length ? '内容包归属不唯一。' : '未找到指定内容包。')
+    if (candidates.length !== 1) throw new Error(candidates.length ? '内容包归属不唯一。' : coverage.complete ? '未找到指定内容包。' : '扫描不完整，不能判定指定内容包不存在；请查看 coverage。')
     const candidate = candidates[0]
     const result = { ok: true, readOnly: true, source: normalized.source, kind: normalized.kind, pack: normalized.pack, coverage: state.coverage }
     if (options.entry != null) {
@@ -241,13 +270,15 @@ export async function readCatalog(nonameDir, options = {}) {
         ? candidate.registrations.filter(r => r.kind === 'mode' && r.id === id && r.descriptor).map(r => ({ kind, id, file: r.descriptor.file, start: r.descriptor.open, end: r.descriptor.close, readOnly: true }))
         : candidate.tables.filter(t => t.kind === kind && t.id === id)
       const seen = new Set(), choices = entries.filter(entry => (!file || entry.file === file) && !seen.has(`${entry.file}:${entry.start}:${entry.end}`) && seen.add(`${entry.file}:${entry.start}:${entry.end}`))
-      if (choices.length !== 1) return { ...result, ok: false, error: choices.length ? '同名条目有多个来源，请用 file 明确选择；同文件重复条目不可猜选。' : '未找到指定条目。', candidates: choices.map(publicEntry) }
+      if (choices.length !== 1) return { ...result, ok: false, error: choices.length ? '同名条目有多个来源，请用 file 明确选择；同文件重复条目不可猜选。' : kind === 'mode' && candidate.registrations.some(r => r.kind === kind && r.id === id && !r.descriptor) ? '已识别该模式注册，但描述符为动态内容，无法静态读取；请按文件读取原文。' : coverage.complete ? '未找到指定条目。' : '扫描不完整，不能判定指定条目不存在；请查看 coverage。', candidates: choices.map(publicEntry) }
       const entry = choices[0], code = candidate.modules.get(entry.file)
       if (typeof code !== 'string' || !Number.isInteger(entry.start) || !Number.isInteger(entry.end) || entry.start < 0 || entry.end >= code.length || entry.end < entry.start) throw new Error('静态条目的文件或位置无效。')
-      return { ...result, file: entry.file, entry: publicEntry(entry), code: code.slice(entry.start, entry.end + 1) }
+      const page = pageRead(code.slice(entry.start, entry.end + 1), options)
+      return { ...result, file: entry.file, entry: publicEntry(entry), code: page.value, pagination: page.pagination }
     }
     const target = file || candidate.entryFile
     if (!target || !candidate.modules.has(target)) throw new Error('file 不属于所选内容包。')
-    return { ...result, file: target, code: candidate.modules.get(target) }
-  } catch (error) { return { ok: false, readOnly: true, error: error.message } }
+    const page = pageRead(candidate.modules.get(target), options)
+    return { ...result, file: target, code: page.value, pagination: page.pagination }
+  } catch (error) { return { ok: false, readOnly: true, ...(coverage ? { coverage } : {}), error: error.message } }
 }

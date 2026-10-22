@@ -19,6 +19,9 @@ import { randomUUID } from 'node:crypto'
 import { statSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { KNOWLEDGE_TEXT } from './src/knowledge.js'
+import { registerPresetContext } from './src/preset-context.js'
+import { createGeneratedOutputStore, generatedOutputOwner } from './src/generated-output.js'
+import { renderExtensionRead, renderExtensionWrite, renderImageCopy } from './src/tool-output.js'
 import { validateExtensionCode } from './src/validate.js'
 import { searchReference } from './src/reference.js'
 import { detectCandidates } from './src/detect.js'
@@ -93,6 +96,7 @@ export function apply(ctx, config) {
   // dshHomePath 是个解析函数,调用得到 Harness home(~/.dsh)
   const homeBase = typeof ctx.dshHomePath === 'function' ? ctx.dshHomePath() : (ctx.dshHomePath || join(homedir(), '.dsh'))
   const dshHomeDir = resolve(homeBase)
+  const generatedOutputs = createGeneratedOutputStore()
   const settingsPath = join(dshHomeDir, 'noname-kit.json')
   /* 配置解析失败时先将原文件留档为 .corrupt-<ts>，再返回空配置，保留损坏内容供恢复。 */
   const readSettingsFile = () => readJsonSafeSync(settingsPath, {})
@@ -228,14 +232,17 @@ export function apply(ctx, config) {
       : KNOWLEDGE_TEXT + '\n注意:当前部署未配置 nonameDir,noname_write_extension 与 noname_read_extension 不可写/不可读,生成代码后让用户自行保存。',
   })
 
+  registerPresetContext(ctx, () => ({ active, nonameDir }))
+
   // ── 2) 工具定义 ──────────────────────────────────────────────
   ctx.tools.register(defineTool({
     name: 'noname_search_reference',
-    description: 'Search noname source for reference implementations. Four ways: (1) Chinese skill name, e.g. 天罚; (2) skill/card ID, e.g. juedou; (3) space-separated effect keywords, e.g. 摸牌 damage; (4) a full effect sentence — similarity >=50% returns ALL close matches as compact rows ranked by score (re-search the ID of an interesting row to load its full code; add distinguishing words if too many). Tips: prefer core effect words (damage/draw/摸牌/回合), one skill per query, drop filler words.',
+    description: 'Search noname source for reference implementations by Chinese name, skill/card ID, effect keywords or description. Files up to 5 GiB are supported: ordinary files use a bounded index; large files return the first bounded excerpt per file, requiring all query words within one 16 KiB source window. Large files use chunked search. Results are limited; coverage.partial means content remains unsearched or was skipped, not that it does not exist. If nextCursor is present, repeat the same query/type with cursor=nextCursor to continue. A full description can return similarity >=50% candidates; search a candidate ID for its definition.',
     parameters: {
       query: { type: 'string', required: true, description: 'Keywords, space-separated.' },
       type: { type: 'string', enum: ['any', 'skill', 'character', 'card'], description: 'Scope, default any.' },
-      limit: { type: 'integer', description: 'Max matches, default 5.' },
+      limit: { type: 'integer', description: 'Max matches per call, default 5, maximum 10.' },
+      cursor: { type: 'string', description: 'Opaque nextCursor from the previous result. Keep query/type unchanged. Omit to start a fresh search; after a source change or host restart, start again.' },
     },
     output: {
       schema: { type: 'object', additionalProperties: false, properties: {
@@ -247,6 +254,22 @@ export function apply(ctx, config) {
         } } },
         scanned: { type: 'integer' },
         query: { type: 'string' },
+        truncated: { type: 'string' },
+        warning: { type: 'string' },
+        nextCursor: { type: 'string' },
+        coverage: { type: 'object', additionalProperties: false, properties: {
+          partial: { type: 'boolean', required: true },
+          indexedFiles: { type: 'integer' }, indexedBytes: { type: 'integer' },
+          largeFiles: { type: 'integer' }, largeFilesPending: { type: 'integer' },
+          streamBytesRead: { type: 'integer' }, streamFilesExhausted: { type: 'integer' },
+          streamFilesStoppedAfterMatch: { type: 'integer' }, largeFileMatchWindowBytes: { type: 'integer' },
+          skippedFiles: { type: 'integer' },
+          skipped: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+            file: { type: 'string', required: true }, bytes: { type: 'integer' }, reason: { type: 'string', required: true },
+          } } },
+          fileLimitReached: { type: 'boolean' }, depthLimitReached: { type: 'boolean' },
+          maxFileBytes: { type: 'integer' }, scanBudgetBytes: { type: 'integer' }, stopReason: { type: 'string' },
+        } },
         error: { type: 'string'},
       } },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
@@ -289,12 +312,17 @@ export function apply(ctx, config) {
 
   ctx.tools.register(defineTool({
     name: 'noname_read_extension',
-    description: 'Read one installed noname extension. Prefer listBlocks/block extraction on large files: list the block directory first, then read only the block you need.',
+    description: 'Read installed extension blocks, bounded source pages or validated manual-output drafts. Directory pages use offset/limit in entries; source pages use UTF-16 character offsets. Follow pagination.nextOffset and reuse coverage.snapshot as snapshot to prevent mixing changed sources. Incomplete or ambiguous reads do not mean content is absent. Use query to filter block directories. For files beyond static parsing limits use noname_search_reference chunked search.',
     parameters: {
       folder: { type: 'string', required: true, description: 'Extension folder name.' },
-      file: { type: 'string', description: 'Relative .js path inside the extension package (multi-file packs keep entries in e.g. character/character.js). Defaults to extension.js.' },
-      listBlocks: { type: 'boolean', description: 'Return the block directory (id/kind/lines/file) instead of full text. Without file, aggregates ALL .js files of the package.' },
+      file: { type: 'string', description: 'Relative .js source path inside the extension package. Defaults to extension.js. History is retrieved with notes:true; info.json is returned as metadata.' },
+      listBlocks: { type: 'boolean', description: 'Return the block directory (id/kind/lines/file) instead of full text. Without file, scans package modules with explicit coverage and paginates results.' },
       block: { type: 'string', description: 'Read one block only, format kind:id — kind is skill/card/character/translate (e.g. skill:cs_tianfa, card:cs_bangbang). Without file, searches the whole package and returns where it was found.' },
+      offset: { type: 'integer', description: 'Page offset: block entries for listBlocks, UTF-16 characters for source/draft text. Default 0.' },
+      limit: { type: 'integer', description: 'Page size: directory default 50/max 200; text default 8000/max 16000 UTF-16 units. A limit of 1 may return 2 units to preserve one whole Unicode character; use nextOffset.' },
+      query: { type: 'string', description: 'Optional block directory filter by ID, kind or source file.' },
+      snapshot: { type: 'string', description: 'coverage.snapshot from the preceding page. A source change is rejected rather than mixing pages.' },
+      draftId: { type: 'string', description: 'Manual-output draft returned by noname_write_extension. Reads generated text without touching installed files; same session/folder required.' },
       notes: { type: 'boolean', description: 'Also return this package history notes (engine-level lessons). Fetch only when relevant to the current task.' },
     },
     output: {
@@ -311,7 +339,7 @@ export function apply(ctx, config) {
         } },
         blocks: { type: 'object', additionalProperties: false, properties: {
           anchored: { type: 'boolean', required: true },
-          blocks: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: {
+          blocks: { type: 'array', required: true, items: { type: 'object', additionalProperties: true, properties: {
             key: { type: 'string', required: true },
             kind: { type: 'string', required: true },
             id: { type: 'string', required: true },
@@ -327,40 +355,29 @@ export function apply(ctx, config) {
         } },
         error: { type: 'string'},
         notes: { type: 'array', items: { type: 'string' } },
+        draftId: { type: 'string' },
+        coverage: { type: 'object', additionalProperties: true },
+        pagination: { type: 'object', additionalProperties: true },
+        ambiguous: { type: 'object', additionalProperties: true },
+        warnings: { type: 'array', items: { type: 'string' } },
       } },
-      render: (_args, value) => {
-        // render 文本是模型唯一能看到的工具结果——所有数据必须原样进文本,不能只给摘要
-        if (value.error) return [{ type: 'text', text: `读取失败: ${value.error}` }]
-        const parts = []
-        if (value.notes) {
-          parts.push(`历史注意点 ${value.notes.length} 条:`)
-          value.notes.forEach((n, i) => parts.push(`${i + 1}. ${n}`))
-        }
-        const fileTag = (f) => (f && f !== 'extension.js' ? ` @ ${f}` : '')
-        if (value.blocks) {
-          const fileNames = (value.blocks.files || []).map((f) => `${f.file}(${f.blocks} 块${f.anchored ? ',已锚点化' : ''})`).join('、')
-          if (fileNames) parts.push(`涉及文件: ${fileNames}`)
-          parts.push(`区块目录 ${value.blocks.blocks.length} 项(${value.blocks.anchored ? '已锚点化' : '未锚点,虚拟划分'}):`)
-          value.blocks.blocks.forEach((b) => parts.push(`- ${b.key}(${b.lines} 行${b.virtual ? ',虚拟' : ''})${fileTag(b.file)}`))
-          parts.push(`用 block:'区块key' 读取具体区块内容;多文件包的区块读写记得带上对应的 file 参数。`)
-        }
-        if (value.block) {
-          parts.push(`── 区块 ${value.block.kind}:${value.block.id}${fileTag(value.block.file)} ──`)
-          parts.push(value.code ?? '(空)')
-        } else if (!value.blocks && !value.notes) {
-          parts.push(`── ${value.folder}/${value.file ?? 'extension.js'} 全文(共 ${value.code ? value.code.split('\n').length : 0} 行)──`)
-          parts.push(value.code ?? '(该文件不存在或为空)')
-          if (value.files && value.files.length) parts.push(`包内文件: ${value.files.join('、')}(条目可能在子目录模块,listBlocks 聚合可见)`)
-        }
-        return [{ type: 'text', text: parts.join('\n') }]
-      },
+      render: (args, value) => renderExtensionRead(args, value),
     },
     isConcurrencySafe: () => true,
-    async execute(args) {
+    async execute(args, exec) {
+      if (args.draftId) {
+        try {
+          if (args.block || args.listBlocks || args.query || args.notes) throw new Error('手动成品按字符分页读取，请仅传 draftId、folder、file、offset、limit。')
+          return generatedOutputs.read({ ...args, owner: generatedOutputOwner(exec) })
+        } catch (error) { return { folder: args.folder, files: [], error: error.message } }
+      }
       if (!active) return { folder: args.folder, files: [], error: '未配置 nonameDir,无法读取游戏目录。' }
       try {
-        const r = await readExtension(nonameDir, args.folder, { file: args.file, listBlocks: args.listBlocks, block: args.block })
-        if (args.notes && !r.error) r.notes = (await readHistory(nonameDir, args.folder)).notes || []
+        const r = await readExtension(nonameDir, args.folder, { file: args.file, listBlocks: args.listBlocks, block: args.block, offset: args.offset, limit: args.limit, query: args.query, snapshot: args.snapshot })
+        if (args.notes) {
+          try { r.notes = (await readHistory(nonameDir, args.folder)).notes || [] }
+          catch (error) { r.warnings = [...(r.warnings || []), '历史注意点读取失败：' + error.message] }
+        }
         return r
       } catch (error) { return { folder: args.folder, files: [], error: error.message } }
     },
@@ -373,6 +390,10 @@ export function apply(ctx, config) {
       source: { type: 'string', enum: ['all', 'builtin', 'extension'], description: 'Source group; defaults to all.' },
       kind: { type: 'string', enum: ['all', 'character', 'card', 'mode'], description: 'Pack category; defaults to all. A pack can also contain skills and translations.' },
       pack: { type: 'string', description: 'Exact pack ID from the catalog. When supplied, entries are included by default.' },
+      offset: { type: 'integer', description: 'Page offset. Pages packs normally, entries when selecting a pack with includeEntries.' },
+      limit: { type: 'integer', description: 'Page size, bounded by the catalog resource limits.' },
+      query: { type: 'string', description: 'Filter the current pack or entry list before pagination.' },
+      snapshot: { type: 'string', description: 'Optional prior coverage.snapshot to reject changed source pages when supported.' },
       includeEntries: { type: 'boolean', description: 'Include static entry IDs and exact source-file ownership. Defaults to false for all packs and true for one pack.' },
     },
     output: {
@@ -394,6 +415,9 @@ export function apply(ctx, config) {
       kind: { type: 'string', enum: ['character', 'card', 'mode'], required: true, description: 'Pack category from the catalog.' },
       pack: { type: 'string', required: true, description: 'Exact pack ID from the catalog.' },
       file: { type: 'string', description: 'Game-relative .js file path exactly as returned by the catalog. Must belong to the selected pack.' },
+      offset: { type: 'integer', description: 'UTF-16 source character offset, default 0; use nextOffset rather than splitting a Unicode character.' },
+      limit: { type: 'integer', description: 'Source page budget in UTF-16 units, default 8000/max 16000; limit=1 may return 2 units for a complete Unicode character. Read pagination.nextOffset until complete.' },
+      snapshot: { type: 'string', description: 'Prior coverage.snapshot; reject a changed source rather than mixing pages.' },
       entry: { type: 'string', description: 'Optional static entry key: character:id, card:id, skill:id, translate:id or mode:id. Omit to read the selected file or pack entry file.' },
     },
     output: {
@@ -444,17 +468,13 @@ export function apply(ctx, config) {
         code: { type: 'string'},
         infoWritten: { type: 'boolean' },
         infoError: { type: 'string'},
+        draftId: { type: 'string' },
+        pagination: { type: 'object', additionalProperties: true },
         error: { type: 'string'},
       } },
-      render: (_args, value) => [{
-        type: 'text',
-        text: value.error ? `写入被拒: ${value.error}`
-          : !value.ok ? `校验未通过,未写入。错误:\n${(value.errors || []).map((e) => `- ${e.message}`).join('\n')}`
-          : value.wrote ? `已写入 ${value.path}${value.backup ? `(旧版备份于 ${value.backup})` : ''}。请让用户重开游戏或重载扩展查看效果。`
-          : '手动模式:代码已生成并通过校验,等用户复制保存。',
-      }],
+      render: (args, value) => renderExtensionWrite(args, value),
     },
-    async execute(args) {
+    async execute(args, exec) {
       if (!active) {
         return { ok: false, wrote: false, error: '未配置 nonameDir(游戏本体目录):请在插件配置里填 nonameDir 后重启,或直接复制代码手动保存。' }
       }
@@ -467,7 +487,16 @@ export function apply(ctx, config) {
           }
         }
         const result = await writeExtension(nonameDir, args)
-        if (result.wrote && result.backup) await recordBackup(nonameDir, args.folder, result.backup)
+        if (result.wrote && result.backup) {
+          try { await recordBackup(nonameDir, args.folder, result.backup) }
+          catch (error) { result.warnings = [...(result.warnings || []), { message: '代码已写入且备份文件已创建，但备份登记失败：' + error.message }] }
+        }
+        if (!result.wrote && result.ok && typeof result.code === 'string' && result.code.length > 16000) {
+          const owner = generatedOutputOwner(exec)
+          const draftId = generatedOutputs.add({ folder: args.folder, file: args.file || 'extension.js', code: result.code, owner })
+          const page = generatedOutputs.read({ draftId, folder: args.folder, owner })
+          return { ...result, code: page.code, draftId, pagination: page.pagination }
+        }
         return result
       } catch (error) {
         return { ok: false, wrote: false, error: error.message }
@@ -501,13 +530,9 @@ export function apply(ctx, config) {
           source: { type: 'string' }, error: { type: 'string', required: true },
         } } },
         autoCompleted: { type: 'boolean' },
+        warning: { type: 'string' },
       } },
-      render: (_args, value) => [{
-        type: 'text',
-        text: value.ok
-          ? `已复制 ${value.copied.length} 张图片到扩展包 image/ 目录。${value.autoCompleted ? '任务已自动完成并归档,无需再调用 noname_skills_written。' : ''}`
-          : `图片复制失败: ${(value.errors || []).map((e) => e.error).join('; ')}`,
-      }],
+      render: (args, value) => renderImageCopy(args, value),
     },
     async execute(args) {
       if (!active) return { ok: false, errors: [{ error: '未配置 nonameDir,无法复制图片。' }] }
@@ -515,7 +540,9 @@ export function apply(ctx, config) {
       if (result.ok && args.taskId) {
         // 与工坊补图路由同语义:复制成功 → 登记 image/<名> → 满足条件自动完成+归档
         const firstTarget = String((args.images && args.images[0] && args.images[0].target) || '').replace(/^image\//, '')
-        const done = await setTaskImage(dshHomeDir, { taskId: args.taskId, image: firstTarget ? 'image/' + firstTarget : '' })
+        let done
+        try { done = await setTaskImage(dshHomeDir, { taskId: args.taskId, image: firstTarget ? 'image/' + firstTarget : '' }) }
+        catch (error) { result.warning = '图片已复制，但任务登记失败：' + error.message; return result }
         if (!done.ok) {
           /* 图片复制成功但任务登记失败时返回明确错误，避免将未登记的图片报告为完整交付。 */
           result.warning = `图片已复制,但任务登记失败:${done.error || '未知原因'}——请核对 taskId 是否与任务列表一致`
