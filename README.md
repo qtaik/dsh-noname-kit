@@ -17,7 +17,8 @@
 
 ## 安装
 
-需要 DeepSeek Harness 和 pnpm。
+命令行使用需要 DeepSeek Harness、Node.js（`^22.19.0 || >=24.0.0`）和 pnpm。
+桌面版使用应用自带的运行时。
 
 ```sh
 dsh plugin --profile web add dsh-noname-kit
@@ -41,8 +42,8 @@ dsh plugin --profile web add https://github.com/qtaik/dsh-noname-kit.git
 
 ### 桌面版(DeepSeek Harness 桌面应用)
 
-NONAME-KIT 1.10.4 支持 DSH Desktop 0.2.1-rc.2 和 0.2.1-rc.1，并保留对 0.2.0-rc.2 的兼容。
-包内同时声明 `engines.dsh` 和宿主依赖范围；其他版本以包内声明为准。
+安装允许范围由包内 `engines.dsh` 和宿主依赖范围决定。
+`dsh.compatibility.dshReleases` 另行记录精确版本的验证结论，范围声明不代表每个版本都已实测。
 
 打开桌面版，左侧「插件」面板 →「添加插件」→ 输入 `dsh-noname-kit` → 安装。
 升级社区插件请在插件面板卸载后重新安装新版；首次从旧版升级后建议重启桌面版。
@@ -55,6 +56,29 @@ E:\dsh\resources\runtime\cli\bin\dsh.cmd plugin --profile desktop add dsh-noname
 将示例中的 `E:\dsh` 替换为实际桌面安装目录。`--profile desktop` 选择桌面配置；
 `--profile web` 会安装到独立的 Web 配置。装完新建会话选「无名杀开发模式」即可
 (preset 随插件自动就位，无需重装)，再到工坊「⚙ 设置」配置游戏目录。
+
+### 兼容性与运行权限
+
+Node.js 范围采用 [DSH 官方项目的运行要求](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/package.json)。实际运行验证使用 Windows 上的 Node.js 24.21.0，不代表范围内所有 Node.js 版本都已逐一实测。
+
+| DSH 精确版本 | 验证结论 | 安装范围 |
+|---|---|---|
+| 0.2.1-rc.2 | 已验证隔离 Web Profile 的安装、启动、卸载及实际开发工具调用 | 允许 |
+| 0.2.1-rc.1 | 当前代码的独立生命周期验证未知 | 允许，仍需验证 |
+| 0.2.1-alpha.5 | 未验证 | 不在安装允许范围 |
+
+`dsh.compatibility.dshOperations` 分别记录安装、启动、卸载和版本回滚的结果；未完成的操作保持 `unknown`。第三方商城可能把不在 `engines.dsh` 范围的版本判为不可安装，不会因上述未知声明自动放宽安装范围。
+
+
+生命周期验证使用官方 Desktop 附带的 CLI 创建隔离 Web Profile，检查工坊接口、开发模式注册和卸载后重启的清理结果。该记录不包含桌面界面操作或版本降级回滚，回滚状态保持 `unknown`。
+
+- 运行依赖为 Acorn 8.19.0，用于静态解析 JavaScript；解析不会执行被读取的扩展代码。
+- 工坊读取用户配置的游戏目录；扩展源码覆盖前自动备份，图片和配音通过专用工具复制到扩展目录。插件配置与任务保存在 DSH 用户目录，扩展历史与源码备份保存在对应扩展目录。图片、配音的同名目标会覆盖，不自动创建媒体备份。
+- 开发模式使用宿主提供的文件、Shell 和网络工具，权限以宿主设置为准；Windows 的 Bash 适配使用本机 Git Bash。
+- 更新检查访问 npm Registry 和 GitHub；联机功能访问配置的信令及连接辅助服务，并与其他玩家建立点对点连接。
+- 联机内核由用户在联机页主动安装到游戏的扩展目录。卸载 DSH 插件不会自动删除游戏扩展、用户任务、历史或备份；需要时分别管理。
+
+开发模式通过独立的 `preset-noname-dev` 入口使用宿主官方 preset 及工具组件。Bundle 的入口名和官方组件依赖保持显式声明，不覆盖官方包文件。
 
 ## 配置
 
@@ -131,7 +155,7 @@ AI 绕过校验直接改文件(读、搜、看目录完全不受限)。
   给「联机助手」点「启」并完整退出、重启游戏。升级插件后记得点「⬆️ 升级内核」——两端内核版本
   要一致(房号通过信令服务器牵线,版本不同会互相连不上)。
 
-联机以官方版无名杀为准(第三方套壳尽力而为);对局数据是点对点直连,信令服务器
+本插件仅适配官方版无名杀;对局数据是点对点直连,信令服务器
 只负责牵线。
 
 建议联机双方尽量使用相同版本的官方无名杀，以减少兼容性问题；不同小版本仍可尝试联机。
