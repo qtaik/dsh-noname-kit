@@ -231,21 +231,22 @@ export async function setSkillStatus(dshHome, { taskId, skill, status }) {
   return { ok: true, autoCompleted, task, confirmed, total: task.skills.length }
 }
 
-/** AI 写入完成:把指定技能标为 written(待测试);可携带引擎级注意点(合并去重存任务)。
+/** AI 写入完成:把本轮技能标为 written(待测试)，保留已确认状态；实际修改的已确认技能须用 retestSkills 明确重新待测。
+ * 可携带引擎级注意点(合并去重存任务)。
  *  🎲 mode 任务(dynamicSkills)的规则节点由 AI 回传时动态登记——自由描述无法预先拆规则。 */
-export async function markSkillsWritten(dshHome, { taskId, skills, notes }) {
+export async function markSkillsWritten(dshHome, { taskId, skills, notes, retestSkills = [] }) {
   const registry = await readRegistry(dshHome)
   const task = registry.tasks.find((t) => t.id === taskId)
   if (!task) return { ok: false, error: `找不到任务「${taskId}」` }
   const dynamic = task.dynamicSkills === true
-  /* 已完成任务再次标记技能写入时自动重开，并返回 reopened，便于后续确认与归档更新。 */
-  let reopened = false
-  if (task.status === 'done') {
-    task.status = 'open'
-    reopened = true
+  const names = [...new Set(Array.isArray(skills) ? skills : [])]
+  if (!Array.isArray(retestSkills) || retestSkills.some((name) => typeof name !== 'string' || !names.includes(name))) {
+    return { ok: false, error: 'retestSkills 必须是 skills 中本轮实际修改、需要重新测试的技能名称数组。' }
   }
-  const names = Array.isArray(skills) ? skills : []
+  const retest = new Set(retestSkills)
   const missing = []
+  const preservedConfirmed = []
+  let marked = 0
   for (const name of names) {
     const node = findSkill(task, name)
     if (!node) {
@@ -253,13 +254,22 @@ export async function markSkillsWritten(dshHome, { taskId, skills, notes }) {
         const node2 = newSkill({ name: name.trim() })
         node2.status = 'written'
         task.skills.push(node2)
+        marked += 1
         continue
       }
       missing.push(name)
       continue
     }
+    if (node.status === 'confirmed' && !retest.has(name)) {
+      preservedConfirmed.push(name)
+      continue
+    }
     node.status = 'written'
+    marked += 1
   }
+  // 只有产生待测试技能时才重开任务，重复回传已确认清单不改变完成状态。
+  const reopened = task.status === 'done' && marked > 0
+  if (reopened) task.status = 'open'
   let notesStored = 0
   if (Array.isArray(notes) && notes.length) {
     const clean = notes.map((n) => String(n).slice(0, 500)).filter(Boolean)
@@ -268,7 +278,7 @@ export async function markSkillsWritten(dshHome, { taskId, skills, notes }) {
   }
   touch(task)
   await writeRegistry(dshHome, registry)
-  return { ok: missing.length === 0, missing, marked: names.length - missing.length, notesStored, reopened, task }
+  return { ok: missing.length === 0, missing, marked, preservedConfirmed, notesStored, reopened, task }
 }
 
 /**

@@ -59,10 +59,11 @@ E:\dsh\resources\runtime\cli\bin\dsh.cmd plugin --profile desktop add dsh-noname
 
 ### 兼容性与运行权限
 
-Node.js 范围采用 [DSH 官方项目的运行要求](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/package.json)。实际运行验证使用 Windows 上的 Node.js 24.21.0，不代表范围内所有 Node.js 版本都已逐一实测。
+Node.js 范围采用 [DSH 官方项目的运行要求](https://github.com/deepseek-ai/deepseek-harness/blob/1f81c047fc48fa190a683e469daa699857e9afe8/package.json)。实际运行验证使用 Windows 上的 Node.js 24.21.0，不代表范围内所有 Node.js 版本都已逐一实测。
 
 | DSH 精确版本 | 验证结论 | 安装范围 |
 |---|---|---|
+| 0.2.1-rc.3 | 已验证隔离 Web Profile 的安装、启动、卸载及浏览器工坊、任务浮窗 | 允许 |
 | 0.2.1-rc.2 | 已验证隔离 Web Profile 的安装、启动、卸载及实际开发工具调用 | 允许 |
 | 0.2.1-rc.1 | 当前代码的独立生命周期验证未知 | 允许，仍需验证 |
 | 0.2.1-alpha.5 | 未验证 | 不在安装允许范围 |
@@ -71,6 +72,8 @@ Node.js 范围采用 [DSH 官方项目的运行要求](https://github.com/deepse
 
 
 生命周期验证使用官方 Desktop 附带的 CLI 创建隔离 Web Profile，检查工坊接口、开发模式注册和卸载后重启的清理结果。该记录不包含桌面界面操作或版本降级回滚，回滚状态保持 `unknown`。
+
+rc.3 另外验证了隔离浏览器中的工坊入口、任务浮窗、深浅主题、窄窗口和会话切换后的提交目标；提交文本与目标会话在隔离测试中核对，未发起模型请求。
 
 - 运行依赖为 Acorn 8.19.0，用于静态解析 JavaScript；解析不会执行被读取的扩展代码。
 - 工坊读取用户配置的游戏目录；扩展源码覆盖前自动备份，图片和配音通过专用工具复制到扩展目录。插件配置与任务保存在 DSH 用户目录，扩展历史与源码备份保存在对应扩展目录。图片、配音的同名目标会覆盖，不自动创建媒体备份。

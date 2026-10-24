@@ -2850,10 +2850,11 @@ window.__ModuleLoader__.load({
         })
       }, [presetFlipDone]);
       var send = function (text) {
-        var session = sessionId;
+        var session = props.followCurrentSession ? readCurrentSessionId(props.sessions, props.uiSession) : sessionId;
         return Promise.resolve(session).then(function (id) {
           // sessions 服务由插件 inject 提供;绑定当前会话并发送结构化消息。
           // 新版对未打开的会话 binding() 返回 undefined——判空让调用方走报错,而不是 TypeError
+          if (!id) throw new Error('当前没有打开的会话——请先打开会话后再提交任务');
           var sessions = props.sessions;
           var binding = sessions.binding(id);
           if (!binding || !binding.session) throw new Error('目标会话未打开或已关闭');
@@ -2934,8 +2935,9 @@ window.__ModuleLoader__.load({
       if (parsed.isError) return e('div', 'nnk-err', '❌ 收口返回异常,详见文本结果。');
       var text = parsed.text || '';
       var ok = text.indexOf('已标记') === 0;
+      var noNewTests = /^已标记 0 个技能待测试/.test(text);
       return h('div', { className: 'nnk-tool-result' },
-        e('div', {}, h('b', { className: 'nnk-ui-text' }, ok ? '🏁 技能已写入,待游戏测试' : '⚠️ 收口未完成')),
+        e('div', {}, h('b', { className: 'nnk-ui-text' }, ok ? (noNewTests ? '✅ 技能状态已核对' : '🏁 技能已写入,待游戏测试') : '⚠️ 收口未完成')),
         h('div', { className: ok ? 'nnk-ok' : 'nnk-err', 'data-nnk-literal': true }, text),
         ok ? null : e('div', 'nnk-hint', '若任务列表状态未更新,可让 AI 重试收口;或直接在「📋 任务列表」里操作。')
       );
@@ -3065,6 +3067,8 @@ window.__ModuleLoader__.load({
                 box.issue.trim(),
                 '── 执行要求 ──',
                 '先 noname_read_extension 读取当前代码,定位问题并说明原因,修复后 noname_validate,校验通过后写入。修复后调用 noname_skills_written,原样带回任务ID ' + task.id + '。',
+                'skills 只填本轮实际修复的任务技能名称,不要照抄整个任务清单;其他技能的确认状态保持不变。' + (skill ? '本次反馈技能名: ' + JSON.stringify(skill) + '。' : ''),
+                '如果本轮确实修改了其他已确认技能,将这些技能名称同时列入 skills 和 retestSkills,使其重新待测试;未修改的已确认技能不得列入 retestSkills。',
               ].filter(Boolean).join('\n');
               var binding = sessions.binding(sid);
               if (!binding || !binding.session) {
@@ -3416,7 +3420,7 @@ window.__ModuleLoader__.load({
         ),
         h('div', { className: 'nnk-panel-body' },
           sid
-            ? h(WorkshopView, { sessionId: sid, sessions: sessions, uiSession: uiSession })
+            ? h(WorkshopView, { sessionId: sid, sessions: sessions, uiSession: uiSession, followCurrentSession: true })
             : e('div', 'nnk-hint', '当前没有会话——先新建会话,再用工坊派任务。')
         )
       );

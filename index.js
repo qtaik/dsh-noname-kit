@@ -654,10 +654,11 @@ export function apply(ctx, config) {
 
   ctx.tools.register(defineTool({
     name: 'noname_skills_written',
-    description: 'Mark task skills as written (awaiting user in-game test). Call after all skills of the task are implemented, validated and written. The task auto-completes when the user confirms every skill. For mode tasks (custom game mode), the names are rule-node names from the task message and are registered dynamically on first call — pass every rule node verbatim.',
+    description: 'Mark only skills implemented or repaired, validated and written in this round as awaiting user in-game test. Initial implementation covers the whole task; later feedback must include only the skills actually changed. Already confirmed skills stay confirmed by default. If this round actually changes a confirmed skill, explicitly include that name in both skills and retestSkills to require a fresh user test. Never copy the entire task list into retestSkills. The task auto-completes when the user confirms every skill. For mode tasks, use rule-node names verbatim; new rule nodes are registered dynamically.',
     parameters: {
       taskId: { type: 'string', required: true, description: 'Task ID from the task message, verbatim.' },
-      skills: { type: 'array', required: true, items: { type: 'string' }, description: 'Skill display names implemented in this round (mode task: rule-node names, registered dynamically).' },
+      skills: { type: 'array', required: true, items: { type: 'string' }, description: 'Only skill display names actually implemented or repaired in this round (mode task: rule-node names, registered dynamically).' },
+      retestSkills: { type: 'array', items: { type: 'string' }, description: 'OPTIONAL exact names of previously confirmed skills actually changed in this round and requiring another user test. Must be a subset of skills. Omit for untouched confirmed skills; never copy the full task list.' },
       notes: { type: 'array', items: { type: 'string' }, description: 'OPTIONAL engine-level, reusable lessons only (API behavior, global pitfalls) worth keeping for future tasks of this package. NEVER task-specific implementation details.' },
     },
     output: {
@@ -665,6 +666,7 @@ export function apply(ctx, config) {
         ok: { type: 'boolean', required: true },
         marked: { type: 'integer' },
         reopened: { type: 'boolean' },
+        preservedConfirmed: { type: 'array', items: { type: 'string' } },
         missing: { type: 'array', items: { type: 'string' } },
         notesStored: { type: 'integer' },
         confirmed: { type: 'integer' },
@@ -675,7 +677,7 @@ export function apply(ctx, config) {
       render: (_args, value) => [{
         type: 'text',
         text: value.ok
-          ? `已标记 ${value.marked} 个技能待测试(确认 ${value.confirmed}/${value.total})${value.notesStored ? `,存 ${value.notesStored} 条注意点` : ''}。告诉用户:可以进游戏测试了,测试通过请在任务列表点「✅ 确认无误」。`
+          ? `已标记 ${value.marked} 个技能待测试(确认 ${value.confirmed}/${value.total})${value.preservedConfirmed && value.preservedConfirmed.length ? `,保留 ${value.preservedConfirmed.length} 个技能的确认状态` : ''}${value.notesStored ? `,存 ${value.notesStored} 条注意点` : ''}。${value.marked ? '告诉用户:可以进游戏测试了,测试通过请在任务列表点「✅ 确认无误」。' : '本次没有新增待测技能,无需重复确认。'}`
           : `标记失败: ${value.error}`,
       }],
     },
@@ -693,7 +695,7 @@ export function apply(ctx, config) {
             : '任务更新失败。')
         return { ok: false, error: detail }
       }
-      return { ok: true, marked: result.marked, missing: result.missing, reopened: Boolean(result.reopened), notesStored: result.notesStored || 0, confirmed: result.task.skills.filter((s) => s.status === 'confirmed').length, total: result.task.skills.length, autoCompleted: false }
+      return { ok: true, marked: result.marked, preservedConfirmed: result.preservedConfirmed, missing: result.missing, reopened: Boolean(result.reopened), notesStored: result.notesStored || 0, confirmed: result.task.skills.filter((s) => s.status === 'confirmed').length, total: result.task.skills.length, autoCompleted: false }
     },
   }))
 
