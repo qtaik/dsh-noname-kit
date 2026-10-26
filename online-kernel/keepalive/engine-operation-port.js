@@ -1,3 +1,4 @@
+import {normalizeSignalingUrl,saveSignalingUrl} from './signaling-config.js';
 // Operations run in the captured, real official document, never a carrier env.
 export function createEngineOperationPort(nnk,{isCurrent,scope=null,onEvent=()=>{},timeoutMs=10000}={}) {
   if (!nnk?.env || typeof isCurrent!=='function') throw Error('A current official environment and lease guard are required');
@@ -70,13 +71,17 @@ export function createEngineOperationPort(nnk,{isCurrent,scope=null,onEvent=()=>
         value=args.value;
       }
       if(allowed[args.key]==='string'){
-        value=String(args.value??'').slice(0,200);
-        if(value&&!/^wss?:\/\//i.test(value))throw Error('信令地址必须是 ws:// 或 wss:// 开头的 WebSocket 地址');
-        value=value||config.defaults[args.key];
+        if(args.requestId!==undefined&&(typeof args.requestId!=='string'||!args.requestId.length||args.requestId.length>160||/[\x00-\x1f\x7f]/.test(args.requestId)))throw Error('信令地址保存请求标识无效');
+        value=normalizeSignalingUrl(args.value);
       }
-      const persistence=await saveVerified(op,'nnk_'+args.key,value);guard(op);
+      let persistence;
+      if(args.key==='mqttUrl'&&!env.lib.db){
+        persistence=await saveSignalingUrl({profile:{configStorage:{prefix:env.lib.configprefix,useDB:false}},value,isCurrent:()=>{guard(op);return true;},timeoutMs});
+        guard(op);env.lib.config.nnk_mqttUrl=value;
+      }else persistence=await saveVerified(op,'nnk_'+args.key,value);
+      guard(op);
       const actual=config.get(args.key);if(!equal(actual,value))throw Error('Current configuration differs from persisted readback');
-      const valueProfile=profile();await emit('config_applied',{key:args.key,value:actual,profile:valueProfile},op);
+      const valueProfile=profile();await emit('config_applied',{key:args.key,value:actual,profile:valueProfile,...(args.key==='mqttUrl'&&args.requestId?{requestId:args.requestId}:{})},op);
       return {persistence,profile:valueProfile};
     }
     if(action==='set_identity'||action==='identity.set'){

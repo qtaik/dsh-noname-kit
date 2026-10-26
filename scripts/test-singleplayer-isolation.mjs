@@ -35,7 +35,7 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 const plain = value => JSON.parse(JSON.stringify(value));
 async function flush() { for (let n = 0; n < 5; n++) { await Promise.resolve(); await nextTurn(); } }
 
-async function fixture(role, {identity = false, nativeFailure = null, mode = 'identity', connectMode = false} = {}) {
+async function fixture(role, {identity = false, nativeFailure = null, mode = 'identity', connectMode = false, engineRole = 'host'} = {}) {
   const intervals = new Map(), timeouts = new Map(), listeners = new Map(), modules = new Map();
   let timerId = 0;
   const records = {imports: [], scripts: 0, endpoint: 0, nativeActions: [], assignments: [], configWrites: [],
@@ -58,7 +58,7 @@ async function fixture(role, {identity = false, nativeFailure = null, mode = 'id
   const fsBoundary = {existsSync(file) {
     return path.resolve(file) === path.join(virtualRoot, 'extension', '联机助手', 'extension.js');
   }};
-  const lease = {info: {role, root: virtualRoot, origin: 'http://localhost:8089', engineRole: 'host',
+  const lease = {info: {role, root: virtualRoot, origin: 'http://localhost:8089', engineRole,
     bootCapability: 'fixture-ordinary-capability', scope: role === 'engine' ? {sessionId: 'p', roundId: 'r',
       documentGeneration: 1, bindingId: 'b', bindingNonce: 'n', expectedOrigin: 'http://localhost:8089'} : null},
     isCurrent: () => ['ordinary', 'engine'].includes(role), isDocumentAlive: () => true,
@@ -108,10 +108,17 @@ async function fixture(role, {identity = false, nativeFailure = null, mode = 'id
     window.__dirname = ${JSON.stringify(virtualRoot)};
     window.require = require;
     window.addEventListener = function(name, fn) { registerListener(name, fn); };
+    window.removeEventListener = function(name, fn) { unregisterListener(name, fn); };
     window.onerror = function nativeOnerror() { return 'native-error'; };
     Array.prototype.add = function(item) { if (!this.includes(item)) this.push(item); return this; };
     class Player { chooseToUse() { return this.nextEvent; } }
+    globalThis.freeEventHandlers = new Map();
+    globalThis.freeAnnouncements = new Map();
     globalThis.lib = {version: '1.11.6', config, configprefix: 'fixture_', node: {path: pathBoundary},
+      mode: Object.fromEntries(['identity','guozhan','versus','doudizhu','single'].map(name =>
+        [name, {connect: {connect_number: {init: '8', connect: true}}}])),
+      announce: {subscribe(name, fn) { freeAnnouncements.set(fn, name); return fn; },
+        unsubscribe(name, fn) { if (freeAnnouncements.get(fn) === name) freeAnnouncements.delete(fn); }},
       help: {}, extensionMenu: {}, extensionPack: {}, extensions: [
         ['ExistingContent', function(){}, {}, false, {nopack: true, character: {character: {fixture_hero: {}}}}, false],
         ['ExistingUI', function(){}, {}, false, {nopack: true}, true]
@@ -125,6 +132,18 @@ async function fixture(role, {identity = false, nativeFailure = null, mode = 'id
     globalThis.ai = {};
     globalThis.game = {
       online: false, players: [], phaseNumber: 0,
+      broadcastAll: function nativeBroadcastAll(fn, ...args) { return fn(...args); },
+      globalEventHandlers: {
+        pushHandler(name, type, ...rest) {
+          const handlers = freeEventHandlers.get(name) || [];
+          handlers.push(...(typeof type === 'string' ? rest : [type, ...rest]));
+          freeEventHandlers.set(name, handlers);
+        },
+        removeHandler(name, type, fn) {
+          const handlers = freeEventHandlers.get(name) || [], index = handlers.indexOf(fn);
+          if (index >= 0) handlers.splice(index, 1);
+        }
+      },
       saveConfig(key, value, mode, done) {
         records.configWrites.push({key, value, mode: mode || null});
         const storedKey = mode ? key + '_mode_config_' + mode : key;
@@ -145,9 +164,14 @@ async function fixture(role, {identity = false, nativeFailure = null, mode = 'id
     if (!listeners.has(name)) listeners.set(name, []);
     listeners.get(name).push(fn);
   };
+  context.unregisterListener = (name, fn) => {
+    const handlers = listeners.get(name) || [], index = handlers.indexOf(fn);
+    if (index >= 0) handlers.splice(index, 1);
+  };
+  const initialModes = plain(context.lib.mode);
   const refs = {import: context.game.import, chooseToUse: context.lib.element.Player.prototype.chooseToUse,
     callHook: context.game.callHook, onerror: context.onerror, connectMenu: context.ui.click.connectMenu,
-    switchMode: context.game.switchMode, over: context.game.over, extensionPush: context.lib.extensions.push,
+    switchMode: context.game.switchMode, over: context.game.over, broadcastAll: context.game.broadcastAll, extensionPush: context.lib.extensions.push,
     nativeServer: context.lib.message.server.nativeMessage, nativeClient: context.lib.message.client.nativeMessage};
   async function loadModule(specifier, parent = 'http://localhost:8089/') {
     const url = new URL(specifier, parent), relative = decodeURIComponent(url.pathname).replace(/^\/extension\/联机助手\//, '');
@@ -156,7 +180,7 @@ async function fixture(role, {identity = false, nativeFailure = null, mode = 'id
       let source;
       if (relative === 'keepalive/engine-endpoint.js') source = 'export async function attachEngine(){ records.endpoint++; }';
       else {
-        if (!/^(?:src\/[a-z-]+|keepalive\/entry)\.js$/.test(relative)) throw Error('Unexpected startup module: ' + relative);
+        if (!/^(?:src\/[a-z-]+|keepalive\/(?:entry|free-character-(?:choice|options|identity|guozhan|versus|single|doudizhu|picker|picker-mark)))\.js$/.test(relative)) throw Error('Unexpected startup module: ' + relative);
         source = fs.readFileSync(path.join(sourceRoot, 'online-kernel', relative), 'utf8');
       }
       records.imports.push(relative);
@@ -178,15 +202,27 @@ async function fixture(role, {identity = false, nativeFailure = null, mode = 'id
   delete context._status.extensionLoading;
   await flush();
   async function tick() { for (const fn of [...intervals.values()]) fn(); await flush(); }
-  const result = {context, refs, records, initialConfig, initialConnectMode: connectMode, intervals, tick,
+  const result = {context, refs, records, initialConfig, initialModes, initialConnectMode: connectMode, intervals, tick,
     async run(code) { return vm.runInContext(code, context); },
     async content(name) { const row = context.lib.extensions.find(value => value[0] === name);
       assert.ok(row, 'Expected a native extension content record'); return context.nativeContentLoader(row); },
-    async close() { for (const fn of listeners.get('pagehide') || []) fn(); await flush(); intervals.clear(); timeouts.clear(); }};
+    async close() { for (const fn of [...(listeners.get('pagehide') || [])]) fn(); await flush(); intervals.clear(); timeouts.clear(); }};
   return result;
 }
 
+function assertNoFreeCharacterInstallation(f) {
+  const c = f.context;
+  assert.deepEqual(f.records.imports.filter(name => name.startsWith('keepalive/free-character-')), []);
+  assert.equal(c.__nnk__.modules.freeCharacterChoice, undefined);
+  assert.equal(c.__nnk__.modules.freeCharacterPicker, undefined);
+  assert.deepEqual(plain(c.lib.mode), f.initialModes);
+  assert.deepEqual(plain(c.lib.config.mode_config ?? null), f.initialConfig.mode_config ?? null);
+  assert.equal(c.freeEventHandlers.size, 0);
+  assert.equal(c.freeAnnouncements.size, 0);
+  assert.equal(c.game.broadcastAll, f.refs.broadcastAll);
+}
 function assertNoGameplayPatches(f) {
+  assertNoFreeCharacterInstallation(f);
   const {context: c, refs} = f;
   assert.equal(c.game.import, refs.import, 'Ordinary game.import must keep the native loader');
   assert.equal(c.lib.element.Player.prototype.chooseToUse, refs.chooseToUse, 'Ordinary chooseToUse must remain native');
@@ -304,6 +340,30 @@ await test('Ordinary identity sync preserves native gameplay and the accepted ca
 await test('Fresh engine production boot retains its existing compatibility installation and endpoint path', async () => {
   await withFixture('engine', {identity: true}, async f => {
     const c = f.context;
+    const free = c.__nnk__.modules.freeCharacterChoice;
+    assert.equal(free?.installed, true, f.records.logs.map(value => value.message).join('\n'));
+    assert.deepEqual(f.records.imports.filter(name => name.startsWith('keepalive/free-character-')).sort(),
+      ['choice','options','identity','guozhan','versus','single','doudizhu','picker','picker-mark'].map(name => 'keepalive/free-character-' + name + '.js').sort());
+    const picker = c.__nnk__.modules.freeCharacterPicker;
+    assert.equal(picker?.installed, true, f.records.logs.map(value => value.message).join('\n'));
+    assert.equal(c.ui.arena, undefined, 'Presentation hooks must register before native arena creation');
+    assert.equal(picker.resourceSnapshot().registeredEventHandlers, 1);
+    assert.equal(picker.resourceSnapshot().observers, 0);
+    assert.equal(free.resourceSnapshot().registeredEventHandlers, 4);
+    assert.equal(free.resourceSnapshot().announceListeners, 1);
+    assert.equal(free.resourceSnapshot().pagehideListeners, 1);
+    assert.equal(free.resourceSnapshot().contexts, 0);
+    for (const name of ['chooseCharacter','chooseCharacterOL','chooseButton','chooseButtonOL']) {
+      assert.equal(c.freeEventHandlers.get(name)?.length, name === 'chooseButton' ? 2 : 1, name + ' must retain its real manager and local presentation handlers');
+    }
+    for (const mode of ['identity','guozhan','versus','doudizhu','single']) {
+      const option = c.lib.mode[mode].connect.connect_nnk_free_choose;
+      assert.equal(option?.name, '自由选将');
+      assert.equal(option.init, false);
+      assert.equal(option.connect, true);
+      assert.equal(c.lib.config.mode_config[mode].connect_nnk_free_choose, false);
+    }
+    assert.equal(f.records.logs.some(value => /自由选将设置不可用|选将分类不可用|Unexpected startup module/.test(value.message)), false);
     assert.notEqual(c.game.import, f.refs.import);
     assert.equal(c.lib.element.Player.prototype.chooseToUse.__nnkInfoMapShim, true);
     assert.equal(c.game.callHook.__nnkGuarded, true);
@@ -329,6 +389,48 @@ await test('Fresh engine production boot retains its existing compatibility inst
     assert.equal(c.__nnk__.modules.bridge.snapshot().timer, false);
     assert.equal(f.records.nativeActions.length, 0);
     assert.equal(f.records.fetches.length, 0);
+    await f.close();
+    assert.equal(free.resourceSnapshot().registeredEventHandlers, 0);
+    assert.equal(free.resourceSnapshot().pagehideListeners, 0);
+    assert.equal(free.resourceSnapshot().bindings, 0);
+    assert.equal(picker.resourceSnapshot().registeredEventHandlers, 0);
+    assert.equal(picker.resourceSnapshot().pagehideListeners, 0);
+    assert.equal(picker.resourceSnapshot().observers, 0);
+    assert.equal(c.freeAnnouncements.size, 0);
+    assert.ok([...c.freeEventHandlers.values()].every(handlers => handlers.length === 0));
+    assert.deepEqual(plain(c.lib.mode), f.initialModes);
+    assert.equal(c.game.broadcastAll, f.refs.broadcastAll);
+  });
+});
+await test('Guest engine boot installs local picker hooks without host selection adapters or settings', async () => {
+  await withFixture('engine', {engineRole: 'guest', mode: 'connect', connectMode: true}, async f => {
+    const c = f.context, picker = c.__nnk__.modules.freeCharacterPicker;
+    function assertPresentationOnly() {
+      assert.equal(c.__nnk__.modules.freeCharacterChoice, undefined);
+      assert.equal(picker?.installed, true);
+      assert.deepEqual(f.records.imports.filter(name => name.startsWith('keepalive/free-character-')).sort(),
+        ['options','picker','picker-mark'].map(name => 'keepalive/free-character-' + name + '.js').sort());
+      assert.deepEqual(plain(c.lib.mode), f.initialModes);
+      assert.deepEqual(plain(c.lib.config.mode_config ?? null), f.initialConfig.mode_config ?? null);
+      assert.equal(c.game.broadcastAll, f.refs.broadcastAll);
+      assert.equal(c.freeEventHandlers.size, 1);
+      assert.equal(c.freeEventHandlers.get('chooseButton')?.length, 1);
+      assert.equal(c.freeAnnouncements.size, 0);
+      assert.equal(picker.resourceSnapshot().observers, 0);
+      assert.equal(picker.resourceSnapshot().dialogs, 0);
+    }
+    assertPresentationOnly();
+    assert.equal(c.__nnk__.state.bootStage, 'ready');
+    assert.equal(c.ui.arena, undefined);
+    assert.equal(c.game.callHook.__nnkGuarded, true);
+    assert.equal(f.records.logs.some(value => /选将分类不可用|Unexpected startup module/.test(value.message)), false);
+    await f.tick(); await f.tick();
+    assert.equal(f.records.endpoint, 1);
+    assertPresentationOnly();
+    await f.close();
+    assert.equal(picker.resourceSnapshot().registeredEventHandlers, 0);
+    assert.equal(picker.resourceSnapshot().pagehideListeners, 0);
+    assert.ok([...c.freeEventHandlers.values()].every(handlers => handlers.length === 0));
   });
 });
 await test('Preliminary and retired native documents stop before module loading or compatibility installation', async () => {
@@ -371,7 +473,7 @@ for (const nativeFailure of ['require', 'capture']) {
   });
 }
 
-console.log(JSON.stringify({scope: 'Production extension.boot, entry, compat and src modules with actual official 1.11.6 import/loadExtension/content methods; in-memory native/filesystem/endpoint boundaries; no native-window or full-gameplay claim',
+console.log(JSON.stringify({scope: 'Production extension.boot, entry, compat, src and host free-character modules with actual official 1.11.6 import/loadExtension/content methods; minimal native schema/event fixtures and in-memory filesystem/endpoint boundaries; no native-window or full-gameplay claim',
   officialVersion, nativeMethodSHA256: sha([nativeImport, nativeLoad, nativeIsClass, nativeContent].join('\n')),
   extensionSHA256: sha(extensionSource), passed: tests.filter(value => value.ok).length, total: tests.length, tests}, null, 2));
 if (tests.some(value => !value.ok)) process.exitCode = 1;

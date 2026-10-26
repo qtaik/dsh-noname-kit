@@ -978,8 +978,8 @@ window.__ModuleLoader__.load({
               '第 0 步【引擎版本探测 + 需求理解确认·硬门禁】:先探测用户游戏引擎版本(读游戏目录 version 文件或 noname 源码特征)并报告给用户;版本相关的 API 写法(模式注册/选将原语/距离与摸牌修正/技能显示过滤等)必须先查「版本差异对照表」或读引擎源码核实,禁止凭记忆或固定版本经验猜测。然后把玩法细节逐条拆成规则模块,输出【需求理解确认】(每条规则:触发时机/数值/边界;另含:玩法一句话复述/人数与先手规则/胜利条件/明确不做什么/实现骨架自查——模式注册时机/选将方式/技能挂载方式/距离与摸牌修正写法均按对照表选定)。输出后停下等待用户明确回复确认。',
               '有任何歧义必须先用 ask_user_question 提问;禁止猜测。ask_user_question 的回答只消除歧义、不算确认——澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」后才能动笔。',
               '未获用户确认前,禁止生成代码、禁止调用 noname_write_extension。',
-              '用户确认后按骨架清单实现(规范见 knowledge 的「自定义模式生成规范」与版本对照表;内部规则技不留 translate 名——十周年UI 的竖排会显示有翻译名的技能),校验通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + ' 与规则节点名(每个规则模块一个节点名,用户逐条确认后自动收口)。',
-              form.idPrefix.trim() ? '内部 ID 命名规则:模式名/新增技能的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,中文显示名写入 translate(内部规则技除外——不留 translate 名)。' : '',
+              '用户确认后按骨架清单实现(规范见 knowledge 的「自定义模式生成规范」与版本对照表;面向玩家展示的技能提供名称与描述；内部规则技按实际展示需要设置 translate，目标十周年UI 竖排误显示时可省略内部规则技名称),校验通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + ' 与规则节点名(每个规则模块一个节点名,用户逐条确认后自动收口)。',
+              form.idPrefix.trim() ? '内部 ID 命名规则:模式名/新增技能的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,面向玩家展示的名称与描述写入 translate，内部规则技按实际展示需要设置。' : '',
             ].filter(Boolean).join('\n');
           } else if (editingExisting) {
             var newSkillRows = form.addSkills && type === 'character'
@@ -991,7 +991,7 @@ window.__ModuleLoader__.load({
               '【无名杀工坊·编辑任务】',
               '任务ID: ' + taskId,
               '任务性质: 编辑已有扩展包(已存在)',
-              (type === 'mode' ? '包性质: 这是一个自定义模式扩展包(game.addMode 注册)。版本相关写法先查「1.9.0 实测对照表」或读引擎源码核实;新增或调整的内部规则技不留 translate 名(十周年UI 竖排会显示有翻译名的技能);新增内部 ID 沿用该包现有的前缀惯例(读现有代码时留意)。' : ''),
+              (type === 'mode' ? '包性质: 这是一个自定义模式扩展包(game.addMode 注册)。版本相关写法先查「1.9.0 实测对照表」或读引擎源码核实;新增或调整的内部规则技按实际展示需要设置 translate，目标十周年UI 竖排误显示时可省略其名称；面向玩家展示的技能提供名称与描述;新增内部 ID 沿用该包现有的前缀惯例(读现有代码时留意)。' : ''),
               '类型: ' + (type === 'mode' ? '🎲 新玩法(自定义游戏模式)' : type === 'card' ? '卡牌' : '武将'),
               (type === 'mode' ? '编辑目标: 整个模式扩展包(骨架与规则技,按需求描述与版本对照表改动,其他任务无关的包不动)' : '编辑目标条目: ' + type + ':' + form.entryId + '(所在文件 ' + entryFile + (entryFile !== 'extension.js' ? ',read/write 都要传 file 参数' : '') + ';只改这个条目' + (pickedSkillRows.length ? '及其勾选技能' : '') + (newSkillRows.length ? ';新增技能作为新区块加到该条目上' : '') + ',其他武将/卡牌/技能/翻译一律不动)'),
               (form.title.trim() ? '新名称(显示名,写入 translate;留空即不改名): ' + form.title.trim() : ''),
@@ -1767,6 +1767,17 @@ window.__ModuleLoader__.load({
       var rmSyncKey = rmSyncState[0], setRmSyncKey = rmSyncState[1];
       var sigUrlState = React.useState('');
       var sigUrl = sigUrlState[0], setSigUrl = sigUrlState[1];
+      var sigDraftDirty = React.useRef(false);
+      var sigCfgState = React.useState(null);
+      var sigCfgKey = sigCfgState[0], setSigCfgKey = sigCfgState[1];
+      var sigSavedState = React.useState('');
+      var sigSavedUrl = sigSavedState[0], setSigSavedUrl = sigSavedState[1];
+      var sigSaveState = React.useState(null);
+      var sigSave = sigSaveState[0], setSigSave = sigSaveState[1];
+      var sigSaveRef = React.useRef(null);
+      var sigSaveSequence = React.useRef(0);
+      var sigSaveNonce = React.useRef(null);
+      if (!sigSaveNonce.current) sigSaveNonce.current = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
       var transferLimitState = React.useState(null);
       var transferLimitDraft = transferLimitState[0], setTransferLimitDraft = transferLimitState[1];
       var transferLimitCfgState = React.useState(null);
@@ -1822,12 +1833,52 @@ window.__ModuleLoader__.load({
       React.useEffect(function () {
         var cfg = status && status.bridge && status.bridge.cfg;
         if (!cfg) return;
-        var key = (cfg.onlineName || '') + '|' + (cfg.onlineAvatar || '') + '|' + (cfg.mqttUrl || '');
+        var key = (cfg.onlineName || '') + '|' + (cfg.onlineAvatar || '');
         if (key !== idCfgKey) {
           setIdCfgKey(key);
           setIdName(cfg.onlineName || '');
           setIdAvatar(cfg.onlineAvatar || '');
-          setSigUrl(cfg.mqttUrl || '');
+        }
+      });
+      React.useEffect(function () {
+        var cfg = status && status.bridge && status.bridge.cfg;
+        if (!cfg) return;
+        var saved = typeof cfg.mqttUrl === 'string' ? cfg.mqttUrl : '';
+        if (saved === sigCfgKey) return;
+        setSigCfgKey(saved);
+        setSigSavedUrl(saved);
+        if (!sigDraftDirty.current) setSigUrl(saved);
+      });
+      React.useEffect(function () {
+        var pending = sigSaveRef.current;
+        if (!pending) return;
+        var events = status && status.bridge && status.bridge.events;
+        if (!Array.isArray(events)) events = [];
+        for (var i = events.length - 1; i >= 0; i--) {
+          var ev = events[i], data = ev && ev.data;
+          if (!data || data.requestId !== pending.requestId || data.key !== 'mqttUrl') continue;
+          if (ev.type === 'config_applied' && typeof data.value === 'string') {
+            sigSaveRef.current = null;
+            setSigSavedUrl(data.value);
+            if (sigUrl === pending.draft) { sigDraftDirty.current = false; setSigUrl(pending.value); }
+            var message = sigUrl !== pending.draft ? '✅ 本次提交的信令地址已保存；当前输入有未保存修改，现有连接保持。' : pending.value ? '✅ 信令地址已保存；下次建房使用，现有连接保持。' : '✅ 已恢复默认信令地址；下次建房使用，现有连接保持。';
+            setSigSave({ phase: 'saved', message: message });
+            setNote(message);
+            return;
+          }
+          if (ev.type === 'error' && data.cmd === 'set_config') {
+            sigSaveRef.current = null;
+            var failed = '❌ 信令地址保存失败：' + (data.message || '内核未完成保存');
+            setSigSave({ phase: 'failed', message: failed });
+            setNote(failed);
+            return;
+          }
+        }
+        if (pending.waiting && Date.now() - pending.at >= 20000) {
+          pending.waiting = false;
+          var timeout = '尚未收到本次保存确认，请检查内核状态后重试；已输入地址保留。';
+          setSigSave({ phase: 'unconfirmed', message: timeout });
+          setNote(timeout);
         }
       });
       React.useEffect(function () {
@@ -1882,20 +1933,21 @@ window.__ModuleLoader__.load({
           setInvPop({ popped: newest, dismissed: null });
         }
       });
-      var sendCmd = function (action, args) {
+      var sendCmd = function (action, args, quiet) {
         return fetch('/noname-kit-api/online/command', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ action: action, args: args || {} })
         }).then(function (r) { return r.json() }).then(function (d) {
-          if (!d.ok) setNote('❌ ' + (d.error || '命令发送失败'));
-        }, function () { setNote('❌ 插件服务不可达'); });
+          if (!d.ok && !quiet) setNote('❌ ' + (d.error || '命令发送失败'));
+          return d;
+        }, function () { if (!quiet) setNote('❌ 插件服务不可达'); return { ok: false, error: '插件服务不可达' }; });
       };
       var returnedRoomState = React.useState(null);
       var returnedRoomSeen = returnedRoomState[0], setReturnedRoomSeen = returnedRoomState[1];
       React.useEffect(function () {
         var state = status && status.bridge && status.bridge.state;
-        if (state && state.phase === 'idle' && !status.bridge.role) {
+        if (state && state.phase === 'idle' && !status.bridge.role && state.lobbyOpen !== true) {
           setRoomPopupOpen(false);
           if (note.indexOf('正在退出') === 0) setNote('当前联机会话已结束，可重新选择主客身份。');
           return;
@@ -1980,16 +2032,21 @@ window.__ModuleLoader__.load({
       var kernelBad = !kernel || kernel.state === 'unknown';
       /* 回执码仅在客人侧的有效连接状态展示，防止继续使用已失效的事件内容。 */
       var answerEv = (phase === 'joining' || phase === 'answer_ready' || phase === 'entering') ? onlinePickEvent(evs, 'answer_ready') : null;
-      /* 安全读取可能为空的 bridge.state；快照缺少房号时采用本次会话缓存，大厅关闭或 idle 时清除。 */
-      var roomClosed = Boolean(bridge.state && (bridge.state.lobbyOpen === false || Object.prototype.hasOwnProperty.call(bridge.state, 'roomCode') && bridge.state.roomCode === null));
-      var roomCode = phase === 'idle' || roomClosed ? null : (bridge.state && (bridge.state.roomCode || bridge.state.code)) || null;
-      if (phase === 'idle' || roomClosed) {
-        if (lastRoomCode) setLastRoomCode(null);   /* 显式关闭同时作废本拍与缓存房号 */
+      /* 公开房号与大厅是否开放分别判断；私有大厅不得展示或复用内部房号。 */
+      var roomClosed = Boolean(bridge.state && (bridge.state.lobbyOpen === false || bridge.state.lobbyOpen !== true && !Object.prototype.hasOwnProperty.call(bridge.state, 'roomCodeAvailable') && Object.prototype.hasOwnProperty.call(bridge.state, 'roomCode') && bridge.state.roomCode === null));
+      var roomCodeAvailable = !bridge.state || bridge.state.roomCodeAvailable !== false;
+      var lobbyOpen = Boolean(bridge.state && bridge.state.lobbyOpen === true);
+      var roomCode = phase === 'idle' || roomClosed || !roomCodeAvailable ? null : (bridge.state && (bridge.state.roomCode || bridge.state.code)) || null;
+      if (phase === 'idle' || roomClosed || !roomCodeAvailable) {
+        if (lastRoomCode) setLastRoomCode(null);
       } else if (roomCode) {
         if (lastRoomCode !== roomCode) setLastRoomCode(roomCode);
       } else if (lastRoomCode) {
-        roomCode = lastRoomCode;                 /* 进行中的会话短暂没报房号 */
+        roomCode = lastRoomCode;                 /* 旧内核短暂省略房号时保留本次公开房号 */
       }
+      var roomAvailable = lobbyOpen || phase !== 'idle' && Boolean(roomCode || onlineRoom && onlineRoom.complete);
+      var roomBusy = ['host_booting','guest_booting','connecting','joining','waiting_host','entering','preparing','loading','seating','playing','settling','settled','returning'].indexOf(phase) >= 0 || onlineRound && ['preparing','loading','seating','playing','settling','settled','returning'].indexOf(onlineRound.phase) >= 0;
+      var roomCreateDisabled = Boolean(!bridgeOnline || hostFlow || guestFlow || roomAvailable || roomBusy);
       return renderOnlinePanel();
       } catch (renderErr) {
         /* 将渲染异常显示在页面中，并将堆栈写入控制台，便于定位问题。 */
@@ -2060,22 +2117,41 @@ window.__ModuleLoader__.load({
           folds[key] ? contentFn() : null);
       }
 
+      function saveSignalingAddress(value) {
+        if (sigSaveRef.current && sigSaveRef.current.waiting) return;
+        var draft = typeof value === 'string' ? value : sigUrl;
+        var saved = draft.trim();
+        if (saved && !/^wss?:\/\//i.test(saved)) {
+          var invalid = '❌ 地址必须以 ws:// 或 wss:// 开头';
+          setSigSave({ phase: 'failed', message: invalid }); setNote(invalid); return;
+        }
+        var requestId = 'signal-' + sigSaveNonce.current + '-' + (++sigSaveSequence.current);
+        var pending = { requestId: requestId, draft: draft, value: saved, at: Date.now(), waiting: true };
+        sigSaveRef.current = pending;
+        setSigSave({ phase: 'pending', message: '正在发送保存请求…' });
+        sendCmd('set_config', { key: 'mqttUrl', value: saved, requestId: requestId }, true).then(function (result) {
+          if (sigSaveRef.current !== pending || !pending.waiting) return;
+          if (!result || result.ok !== true) {
+            sigSaveRef.current = null;
+            var failed = '❌ 信令地址保存失败：' + (result && result.error || '命令未能入队');
+            setSigSave({ phase: 'failed', message: failed }); setNote(failed); return;
+          }
+          setSigSave({ phase: 'pending', message: bridgeOnline ? '正在保存信令地址，等待内核确认…' : '已入队，等待内核上线确认；尚未确认保存。' });
+        });
+      }
       function renderSignalingCard() {
-        var effective = (bridge.cfg && bridge.cfg.mqttUrl) || '';
+        var effective = sigSavedUrl;
+        var saving = sigSave && sigSave.phase === 'pending';
         return h('div', {},
-          e('div', 'nnk-hint', '双方要用同一个信令服务器(都不填=用默认)。默认连不上才需要改;填 ws:// 或 wss:// 地址,下次建房生效。'),
+          e('div', 'nnk-hint', '使用房号时双方须使用同一信令服务器(都不填=用默认)。保存后供下次建房使用，不切换现有连接；邀请码建房不依赖它。'),
           h('div', { style: { marginTop: '8px' } },
             e('div', 'nnk-label', '信令地址(留空用默认)'),
-            h('input', { className: 'nnk-input', value: sigUrl, placeholder: '默认 wss://broker.emqx.io:8084/mqtt', onChange: function (ev) { setSigUrl(ev.target.value) } })),
-          effective ? e('div', 'nnk-hint', '当前生效:' + effective) : null,
+            h('input', { className: 'nnk-input', value: sigUrl, placeholder: '默认 wss://broker.emqx.io:8084/mqtt', onChange: function (ev) { sigDraftDirty.current = true; setSigUrl(ev.target.value) } })),
+          effective ? e('div', 'nnk-hint', '当前配置地址:' + effective) : null,
+          sigSave ? e('div', sigSave.phase === 'failed' || sigSave.phase === 'unconfirmed' ? 'nnk-err' : 'nnk-hint', sigSave.message) : null,
           h('div', { className: 'nnk-row', style: { marginTop: '8px' } },
-            h('button', { className: 'nnk-copy', onClick: function () {
-              var v = sigUrl.trim();
-              if (v && !/^wss?:\/\//i.test(v)) { setNote('❌ 地址必须以 ws:// 或 wss:// 开头'); return; }
-              setNote(v ? '已发送,下次建房生效' : '已发送恢复默认,下次建房生效');
-              sendCmd('set_config', { key: 'mqttUrl', value: v });
-            } }, '💾 保存信令地址'),
-            (sigUrl.trim() || effective) ? h('button', { className: 'nnk-copy', onClick: function () { setSigUrl(''); sendCmd('set_config', { key: 'mqttUrl', value: '' }) } }, '↩️ 恢复默认') : null));
+            h('button', { className: 'nnk-copy', disabled: !!saving, onClick: function () { saveSignalingAddress(); } }, saving ? '正在保存…' : '💾 保存信令地址'),
+            (sigUrl.trim() || effective) ? h('button', { className: 'nnk-copy', disabled: !!saving, onClick: function () { sigDraftDirty.current = true; setSigUrl(''); saveSignalingAddress(''); } }, '↩️ 恢复默认') : null));
       }
 
       function renderIdentityCard() {
@@ -2535,7 +2611,7 @@ window.__ModuleLoader__.load({
           e('div', 'nnk-label', '邀请码(一客一张,可同时挂多张)'),
           rows.length
             ? rows.map(function (r) { return renderInviteRow(r); })
-            : e('div', 'nnk-hint', '还没有邀请码。朋友进不了房号门时,点下面「生成邀请码」发他一张,他进的是同一个房间。'),
+            : e('div', 'nnk-hint', '还没有邀请码。点下面「生成邀请码」发给朋友，他会进入这个房间。'),
           h('div', { className: 'nnk-row', style: { marginTop: '6px' } },
             h('button', { className: 'nnk-submit', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh', { kind: 'invite' }); setNote('📨 正在生成邀请码…生成后自动弹到屏幕中间'); } }, '📨 生成邀请码'),
             waiting.length ? e('span', 'nnk-hint', '有 ' + waiting.length + ' 张还没收尾') : null),
@@ -2596,8 +2672,8 @@ window.__ModuleLoader__.load({
               e('span', 'nnk-badge', !brief.has ? '同步中…' : (hostEntered ? '✅ 游戏房间已建好' : seated.length + '/' + cap + ' 人在房'))),
             /* 房号牌:大号等宽 + 一键复制 */
             h('div', { className: 'nnk-rm-code' },
-              e('span', 'nnk-rm-codelabel', '房号'),
-              e('span', 'nnk-rm-codeval', roomCode || (onlineRoom && onlineRoom.complete ? '原连接房间' : '…')),
+              e('span', 'nnk-rm-codelabel', roomCode ? '房号' : '加入方式'),
+              e('span', 'nnk-rm-codeval', roomCode || (bridge.state && bridge.state.lobbyOpen === true && bridge.state.roomCodeAvailable === false ? '通过邀请码加入' : onlineRoom && onlineRoom.complete ? '原连接房间' : '…')),
               roomCode ? h('button', { className: 'nnk-copy', onClick: function () { copyText(roomCode) } }, '📋 复制') : null),
             /* 座位网格:成员 → 排队 → 空位;成员表还没到就显示同步中,
              * 不摆一排空位让人误以为房间是空的 */
@@ -2627,7 +2703,7 @@ window.__ModuleLoader__.load({
                   onlineNext && onlineNext.retryAvailable ? h('button', { className: 'nnk-copy', onClick: function () { sendCmd('retry_round', {}); setNote('正在明确重试本次新局载入；原连接保持。'); } }, '明确重试本次载入(一次)') : null,
                   e('div', 'nnk-hint', '结算后点击“返回插件房间”。在这里调整模式，再点“载入到游戏”；客人自动跟随，原连接保持。'),
                   /* 邀请码列表常驻这里:码随时可复制、回执码随时可粘,不依赖弹窗 */
-                  roomCode ? renderInviteCard() : null)
+                  roomCode || bridge.state && bridge.state.lobbyOpen === true ? renderInviteCard() : null)
                 : e('div', 'nnk-hint', '这里是客机的插件房间。先核对包体检；模式与载入由房主操作，他点「载入到游戏」后，你会自动跟着进房。')),
             renderManifestCard(evs, isRoomHost, true),
             renderBatchProposals(),
@@ -2705,31 +2781,33 @@ window.__ModuleLoader__.load({
             h('div', { key: 'col-host', className: 'nnk-col nnk-online-actions' },
             h('div', { className: 'nnk-card nnk-online-primary' },
               e('div', 'nnk-online-title', h('b', { className: 'nnk-ui-text' }, '🏠 我要当主机')),
-              e('div', 'nnk-hint', '创建 P2P 房间 → 房间大厅里选模式、载入到游戏,大家自动进入(房号连不上的朋友用「📨 生成邀请码」)。开局/禁将在游戏里点。'),
+              e('div', 'nnk-hint', '可用房号创建，也可直接「邀请码建房」。在房间大厅选模式、载入到游戏，大家自动进入。开局/禁将在游戏里点。'),
               h('div', { className: 'nnk-row' },
-                h('button', { className: 'nnk-submit', style: { marginTop: '0' }, disabled: !bridgeOnline || guestFlow || hostFlow || (bridge.role === 'host' && roomCode), onClick: function () { setOfferText(''); sendCmd('create_room', { mode: roomMode }); setRoomPopupOpen(true) } }, '🏛 创建 P2P 房间'),
-                /* 邀请码 = 同一房间的第二道门,按需生成(一客一张、可同时挂多张)。
-                 * 列表与回执码入口都在「房间大厅」里;这里只管"再来一张"和换房号。
-                 * 只在主机侧显示——客人的 roomCode 是自己那个房间的 */
-                roomCode && isRoomHost && phase !== 'host_booting'
+                h('button', { className: 'nnk-submit', style: { marginTop: '0' }, disabled: roomCreateDisabled, onClick: function () { sendCmd('create_room', { mode: roomMode }); setRoomPopupOpen(true) } }, '🏛 创建 P2P 房间'),
+                h('button', { className: 'nnk-copy', style: { marginTop: '0' }, disabled: roomCreateDisabled, onClick: function () { sendCmd('create_room', { mode: roomMode, signaling: 'invite' }); setRoomPopupOpen(true) } }, '邀请码建房'),
+                lobbyOpen && !roomCodeAvailable && isRoomHost
+                  ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, disabled: !bridgeOnline || !!roomBusy || !!(onlineRound && !onlineRound.failed), title: onlineRound && !onlineRound.failed ? '本次对局会话仍在；如需房号，请结束会话后重新建房。邀请码和原连接仍可用。' : '', onClick: function () { sendCmd('create_room', { mode: roomMode, signaling: 'mqtt' }); } }, '启用房号')
+                  : null,
+                /* 邀请码属于当前大厅，一客一张；是否公开房号不影响邀请码与回执操作。 */
+                (lobbyOpen || roomCode) && isRoomHost && phase !== 'host_booting'
                   ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh', { kind: 'invite' }) } }, '📨 生成邀请码')
                   : null,
                 roomCode && isRoomHost && (phase === 'room_open' || phase === 'mqtt_waiting' || phase === 'hosting')
                   ? h('button', { className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { sendCmd('invite_refresh') } }, '♻️ 换一个房号')
                   : null),
               !bridgeOnline ? e('div', 'nnk-hint', '内核离线(先启动游戏)') : null,
-              (roomCode || onlineRoom && onlineRoom.complete) && isRoomHost && !roomPopupOpen
+              roomAvailable && isRoomHost && !roomPopupOpen
                 ? h('div', { className: 'nnk-row', style: { marginTop: '8px' } },
                   h('button', { ref: roomOpenerRef, className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { setRoomPopupOpen(true) } }, (function () {
                     var b = roomBrief();
                     var seatedN = b.list.filter(function (mm) { return mm && !mm.queued; }).length;
-                    return '🏛 插件房间(' + (roomCode ? '房号 ' + roomCode : '原连接') + ' · ' + seatedN + '/' + b.cap + ' 人)';
+                    return '🏛 插件房间(' + (roomCode ? '房号 ' + roomCode : lobbyOpen && !roomCodeAvailable ? '通过邀请码加入' : '原连接') + ' · ' + seatedN + '/' + b.cap + ' 人)';
                   })()),
                   h('button', { className: 'nnk-copy nnk-danger', style: { marginTop: '0' }, onClick: function () { leaveRoom(true) } }, '🗑 解散'))
                 : null,
               /* 邀请码:列表常驻在「房间大厅」里,这里给汇总入口——有码在等结果时
                * 一眼看到有几张,点它直接打开大厅并展开第一张的「粘回执码」 */
-              roomCode && isRoomHost && (function () {
+              (lobbyOpen || roomCode) && isRoomHost && (function () {
                 var rows = inviteRows();
                 var pend = rows.filter(function (r) { return r.status === 'pending'; });
                 var answering = rows.filter(function (r) { return r.status === 'answering'; });
@@ -2744,19 +2822,19 @@ window.__ModuleLoader__.load({
               e('div', 'nnk-hint', '客机入口就在 DSH 的本页：先启动无名杀并启用联机助手，再在下方输入房主的 6 位房号。连接后进入插件房间，先核对包体检，再等房主载入；无需到游戏里另找加入按钮。'),
               h('input', { className: 'nnk-input', value: roomText, maxLength: 6, onChange: function (ev) { setRoomText(ev.target.value.toUpperCase()) }, placeholder: '输入 6 位房号,如 AB2C9X', style: { textTransform: 'uppercase', letterSpacing: '4px', fontSize: '16px' } }),
               h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow || guestFlow, onClick: function () { sendCmd('join_room', { code: roomText }) } }, '🚪 加入房间'),
-              guestFlow && !isRoomHost && (roomCode || onlineRoom && onlineRoom.complete)
+              (guestFlow || bridge.role === 'guest') && !isRoomHost && roomAvailable
                 ? h('div', { className: 'nnk-row', style: { marginTop: '8px' } },
                   h('button', { ref: roomOpenerRef, className: 'nnk-copy', style: { marginTop: '0' }, onClick: function () { setRoomPopupOpen(true) } }, (function () {
                     var b = roomBrief();
                     var seatedN = b.list.filter(function (mm) { return mm && !mm.queued; }).length;
-                    return '🏛 插件房间(' + (roomCode ? '房号 ' + roomCode : '原连接') + ' · ' + seatedN + '/' + b.cap + ' 人)';
+                    return '🏛 插件房间(' + (roomCode ? '房号 ' + roomCode : lobbyOpen && !roomCodeAvailable ? '通过邀请码加入' : '原连接') + ' · ' + seatedN + '/' + b.cap + ' 人)';
                   })()),
                   h('button', { className: 'nnk-copy nnk-danger', style: { marginTop: '0' }, onClick: function () { leaveRoom(false) } }, '🚪 退出'))
                 : null,
               showInviteFallback
                 ? h('div', {},
                   e('div', 'nnk-label', '粘贴房主的邀请码'),
-                  e('div', 'nnk-hint', '房号连不上时房主会给你这一段——进的是同一个房间,一样在大厅等房主载入。'),
+                  e('div', 'nnk-hint', '房主可以直接用邀请码建房，也可以给已公开房号的房间生成邀请码；加入后都在大厅等房主载入。'),
                   h('textarea', { className: 'nnk-textarea nnk-code', value: offerText, onChange: function (ev) { setOfferText(ev.target.value) }, placeholder: '粘贴房主的邀请码…' }),
                   h('div', { className: 'nnk-row', style: { marginTop: '0' } },
                     h('button', { className: 'nnk-copy', disabled: !bridgeOnline || hostFlow || guestFlow, onClick: function () { sendCmd('join_invite', { code: offerText }) } }, '生成回执码'),
@@ -2770,7 +2848,7 @@ window.__ModuleLoader__.load({
                         setNote('↺ 已清空,重新粘贴房主的新邀请码即可');
                       } }, '↺ 重新来过')
                       : null,
-                    (guestFlow && !roomCode)
+                    (guestFlow && !roomAvailable)
                       ? h('button', { className: 'nnk-copy', disabled: !bridgeOnline, onClick: function () { leaveRoom(false) } }, '✖ 取消加入')
                       : null),
                   answerEv
@@ -2802,12 +2880,12 @@ window.__ModuleLoader__.load({
               e('div', 'nnk-hint',
                 '0.【官方版一次性】设置→通用→打开「自动导入扩展」→重载,否则扩展列表里没有「联机助手」。\n' +
                 '1. 两边都装插件、配好目录;本页点「📦 安装内核」→ 游戏扩展菜单给「联机助手」点「启」→ 重载。\n' +
-                '2. 主机:「创建 P2P 房间」→ 等客人加入并核对包体检 → 大厅选模式点「载入到游戏」；客人在 DSH 本页「我要加入」输入房号。房号连不上的朋友,主机点「📨 生成邀请码」发他一张——进的是同一个房间,一样等载入。结算后点“返回插件房间”，房主可换模式，再点“载入到游戏”，客人自动跟随，原连接保持。\n' +
+                '2. 主机:「创建 P2P 房间」使用房号，也可直接「邀请码建房」，无需先连信令服务器。等客人加入并核对包体检，再在大厅选模式点「载入到游戏」；客人在 DSH 本页输入房号或粘贴邀请码。已建房间也可继续生成邀请码，私有大厅可点「启用房号」。结算后点“返回插件房间”，房主可换模式，再点“载入到游戏”，客人自动跟随，原连接保持。\n' +
                 '3. 主机在游戏里点「开始游戏」。禁将/包/人数在等待房间右上角「房间设置」改,点「启」广播全房。'),
-              e('div', 'nnk-hint', '连接信息经加密信令交换,游戏数据点对点直连。个别网络连不上房号门,就用邀请码从另一道门进(同一个房间)。')) }))]
+              e('div', 'nnk-hint', '房号通过加密信令交换连接信息，邀请码通过手动复制交换；游戏数据点对点直连。两种入口都进入同一个插件房间。')) }))]
           : null,
         note ? h('div', { className: 'nnk-dash-full ' + (note.indexOf('❌') === 0 ? 'nnk-err' : (note.indexOf('✅') === 0 ? 'nnk-ok' : '')) }, note) : null,
-        roomPopupOpen && phase !== 'idle' && (roomCode || onlineRoom && onlineRoom.complete) ? renderRoomModal() : null,
+        roomPopupOpen && roomAvailable ? renderRoomModal() : null,
         /* 新码弹窗(按行号):生成后自动弹一次;误触收起不影响——列表里随时能复制,
          * 那行的「🔎 再看」也能重开 */
         (function () {

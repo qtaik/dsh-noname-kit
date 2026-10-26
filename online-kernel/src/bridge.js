@@ -187,7 +187,12 @@
 			try {
 				stack = String(err.stack || "").split("\n").slice(1, 4).join(" ← ").trim();
 			} catch (e2) { /* 取不到就只报消息 */ }
-			emit("error", { cmd: cmd.action, message: (err.message || String(err)) + (stack ? "  @" + stack : "") });
+			var detail = { cmd: cmd.action, message: (err.message || String(err)) + (stack ? "  @" + stack : "") };
+			if (cmd.action === "set_config" && cmd.args && cmd.args.key === "mqttUrl") {
+				detail.key = "mqttUrl";
+				if (typeof cmd.args.requestId === "string" && cmd.args.requestId.length > 0 && cmd.args.requestId.length <= 160 && !/[\x00-\x1f\x7f]/.test(cmd.args.requestId)) detail.requestId = cmd.args.requestId;
+			}
+			emit("error", detail);
 		}
 	}
 

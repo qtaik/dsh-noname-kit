@@ -3,7 +3,7 @@
  *
  * 无名杀(Noname)扩展开发工坊:AI 写扩展代码的受限开发套件。
  * - 注入规范知识(systemPrompt 常驻),取代用户手动喂知识库
- * - 注册 7 个工具:搜官方参考 / 校验 / 读扩展 / 写扩展(校验门禁) / 复制图片 / 复制配音 / 任务收口
+ * - 注册开发工具:搜官方参考 / 校验 / 读扩展 / 写扩展(校验门禁) / 复制图片 / 复制配音 / 任务收口
  * - 守卫:尽力拦截通用 write/edit/bash/pwsh 对游戏 extension 目录的可识别写入
  * - HTTP API:历史记录与备份回滚(浏览器工坊面板用)
  *
@@ -16,6 +16,7 @@ import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { normalizeSignalingUrl } from './online-kernel/keepalive/signaling-config.js'
 import { statSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { KNOWLEDGE_TEXT } from './src/knowledge.js'
@@ -237,7 +238,7 @@ export function apply(ctx, config) {
   // ── 2) 工具定义 ──────────────────────────────────────────────
   ctx.tools.register(defineTool({
     name: 'noname_search_reference',
-    description: 'Search noname source for reference implementations by Chinese name, skill/card ID, effect keywords or description. Files up to 5 GiB are supported: ordinary files use a bounded index; large files return the first bounded excerpt per file, requiring all query words within one 16 KiB source window. Large files use chunked search. Results are limited; coverage.partial means content remains unsearched or was skipped, not that it does not exist. If nextCursor is present, repeat the same query/type with cursor=nextCursor to continue. A full description can return similarity >=50% candidates; search a candidate ID for its definition.',
+    description: 'Find skill, character and card reference implementations by Chinese name, ID, effect keywords or description. Search for the mechanisms needed by the current task; different implementations you have actually read may be combined, and an exact combined match is not required. Stop once the references sufficiently support the current approach; do not exhaust candidates or continue solely because coverage.partial is true. This is not a complete engine API index; verify engine API contracts with general read/search tools against current game source. Files up to 5 GiB are supported: ordinary files use a bounded index; large files return the first bounded excerpt per file, requiring all query words within one 16 KiB source window. Large files use chunked search. Results are limited; coverage.partial means content remains unsearched or was skipped, not that it does not exist. If more reference evidence is needed and nextCursor is present, repeat the same query/type with cursor=nextCursor to continue. A full description can return similarity >=50% candidates; read the definition of any candidate you rely on, for example by searching its ID.',
     parameters: {
       query: { type: 'string', required: true, description: 'Keywords, space-separated.' },
       type: { type: 'string', enum: ['any', 'skill', 'character', 'card'], description: 'Scope, default any.' },
@@ -416,7 +417,7 @@ export function apply(ctx, config) {
       pack: { type: 'string', required: true, description: 'Exact pack ID from the catalog.' },
       file: { type: 'string', description: 'Game-relative .js file path exactly as returned by the catalog. Must belong to the selected pack.' },
       offset: { type: 'integer', description: 'UTF-16 source character offset, default 0; use nextOffset rather than splitting a Unicode character.' },
-      limit: { type: 'integer', description: 'Source page budget in UTF-16 units, default 8000/max 16000; limit=1 may return 2 units for a complete Unicode character. Read pagination.nextOffset until complete.' },
+      limit: { type: 'integer', description: 'Source page budget in UTF-16 units, default 8000/max 16000; limit=1 may return 2 units for a complete Unicode character. Use pagination.nextOffset when more source evidence is needed.' },
       snapshot: { type: 'string', description: 'Prior coverage.snapshot; reject a changed source rather than mixing pages.' },
       entry: { type: 'string', description: 'Optional static entry key: character:id, card:id, skill:id, translate:id or mode:id. Omit to read the selected file or pack entry file.' },
     },
@@ -433,7 +434,7 @@ export function apply(ctx, config) {
 
   ctx.tools.register(defineTool({
     name: 'noname_write_extension',
-    description: 'Write a noname extension (validates first; the only write channel). Two modes: full-text (code) for first write or unindexed legacy files (pass editScope so untouched blocks must stay byte-identical); block-assembly (blocks/edits/deletes) for anchored files — the tool keeps everything you do not submit, so transcription errors are structurally impossible.',
+    description: 'Write a noname extension (validates first; the only write channel). Two modes: full-text (code) for first write or unindexed legacy files (editScope is required when overwriting an existing file so all bytes outside that scope remain identical); block-assembly (blocks/edits/deletes) for anchored files — the tool keeps everything you do not submit, so transcription errors are structurally impossible.',
     parameters: {
       folder: { type: 'string', required: true, description: 'Extension folder name.' },
       file: { type: 'string', description: 'Relative .js path inside the extension package for multi-file packs (e.g. character/character.js). Defaults to extension.js. Block-mode requires that file to be anchored (workshop migrate button first).' },
@@ -1120,18 +1121,19 @@ export function apply(ctx, config) {
           })
           if(body.action==='batch_cancel'||body.action==='cancel')revokeBatch(nonameDir,body.action==='batch_cancel'?body.args:null)
           if (body.action === 'set_config' && body.args?.key === 'mqttUrl') {
-            // 自定义信令服务器:ws(s):// 开头才收;存 noname-kit.json 跨游戏目录
-            const url = String(body.args.value || '').trim().slice(0, 200)
-            if (url && !/^wss?:\/\//i.test(url)) {
-              return json(400, { ok: false, error: `信令地址必须是 ws:// 或 wss:// 开头的 WebSocket 地址,收到「${url.slice(0, 60)}」` })
-            }
-            savedSignaling = url ? { mqttUrl: url } : null
+            const requestId = body.args.requestId
+            if (requestId !== undefined && (typeof requestId !== 'string' || !requestId.length || requestId.length > 160 || /[\x00-\x1f\x7f]/.test(requestId))) return json(400, { ok: false, error: '信令地址保存请求标识无效' })
+            let signalingUrl
+            try { signalingUrl = normalizeSignalingUrl(body.args.value) } catch (error) { return json(400, { ok: false, error: error.message }) }
+            const signaling = { mqttUrl: signalingUrl }
             const next = readSettingsFile()
-            if (savedSignaling) next.onlineSignaling = savedSignaling
-            else delete next.onlineSignaling
-            try { writeJsonAtomicSync(settingsPath, next) } catch { /* 写不进只影响跨目录补发 */ }
-            console.log(`[noname-kit] 联机信令服务器已保存: ${url || '(恢复默认)'}`)
-            body.args = { key: 'mqttUrl', value: url }
+            next.onlineSignaling = signaling
+            try {
+              writeJsonAtomicSync(settingsPath, next)
+              if (readSettingsFile().onlineSignaling?.mqttUrl !== signalingUrl) throw Error('信令地址保存读回不一致')
+            } catch (error) { return json(500, { ok: false, error: '信令地址未能保存到 DSH：' + error.message }) }
+            savedSignaling = signaling
+            body.args = { key: 'mqttUrl', value: signalingUrl, ...(requestId ? { requestId } : {}) }
           }
           if (body.action === 'set_identity') {
             // 人物标识:名字截 12 字(引擎同款)、头像武将 id 截 24,内核还会做存在性校验

@@ -10,6 +10,7 @@ import {SettledPartyRecovery} from './party-recovery.js';
 import {CarrierTransfer,TRANSFER_TYPES,TRANSFER_PROTOCOL} from './carrier-transfer.js';
 import {enableBatchExtensions,withBatchActivation} from './batch-activation.js';
 import {saveTransferLimit,validTransferLimit} from './transfer-limit-config.js';
+import {normalizeSignalingUrl,saveSignalingUrl} from './signaling-config.js';
 import {transferPeerDisplay} from './transfer-display.js';
 const clone=value=>JSON.parse(JSON.stringify(value));
 const sameTransferScope=(a,b)=>!!a&&!!b&&a.carrierSessionId===b.carrierSessionId&&a.partyEpoch===b.partyEpoch;
@@ -22,7 +23,7 @@ function profileIdentity(profile){
 export class CarrierRuntime {
   constructor({nnk,native,ipc,profile,onDisplay=()=>{}}){
     Object.assign(this,{nnk,native,ipc,profile,onDisplay});this.events=[];this.identities=new Map();this.stopped=false;this.nativeSnapshot=null;this.nativePollPending=false;this.leaving=false;this.leavePromise=null;this.carrierSessionId=crypto.randomUUID();this.partyEpoch=0;
-    this.profileOperations=new Map();this.profileOperationSequence=0;this.profileConfirmedSequence=0;this.transferLimitSaving=null;this.transferRequest=null;this.manualManifestRows=new WeakMap();
+    this.profileOperations=new Map();this.profileOperationSequence=0;this.profileConfirmedSequence=0;this.transferLimitSaving=null;this.signalingSaving=null;this.transferRequest=null;this.manualManifestRows=new WeakMap();
     const bridge=nnk.modules.bridge;
     const event=(name,data={})=>{const row={at:Date.now(),name,data:clone(data)};this.events.push(row);if(this.events.length>160)this.events.shift();if(name==='error')onDisplay(data.message,true);};
     this.event=event;this.sessions=new SessionRegistry({onStopped:record=>{
@@ -129,6 +130,18 @@ export class CarrierRuntime {
       const profile=clone(this.profile);this.nnk.modules.bridge.emit('config_applied',{key:'transferLimitMB',value:saved.value,profile,requestId});
       return {profile,key:'transferLimitMB',value:saved.value};
     }finally{if(this.transferLimitSaving===ticket){this.transferLimitSaving=null;this.nnk.state.transferLimitSaving=false;this.update();this.maybeAutoHealth();}}
+  }
+  async saveRoomSignaling(args){
+    if(this.signalingSaving)throw Error('信令地址正在保存，请稍后重试');
+    const value=normalizeSignalingUrl(args.value),ticket={coordinator:this.coordinator,epoch:this.partyEpoch};this.signalingSaving=ticket;this.update();
+    const current=()=>!this.stopped&&!this.leaving&&this.signalingSaving===ticket&&this.coordinator===ticket.coordinator&&!ticket.coordinator.closed&&this.partyEpoch===ticket.epoch&&!this.engines.current;
+    try{
+      const saved=await saveSignalingUrl({profile:this.profile,value,isCurrent:current});
+      if(!current()||saved?.saved!==true)throw Error('原信令地址保存操作已失效');
+      this.confirmProfile({config:{...this.profile.config,mqttUrl:saved.value}});
+      const profile=clone(this.profile);this.nnk.modules.bridge.emit('config_applied',{key:'mqttUrl',value:saved.value,profile,...(args.requestId?{requestId:args.requestId}:{})});
+      return {profile,key:'mqttUrl',value:saved.value};
+    }finally{if(this.signalingSaving===ticket){this.signalingSaving=null;this.update();}}
   }
   async receiveBatch(grant,context){
     const receiver=await this.files.receiver(grant,context);
@@ -252,7 +265,9 @@ export class CarrierRuntime {
     const phase=r?.failed?'error':lobby.role==='host'?(r?.phase==='loading'?'host_booting':lobby.lobbyOpen||this.sessions.hasEnteredConnections()?'room_open':'idle'):
       this.sessions.snapshot().length?(r?'connected':ownLobbyMember?.queued?'queued':'lobby_waiting'):this.lobby.joinAttempt?'joining':'idle';
     const roomCode=lobby.role==='guest'?remote?.roomCode??null:lobby.roomCode;
-    this.nnk.modules.bridge.setPhase(phase,{roomCode,lobbyOpen:lobby.role==='guest'?roomCode!==null:lobby.lobbyOpen,stage:this.coordinator.room.ready()?'lobby':r?'loaded':'lobby',nextMode:lobby.role==='guest'?remote?.mode||lobby.nextMode:lobby.nextMode,roundPhase:r?.phase||null,round:r,continuation:this.sessions.hasEnteredConnections()?c:null,
+    // An invitation does not prove that the Host's internal lobby code was publicly published.
+    const roomCodeAvailable=lobby.role==='guest'?lobby.joinKind==='room'&&roomCode!==null:lobby.roomCodeAvailable===true;
+    this.nnk.modules.bridge.setPhase(phase,{roomCode,roomCodeAvailable,lobbyOpen:lobby.role==='guest'?roomCode!==null:lobby.lobbyOpen,signalingSaving:!!this.signalingSaving,stage:this.coordinator.room.ready()?'lobby':r?'loaded':'lobby',nextMode:lobby.role==='guest'?remote?.mode||lobby.nextMode:lobby.nextMode,roundPhase:r?.phase||null,round:r,continuation:this.sessions.hasEnteredConnections()?c:null,
       members:c.members,invites:this.lobby.inviteMetadata(),transferPaused:!transferState.available,transferProtocol:TRANSFER_PROTOCOL,transferAvailable:transferState.available,transferUnavailableReason:transferState.reason,transferScope:this.manifestScope(),transferBusy:transferState.busy||!!this.transferRequest,transferRequestPending:!!this.transferRequest,transferLimitSaving:!!this.transferLimitSaving,transferRequestBusy:transferState.requestBusy,transferPeers:transferState.peers.map(peerId=>({peerId,name:String(this.sessions.get(peerId)?.identity?.name||'').slice(0,12),...transferPeerDisplay(this.sessions.get(peerId),this.coordinator.role)})),transferParticipants:this.sessions.snapshot().filter(record=>this.sessions.isLive(record.peerId)).map(record=>({peerId:record.peerId,...transferPeerDisplay(record,this.coordinator.role),transferCapable:transferState.peers.includes(record.peerId),scope:this.manifestScope()})),batchProposals:transferState.proposals,fileBatches:transferState.files,manifestScope:this.manifestScope(),manifestAvailable:!this.leaving&&manifestState.available,manifestUnavailableReason:this.leaving?'正在退出原联机会话':manifestState.reason,
       manifestInventorySource:this.engines.current?'当前游戏配置与本机文件清单':'最近游戏配置快照与实时文件指纹；更改游戏内启用状态后需重新打开联机入口。',partyRecovery:recoveryState,
 
@@ -281,6 +296,10 @@ export class CarrierRuntime {
     if(cmd.action==='batch_retry'){if(!await this.transfer.retry(a))throw Error('当前批次不能重试；如已提交请启用并重启');return {requested:true};}
     if(cmd.action==='transfer_pack')throw Error('缺包体检后会自动发起整批提议，请客机确认当前批次。');
     if(cmd.action==='batch_reload')throw Error('请按补传结果提示完全退出并重启无名杀；Ctrl+R不能代替重启。');
+    if(cmd.action==='set_config'&&a.key==='mqttUrl'){
+      if(!a||typeof a!=='object'||Array.isArray(a)||![Object.prototype,null].includes(Object.getPrototypeOf(a))||Object.keys(a).some(k=>!['key','value','requestId'].includes(k))||!Object.hasOwn(a,'value')||a.requestId!==undefined&&(typeof a.requestId!=='string'||!a.requestId.length||a.requestId.length>160||/[\x00-\x1f\x7f]/.test(a.requestId)))throw Error('信令地址保存参数无效');
+      normalizeSignalingUrl(a.value);if(!this.engines.current)return this.saveRoomSignaling(a);
+    }
     if(cmd.action==='set_config'&&a.key==='transferLimitMB'){
       if(!a||typeof a!=='object'||Array.isArray(a)||![Object.prototype,null].includes(Object.getPrototypeOf(a))||Object.keys(a).length!==2||!Object.hasOwn(a,'key')||!Object.hasOwn(a,'value')||!validTransferLimit(a.value))throw Error('补传容量须为 1 至 1024 MiB 的整数');
       this.assertTransferLimitIdle();if(!this.engines.current)return this.saveRoomTransferLimit(a);
@@ -295,7 +314,7 @@ export class CarrierRuntime {
         if(result?.profile&&operation.sequence>this.profileConfirmedSequence){
           this.profileConfirmedSequence=operation.sequence;this.confirmProfile(result.profile,operation.requestId,cmd.action==='set_identity');
           if(cmd.action==='set_identity'){const applied=this.coordinator.getLocalIdentity();this.nnk.modules.bridge.emit('identity_applied',{...applied,avatarLabel:applied.avatar,profile:result.profile,requestId:operation.requestId});}
-          if(cmd.action==='set_config')this.nnk.modules.bridge.emit('config_applied',{key:a.key,value:result.profile.config?.[a.key],profile:result.profile,requestId:operation.requestId});
+          if(cmd.action==='set_config')this.nnk.modules.bridge.emit('config_applied',{key:a.key,value:result.profile.config?.[a.key],profile:result.profile,requestId:a.key==='mqttUrl'&&a.requestId?a.requestId:operation.requestId});
         }
         return result;
       }finally{this.profileOperations.delete(operation.sequence);}

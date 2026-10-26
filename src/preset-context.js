@@ -18,9 +18,11 @@ export function registerPresetContext(ctx, state) {
         '扩展目录：' + extension,
         '扩展目录（Git Bash）：' + bashPath(extension),
         '官方目录与游戏源码只读；扩展改动仍经 noname_write_extension 校验及原有写入门禁。',
-        '工具结果的 coverage/分页说明优先：未解析、受限、歧义和未搜完都不能当作内容不存在。按 nextCursor 或 pagination.nextOffset 继续；snapshot 变化时重新查询。',
+        '参考实现用 noname_search_reference 查相似技能、武将和卡牌，可组合不同机制，不要求完全相同的组合。使用前读相应实现，不把翻译、注释或相邻条目当作该技能；未搜完不能声称不存在。',
+        '对引擎 API 用法有疑问或准备判为不支持时，用通用只读工具核对当前游戏源码的定义、参数处理和直接相关分支（含相关 .js/.ts、类型与必要文档），给出依据位置。参考和证据足够后继续完成当前任务，复用源码未变的已核实结论，不要求穷举参考或审计整个引擎；无法核实时说明具体问题与限制，不猜测。遵守宿主权限、预算、超时与取消。',
+        '工具结果的 coverage/分页说明优先：未解析、受限、歧义和未搜完都不能当作内容不存在。只按当前问题需要用 nextCursor 或 pagination.nextOffset 续读；已有足够参考不因 coverage.partial 强迫穷举。snapshot 变化时重新查询。',
         'reference 支持单文件至 5 GiB 的分块续搜；条目静态解析与全文读取有独立资源上限，以工具返回为准。',
-        '手动生成的大成品按 draftId 用 noname_read_extension 续读；草稿不会写入游戏文件。',
+        '手动生成的大成品按 draftId 用 noname_read_extension 续读，完整交付仍须读到 pagination.complete=true；草稿不会写入游戏文件。',
       ].join('\n')
     },
   })

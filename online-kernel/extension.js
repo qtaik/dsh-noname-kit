@@ -2,7 +2,7 @@
  * 联机助手·内核(无头运行时)—— 由 dsh-noname-kit 插件安装/升级到游戏 extension/ 目录。
  *
  * 职责:在游戏进程里提供跨网络联机的"插座"(WebRTC 传输 + 引擎联机接驳),
- * 自身不带任何操作界面 —— 建房/加入/发码收码全部由 DSH 工坊「🌐 联机」页签
+ * 不提供独立操作界面，选将设置沿用游戏房间菜单；建房/加入/发码收码由 DSH 工坊「🌐 联机」页签
  * 指挥,经本地 HTTP 心跳桥(src/bridge.js)轮询命令、上报状态。
  *
  * 形态说明:纯老式 game.import 模块副作用注册(零 import 语句),
@@ -14,7 +14,7 @@
 	}
 	window.__nnkLoaded = true;
 	if (!window.__nnk__) {
-		window.__nnk__ = { version: "0.3.94", build: "keepalive-transfer-2-1g15m-multi-display", modules: {}, env: null, state: {} };
+		window.__nnk__ = { version: "0.3.98", build: "keepalive-free-choice-picker-2", modules: {}, env: null, state: {} };
 	}
 
 	game.import("extension", function(lib, game, ui, get, ai, _status) {
@@ -110,6 +110,29 @@
 				if (nnk.modules.bridge) {
 					nnk.modules.bridge.emit("error", { message: "内核模块 " + installs[j][0] + " 安装失败: " + ((err && err.message) || err) });
 				}
+			}
+		}
+		if (lease.info.role === "engine") {
+			try {
+				var pickerModule = await import(location.origin + "/extension/" + encodeURIComponent("联机助手") + "/keepalive/free-character-picker.js");
+				if (!lease.isCurrent()) return;
+				nnk.modules.freeCharacterPicker = pickerModule.installFreeCharacterPicker(nnk, lease);
+				if (!lease.isCurrent()) { nnk.modules.freeCharacterPicker.dispose(); return; }
+			} catch (pickerError) {
+				try { nnk.modules.freeCharacterPicker?.dispose(); } catch (cleanupError) { console.error("[联机助手] 选将分类清理失败", cleanupError); }
+				console.error("[联机助手] 选将分类不可用", pickerError);
+			}
+		}
+		if (lease.info.role === "engine" && lease.info.engineRole === "host") {
+			try {
+				var choiceBase = location.origin + "/extension/" + encodeURIComponent("联机助手") + "/keepalive/";
+				var choiceParts = await Promise.all(["free-character-choice", "free-character-identity", "free-character-guozhan", "free-character-versus", "free-character-single", "free-character-doudizhu"].map(function(name) { return import(choiceBase + name + ".js"); }));
+				if (!lease.isCurrent()) return;
+				nnk.modules.freeCharacterChoice = choiceParts[0].installFreeCharacterChoice(nnk, lease, [choiceParts[1].identityAdapter, choiceParts[2].guozhanAdapter, choiceParts[3].versusAdapter, choiceParts[4].singleAdapter, choiceParts[5].doudizhuAdapter]);
+				if (!lease.isCurrent()) { nnk.modules.freeCharacterChoice.dispose(); return; }
+			} catch (choiceError) {
+				try { nnk.modules.freeCharacterChoice?.dispose(); } catch (cleanupError) { console.error("[联机助手] 选将设置清理失败", cleanupError); }
+				console.error("[联机助手] 自由选将设置不可用", choiceError);
 			}
 		}
 		nnk.state.bootStage = "ready";

@@ -17,7 +17,7 @@ export function createEngineEndpoint(nnk,{native,info,port,isCurrent,documentTok
   const peers=new Map(),startRoster=new Set(),ownedFacades=new WeakSet(),timers=new Set(),requests=new Map(),requestHistory=[],waitingPromises=new Set(),retiredHandlerPeers=new Set();
   const wire=[];let wireBytes=0,wireCount=0,queueCount=0,queueBytes=0,closed=false,prepared=false,softCreated=false,mode=null;
   let preparePromise=null,prepareError=null,environmentProof={environmentProofReady:false},statusTimer=null,nativeReportPending=0,nativeReportPromise=null,detachPromise=null,bridgeRestore=null;
-  let startButton=null,startGuard=null;
+  let startButton=null,startGuard=null,releaseFreeChoiceFailure=null;
   const limits=Object.freeze({peerCount:16,perPeerFrames:128,perPeerBytes:1048576,aggregateFrames:512,aggregateBytes:4194304,
     queueTimeoutMs:5000,wireFrames:64,wireBytes:262144,requestPending:16,requestHistory:32,prepareTimeoutMs:12000});
   const current=()=>!closed&&nnk.env===env&&isCurrent();
@@ -64,6 +64,7 @@ export function createEngineEndpoint(nnk,{native,info,port,isCurrent,documentTok
       pendingOfficialHandlers:peer.pendingOfficialHandlers,retired:peer.retired,facadeAttached:!!peer.facade,seatValidated:peer.seatValidated,startConfirmed:peer.startConfirmed})),
     startGuardListeners:startGuard===null?0:2,startButtonReferences:Number(startButton!==null),startRosterScalars:startRoster.size},
     settlement:settlement.resources(),operations:operations.pendingSnapshot(),consent:nnk.modules.consent?.resourceSnapshot?.()||null,manifest:nnk.modules.manifest?.resourceSnapshot?.()||null,
+    freeCharacterChoice:nnk.modules.freeCharacterChoice?.resourceSnapshot?.()||null,
     batch:{paused:nnk.modules.batch?.paused,internalResourcesObservable:typeof nnk.modules.batch?.resourceSnapshot==='function',
       internalResources:nnk.modules.batch?.resourceSnapshot?.()??null},
     limits:'Counts are own endpoint references. Official Client.ws/game.ws references remain counted until native destruction; native internal asynchronous engine work and unexposed batch I/O are not reported as zero.'};}
@@ -108,6 +109,7 @@ export function createEngineEndpoint(nnk,{native,info,port,isCurrent,documentTok
     console.error('[联机助手] 当前引擎端点操作失败',error);
     if(current())post({type:'failure',peerId,stage,requestId,error:errorJSON(error)});
   }
+  if(typeof nnk.modules.freeCharacterChoice?.setFailureHandler==='function')releaseFreeChoiceFailure=nnk.modules.freeCharacterChoice.setFailureHandler(error=>failure(error,{stage:'free-character-choice'}));
   function clearQueue(peer){clearOwn(peer.queueTimer);peer.queueTimer=null;queueCount-=peer.queue.length;queueBytes-=peer.queueBytes;peer.queue.length=0;peer.queueBytes=0;}
   function disposePeer(peer,errors){
     peer.retired=true;peer.seatValidated=false;peer.startConfirmed=false;peer.confirmedSeat=null;clearQueue(peer);
@@ -122,6 +124,9 @@ export function createEngineEndpoint(nnk,{native,info,port,isCurrent,documentTok
     if(statusTimer!==null)clearInterval(statusTimer);statusTimer=null;
     releaseStartGuard();
     try{settlement.dispose();}catch(error){cleanupErrors.push(errorJSON(error));}
+    try{releaseFreeChoiceFailure?.();}catch(error){cleanupErrors.push(errorJSON(error));}releaseFreeChoiceFailure=null;
+    try{nnk.modules.freeCharacterPicker?.dispose();}catch(error){cleanupErrors.push(errorJSON(error));}
+    try{nnk.modules.freeCharacterChoice?.dispose();}catch(error){cleanupErrors.push(errorJSON(error));}
     operations.dispose();
     for(const cancel of [...waitingPromises])cancel();
     for(const peer of peers.values())disposePeer(peer,cleanupErrors);peers.clear();startRoster.clear();

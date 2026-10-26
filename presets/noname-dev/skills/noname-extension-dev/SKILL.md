@@ -26,22 +26,25 @@ whenToUse: 需要编写、修改或审查无名杀扩展代码(武将技能/卡�
 - 技能挂载:常驻规则技逐人**普通 addSkill**;hidden: 分组与 addTempSkill("x","phaseChange") 都会废掉触发/时机。
 - 触发门:非 forced 技能必须有 check 才会自动触发。
 - 距离视为 X:globalFrom/To 返回 **-Infinity**(返回 1 会被坐骑顶掉)。
-- 技能名显示:十周年UI 的 gainSkill 竖排会显示有 translate 名的技能(新样式无过滤)——内部规则技**不留 translate 名**。
+- 技能名显示:若目标十周年UI 的 gainSkill 竖排误显示内部规则技，可按实际展示需要省略其 translate 名；面向玩家展示的技能仍提供名称与描述。
 - 换座:交换两人不改变行动次序;必须打破环形线性重排 + game.zhu 指向新 1 号位 + seatNum 同步 + playerMap 按 playerid 重建。
 - 选将前:逐人 getId()(注册 game.playerMap)。
 
-**模式骨架**:需求确认单(见下)→ start:prepareArena(读模式配置 get.config)→ 定先手 → 自定义 chooseCharacter(选将+选座)→ syncState + gameStart + 挂规则技能 → gameDraw → phaseLoop(先手)→ 胜负终局判定(global dieAfter 检查存活≤1;玩家死亡不立即判负,兼容复活)。
+**模式骨架**:需求确认单(见下)→ start:prepareArena(读模式配置 get.config)→ 定先手 → 自定义 chooseCharacter(选将+选座)→ syncState + gameStart + 挂规则技能 → gameDraw → phaseLoop(先手)→ 胜负终局判定(按用户确认的胜负条件、终局时机及相关规则实现)。
 
 **确认单结构(mode 版)**:玩法一句话复述 / 人数与先手规则 / 胜利条件 / **逐条规则复述(触发时机/数值/边界)** / 明确不做什么 / 实现骨架自查(按对照表选定)。确认后**每条规则一个节点名**,skills_written 带回(规则节点动态登记,用户逐条确认后自动收口)。
 
-**游戏内 UI 规范**:自绘界面一律用引擎标准 ui.create.dialog,禁止自绘 DOM 覆盖层(缩放错乱);弹窗标题留白防出框;内部规则技不留 translate 名;UI 兼容性需在用户所用皮肤(如十周年UI)下实测。
+**游戏内 UI 规范**:自绘界面一律用引擎标准 ui.create.dialog,禁止自绘 DOM 覆盖层(缩放错乱);弹窗标题留白防出框;内部规则技的 translate 按实际展示需要设置;UI 兼容性需在用户所用皮肤(如十周年UI)下实测。
 
 ## 工作流(不可跳步)
-1. **需求理解确认(硬门禁)**:逐技能输出【需求理解确认】——名称/类型、触发时机、频率、目标、数值、不做什么、交互;卡牌复述牌名/类型/效果/牌堆。**输出后停下等用户确认**;有歧义先用 ask_user_question 问清;**回答只消除歧义、不算确认**——澄清后给出最终确认单,仍须等到用户明确回复「确认」;未确认前禁止写代码。
+1. **需求理解确认(硬门禁)**:只读询问按用户要求答复；需要制作或修改代码时（既有问题反馈修复例外不变），逐技能输出【需求理解确认】——名称/类型、触发时机、频率、目标、数值、不做什么、交互;卡牌复述牌名/类型/效果/牌堆。**输出后停下等用户确认**;有歧义先用 ask_user_question 问清;**回答只消除歧义、不算确认**——澄清后给出最终确认单,仍须等到用户明确回复「确认」;未确认前禁止写代码。
 2. **ID 前缀约定**:任务带「内部 ID 前缀」时,新增内部 ID = 前缀 + 拼音/英文(如 cs_tianfa),显示名写入 translate。
-3. **找官方参考**:用 `noname_search_reference` 直接搜官方相似实现(中文名/ID/效果关键词;整句描述按相似度列候选)。确认前的只读调研不受确认门限制;用户已给参考代码或改动极简单时可跳过;编辑已有扩展先 `noname_read_extension` 读当前代码。
-4. **调研纪律(控上下文成本)**:优先用 `noname_search_reference`(结果有界);确需 bash 抽查引擎源码时用**窄窗口**命令(`grep -A5`/`sed -n 起止,p` 小范围/`head`),禁止大段倾倒整段文件;同一结论(注意点/搜索结果/参考代码里已有的)不重复验证。**检索的红线:禁止从系统根目录、盘符根目录(`C:\` `D:\` `/`)、用户目录或 DSH 目录发起任何递归检索(`grep -r`/`rg`/`findstr /s`/`dir /s` 都算)**。根目录递归检索会遍历大量无关文件并拖慢响应。**游戏与扩展的路径已在系统提示的「当前环境」小节给出(Windows 与 bash 两种形式)**:核对引擎源码直接在给出的目录下 grep `noname/` 源码;用 `ls`/`dir`/`find` 列盘符根、用户目录等无关位置来找引擎/扩展同样禁止(无论是否递归)，避免把无关目录内容带入上下文。官方实现的检索只用 `noname_search_reference`(它已限定在引擎源码目录并跳过素材);确需 bash 时,路径必须写明且只能落在 `noname/library`、`character`、`card`、`gnc`、`extension` 这些源码目录里。未配置游戏目录时不要自己找,直接让用户去工坊「⚙ 设置」页配置。做卡牌的参考检索用 `type:'card'`。
-读取与发现采用明确分页：目录/工具/技能列表按 offset/limit 继续，代码页按字符 offset/limit 继续，并复用 coverage.snapshot 作为 snapshot；源码变化时重新查询，不混合页面。coverage 未完成、资源上限、解析失败、歧义都不能解释为条目不存在。搜索 5 GiB 上限只适用于分块检索；静态解析有独立上限。手动写入较长成品返回 draftId，用 noname_read_extension 在同一会话中分页读取，直到 pagination.complete=true；草稿闲置15分钟过期，不写入游戏文件。
+3. **找官方参考**:用 `noname_search_reference` 直接搜官方相似实现(中文名/ID/效果关键词;整句描述按相似度列候选)。按本次所需机制寻找参考，可组合已实际读到的不同实现，不要求找到完全相同的机制组合。已有足够参考支持当前方案时停止扩查，无需穷举候选或等 coverage 完整；未搜完仍不能声称内容不存在。参考仍不足时，仅针对缺少依据的机制调整关键词或定位源码。确认前的只读调研不受确认门限制;用户已给参考代码或改动极简单时可跳过;编辑已有扩展先 `noname_read_extension` 读当前代码。
+4. **源码核验与检索**：noname_search_reference 用于查找相似技能、武将和卡牌实现；引擎 API 用通用只读工具查当前游戏源码，包括相关 .js/.ts、类型与必要文档，按实际项目结构定位。
+   - **核对实际用法**：对 API 参数或行为有疑问，或准备判为不支持、参数无效时，先读当前定义、参数处理和直接相关分支，给出依据位置。使用参考前读相应实现，不把翻译、注释或相邻条目当作该技能。搜索未命中不等于不支持，不据此删除参数或功能。
+   - **完成当前任务**：参考和证据足够后继续完成当前武将、卡牌或模式；可组合不同机制的参考，复用源码未变的已核实结论，不要求穷举候选或审计整个引擎。证据不足、读取失败或存在冲突时，说明具体未决问题与限制，不猜测。遵守宿主权限、预算、超时与取消。
+   - **范围与写入**：从已配置的游戏路径定位所需源码，按需读取，避免重复或无关检索；不在盘符根、整个用户目录或 DSH 安装目录盲目寻找游戏。游戏源码保持只读，扩展修改仍经 noname_write_extension 校验及原有写入门禁。未配置游戏目录时请用户先在工坊设置中配置。卡牌参考检索用 type:'card'。
+读取与发现采用明确分页：仅按当前问题需要续读目录/工具/技能列表或源码，分别使用 offset/limit 与字符 offset/limit，并复用 coverage.snapshot 作为 snapshot；源码变化时重新查询，不混合页面。coverage 未完成、资源上限、解析失败、歧义都不能解释为条目不存在。搜索 5 GiB 上限只适用于分块检索；静态解析有独立上限。手动写入较长成品返回 draftId，用 noname_read_extension 在同一会话中分页读取，直到 pagination.complete=true；草稿闲置15分钟过期，不写入游戏文件。
 
 5. **生成代码(区块化读写,防抄错)**:扩展文件按锚点区块(//#noname-kit-begin/end 注释)管理,块种类四种:**skill / card / character / translate**。改已有条目:`noname_read_extension` 传 `listBlocks` 看区块目录 → 传 `block:'skill:ID'`(card/character/translate 同理)只读该块 → `noname_write_extension` 用 `blocks` 参数提交完整新块(未提交的区块由工具从旧文件逐字节保留);零星小改动(牌堆条目、一处数值)用 `edits` 精确补丁(find 必须唯一命中);删条目用 `deletes` 声明。**全文模式(code)仅用于新包首写或未建索引的存量包兜底;全文修改存量包必须带 `editScope`,范围外改动一律拒写**。新包首写按骨架模板给每个技能/翻译条目包锚点。任务消息若带「编辑目标条目: kind:id」行,本次是**单条目修改任务**:第 0 步直接 `block:'kind:id'` 读该块原文,确认单按「改动前→改动后」逐项列(不按新技能模板);写入只提交该区块(blocks/edits),严禁全文重写、严禁改动其他区块。此类消息若另带「新增技能」区块,新技能作为新区块插入(锚点包裹、照走完整流程、ID 遵守前缀规则),但其余既有区块依然禁动。**多文件包**(条目在子目录模块,如 character/character.js 的 `const character = {…}`):listBlocks 目录每项带 file 归属,read/write 必须传对应的 file 参数(消息里会给出所在文件);「所在文件」为 extension.js 时不传。**子目录模块的内容不要单独过 `noname_validate`**(没有 name 字段,必报「没有找到 name」)——模块文件由 `noname_write_extension` 的内置语法检查兜底,`noname_validate` 用于入口 extension.js 或老式单文件包。
    **存量全文限制**:自动或手动任务都必须显式给 `editScope`;仅允许唯一的既有 ID(可用 `kind:id` 限定)。imports/precontent/骨架/注释/CRLF/尾空白等未授权原文完全保留,不做行尾归一。新增/删除用区块,其他区域用唯一原文 `edits`(未建索引也支持)。正则、除法、模板插值或区间歧义导致全文拒写时,改用精确补丁,不要扩大授权重写文件。
@@ -57,7 +60,7 @@ whenToUse: 需要编写、修改或审查无名杀扩展代码(武将技能/卡�
 - 没有图片时,交付说明必须提醒用户补图(mode 任务交付的是玩法不是立绘,无图是常态,不需提醒)。
 
 ## 配音约定(音频只放扩展包内,绝不放游戏本体 audio/ 目录)
-- **技能配音**:技能对象写 `audio: "ext:<包名>/audio/skill:<句数>"`(两句就是 :2,一个技能任意多句),文件放 extension/<包名>/audio/skill/<技能内部ID>1.mp3、<ID>2.mp3……(mp3,内部ID+从 1 连号,句数与 audio 数字一致)。**禁止写不带 ext: 的 audio**(如 audio: 2 / audio: true)——那会去游戏本体 audio/skill/ 找文件;校验器会报 warning。
+- **技能配音**:新增自带技能配音时，技能对象写 `audio: "ext:<包名>/audio/skill:<句数>"`(两句就是 :2,一个技能任意多句),文件放 extension/<包名>/audio/skill/<技能内部ID>1.mp3、<ID>2.mp3……(mp3,内部ID+从 1 连号,句数与 audio 数字一致)。复用已有配音时，先核对当前引擎支持的引用方式及目标资源；已有音频引用不一概要求带 ext:。audio: 2 / audio: true 等写法会触发校验 warning，应核实资源来源；新增音频仍只放扩展包内，不向游戏本体 audio/ 写入。
 - **阵亡语音:零代码**——引擎对扩展武将默认自动找 extension/<包名>/audio/die/<武将内部ID>.mp3(可多句),武将条目不用写任何字段。
 - 复制配音用 `noname_copy_audio`:target 必须是 `skill/<内部ID><序号>.mp3` 或 `die/<武将ID><序号>.mp3`;技能配音条目带 `skill` 参数(任务里的技能显示名),交付才计入任务收口。任务消息带「配音/阵亡语音」区块时按列出的句数与路径逐条复制。
 
@@ -115,7 +118,7 @@ export default function () {
 ## 技能三段式(filter → cost → content)
 ```js
 {
-  audio: "ext:包名/audio/skill:2",  // 技能配音:两句,文件 audio/skill/<内部ID>1.mp3、<ID>2.mp3(禁止不带 ext:)
+  audio: "ext:包名/audio/skill:2",  // 自带配音示例:两句,文件 audio/skill/<内部ID>1.mp3、<ID>2.mp3；复用已有配音先核实引用方式
   enable: "phaseUse",        // 主动技;或 trigger: { player: "phaseBegin" }
   usable: 1,
   forced: false, locked: false, frequent: false,
@@ -153,7 +156,7 @@ export default function () {
 character: { zhaoyun: { sex: "male", group: "qun", hp: 3, skills: ["skillId"] } }
 translate: { zhaoyun: "赵云", skillId: "技能名", skillId_info: "技能描述" }
 ```
-每个技能 id 必须有 `<id>` 与 `<id>_info` 两条 translate。
+面向玩家展示的技能 id 必须有 `<id>` 与 `<id>_info` 两条 translate；内部规则技的名称和描述按实际展示需要设置。
 
 ## 卡牌结构
 ```js
@@ -162,10 +165,11 @@ translate: { myCard: "牌名", myCard_info: "效果" }
 ```
 package.card.list 牌堆条目也要给,否则游戏里摸不到这张牌。
 
-## 常见错误(校验器会拦)
+## 常见问题(静态检查与游戏验证)
+校验返回 error 时必须修复并重验，写入工具会拒写；warning 是需结合当前源码和需求判断的提示。触发、效果、AI 与联机等语义仍需游戏内验证，静态检查通过不代表没有 bug。
 1. 代码区全角标点/引号(字符串内中文标点没事)
 2. name 与文件夹名不一致(新式直接不加载)
-3. 缺 translate 的 `<id>` / `<id>_info`
+3. 面向玩家展示的条目缺少所需的名称或描述 translate
 4. content 漏 await;主动技缺 ai 字段;result.target 正负写反
 5. 新旧写法混用
 

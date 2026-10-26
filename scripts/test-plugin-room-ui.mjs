@@ -25,7 +25,7 @@ test('Ending either role warns about original connections and waits for kernel c
 test('Declining session termination preserves the room and sends nothing',()=>{const commands=[],notes=[],closed=[],leave=createLeave(()=>({list:[{},{}]}),{confirm:()=>false},action=>commands.push(action),value=>notes.push(value),value=>closed.push(value));leave(false);assert.deepEqual(commands,[]);assert.deepEqual(notes,[]);assert.deepEqual(closed,[]);});
 test('An active-game rejection remains visible inside the retained room',()=>{const f=render('playing',{host:false,note:'❌ 当前对局进行中，请先完成本局。'});assert.match(text(f.tree),/当前对局进行中/);assert.ok(f.all.some(n=>n.tag==='button'&&text(n).includes('退出房间')));assert.equal(f.commands.length,0);});
 // Exercise the actual room-code block across updates of the same mounted panel.
-const codeStart=src.indexOf('var roomClosed = Boolean('),codeEnd=src.indexOf('      return renderOnlinePanel();',codeStart);
+const codeStart=src.indexOf('var roomClosed = Boolean('),codeEnd=src.indexOf('      var roomAvailable =',codeStart);
 assert.ok(codeStart>=0&&codeEnd>codeStart);
 const codeBlock=src.slice(codeStart,codeEnd);
 const resolveRoomCode=new Function('bridge','phase','lastRoomCode','setLastRoomCode',codeBlock+';return roomCode;');
