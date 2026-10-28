@@ -5,9 +5,24 @@ const id=x=>typeof x==='string'&&x.length>0&&x.length<=160;
 const same=(a,b)=>!!a&&!!b&&KEYS.every(key=>a[key]===b[key]);
 const clone=x=>JSON.parse(JSON.stringify(x));
 const digest=x=>require('node:crypto').createHash('sha256').update(JSON.stringify(x)).digest('hex');
+const retryShape=p=>Object.fromEntries(Object.keys(p||{}).filter(k=>!['id','lease','retryOf'].includes(k)).sort().map(k=>[k,p[k]]));
+const frozenPlan=p=>{const value=clone(p);Object.freeze(value.lease);Object.freeze(value.targetPeers);return Object.freeze(value);};
 export class RoundContinuation {
- constructor(c){this.c=c;this.pending=null;this.committed=null;this.timer=null;this.receipts=[];this.closed=false;this.requestHistory=[];this.lastPlan=null;this.retryRemaining=1;}
+ constructor(c){this.c=c;this.pending=null;this.committed=null;this.timer=null;this.receipts=[];this.closed=false;this.requestHistory=[];this.lastPlan=null;this.retryRemaining=1;this.guestLoad=null;}
  current(t){return !this.closed&&this.pending===t&&this.c.live(t.oldRound)&&this.c.room.receipt===t.room&&this.c.room.available();}
+ guestSource(owner,old){const c=this.c,peer=c.guestPeer;return c.role==='guest'&&!!peer&&c.guestApprovalOwners.get(old)===owner&&c.sessions.getOwner(peer)===owner&&c.sessions.peerForActualOwner(owner)===peer&&c.sessions.isLive(peer);}
+ freshGuestLease(plan,old){const c=this.c,p=plan?.lease;return id(plan?.id)&&p?.partySessionId===old.partySessionId&&id(p.roundId)&&p.roundId!==old.roundId&&id(p.operationId)&&p.operationId!==old.operationId&&!c.guestRoundIds.has(p.roundId)&&!c.guestOperationIds.has(p.operationId);}
+ reserveGuestLoad(owner,plan,old,retry){
+  if(this.guestLoad||!this.guestSource(owner,old)||!this.freshGuestLease(plan,old))throw Error('原客端续局身份已失效');
+  const t={old,oldLease:Object.freeze(Object.fromEntries(KEYS.map(k=>[k,old[k]]))),owner,peer:this.c.guestPeer,plan:frozenPlan(plan),signature:digest(plan),retry,cancelled:false,failure:null};
+  this.c.guestRoundIds.add(plan.lease.roundId);this.c.guestOperationIds.add(plan.lease.operationId);this.guestLoad=t;return t;
+ }
+ currentGuestLoad(t){const c=this.c;return !!t&&!this.closed&&!c.closed&&this.guestLoad===t&&!t.cancelled&&c.round===t.old&&same(t.old,t.oldLease)&&this.guestSource(t.owner,t.old)&&c.guestPeer===t.peer&&digest(this.lastPlan)===t.signature&&(t.retry?t.old.failed===true&&t.plan.retryOf===t.old.roundId:c.live(t.old));}
+ pendingGuestLoad(owner,data){const t=this.guestLoad;return this.currentGuestLoad(t)&&t.owner===owner&&same(t.plan.lease,data);}
+ failGuestLoad(owner,data){
+  const t=this.guestLoad;if(!this.pendingGuestLoad(owner,data))return false;
+  if(!t.failure){t.failure=data.error;t.old.nextError=data.error;this.c.onEvent('error',{message:data.error,...t.plan.lease});this.c.publishState();}return true;
+ }
  envelope(r,data){return this.c.envelope(r,{protocol:'nnk-next/1',...data});}
  send(peer,type,r,data){return this.c.sessions.sendControl(peer,type,this.envelope(r,data));}
  notifyCancel(t,reason){for(const peer of t.peers)if(this.c.sessions.isLive(peer)){try{this.send(peer,'next-cancel',t.oldRound,{planId:t.plan.id,planSignature:t.signature,reason:String(reason).slice(0,1000)});}catch(error){this.c.onEvent('next-cancel-notice-failed',{peerId:peer,message:error.message});}}}
@@ -15,11 +30,12 @@ export class RoundContinuation {
   if(!TYPES.has(frame.type))return null;
   const c=this.c,r=c.round,d=frame.data,peer=c.sessions.peerForActualOwner(owner),t=this.pending;
   if(this.closed||!peer||!c.sessions.isLive(peer)||d.protocol!=='nnk-next/1'||!id(d.requestId))return 'invalid-next-source';
-  if(frame.type==='next-retry'){const p=d.plan;return c.role==='guest'&&peer===c.guestPeer&&this.retryRemaining>0&&r?.failed===true&&same(r,d)&&same(this.lastPlan?.lease,r)&&p?.retryOf===r.roundId&&p.lease?.partySessionId===r.partySessionId&&id(p.lease.roundId)&&p.lease.roundId!==r.roundId&&id(p.lease.operationId)&&p.lease.operationId!==r.operationId&&p.mode===this.lastPlan.mode&&p.configDigest===this.lastPlan.configDigest&&JSON.stringify(p.targetPeers)===JSON.stringify(this.lastPlan.targetPeers);}
+  if(c.role==='guest'&&!this.guestSource(owner,r))return 'invalid-next-source';
+  if(frame.type==='next-retry'){const p=d.plan;return !this.guestLoad&&!this.pending&&this.guestSource(owner,r)&&this.retryRemaining>0&&r?.failed===true&&same(r,d)&&same(this.lastPlan?.lease,r)&&p?.retryOf===r.roundId&&this.freshGuestLease(p,r)&&JSON.stringify(retryShape(p))===JSON.stringify(retryShape(this.lastPlan));}
   if(frame.type==='next-commit'&&d.plan&&this.receipts.some(receipt=>receipt.peer===peer&&same(receipt.oldLease,d)&&receipt.planSignature===digest(d.plan)))return true;
   if(!r||!c.live(r)||!same(r,d))return 'retired-next-operation';
   if(frame.type==='next-prepare'){
-   const p=d.plan,room=c.room.receipt;return c.role==='guest'&&peer===c.guestPeer&&!!room&&(c.room.ready()||t?.oldRound===r&&t.prepared)&&p&&p.returnId===room.id&&p.barrierId===room.barrierId&&p.barrierRevision===room.revision&&p.oldRoundId===r.roundId&&p.lease?.partySessionId===r.partySessionId&&id(p.lease.roundId)&&p.lease.roundId!==r.roundId&&id(p.lease.operationId)&&p.lease.operationId!==r.operationId&&id(p.id)&&MODES.includes(p.mode)&&p.targetPeers?.includes(r.remotePeerToken)&&p.targetPeers.length<=16&&new Set(p.targetPeers).size===p.targetPeers.length&&p.targetPeers.every(id)&&typeof p.configDigest==='string'&&/^[a-f0-9]{64}$/.test(p.configDigest)&&sameScope(d.hostScope,room.hostScope)&&(!t||t.signature===digest(p));
+   const p=d.plan,room=c.room.receipt;return !this.guestLoad&&this.guestSource(owner,r)&&!!room&&this.freshGuestLease(p,r)&&(c.room.ready()||t?.oldRound===r&&t.prepared)&&p&&p.returnId===room.id&&p.barrierId===room.barrierId&&p.barrierRevision===room.revision&&p.oldRoundId===r.roundId&&p.lease?.partySessionId===r.partySessionId&&id(p.lease.roundId)&&p.lease.roundId!==r.roundId&&id(p.lease.operationId)&&p.lease.operationId!==r.operationId&&id(p.id)&&MODES.includes(p.mode)&&p.targetPeers?.includes(r.remotePeerToken)&&p.targetPeers.length<=16&&new Set(p.targetPeers).size===p.targetPeers.length&&p.targetPeers.every(id)&&typeof p.configDigest==='string'&&/^[a-f0-9]{64}$/.test(p.configDigest)&&sameScope(d.hostScope,room.hostScope)&&(!t||t.signature===digest(p));
   }
   if(!t||!this.current(t)||d.planId!==t.plan.id||d.planSignature!==t.signature)return 'wrong-current-next-plan';
   if(frame.type==='next-ready')return c.role==='host'&&t.peers.includes(peer)&&sameScope(d.guestScope,t.room.guestScopes[peer])&&d.hostGeneration===t.room.hostScope.documentGeneration&&d.ready===true;
@@ -54,7 +70,7 @@ export class RoundContinuation {
  async control(owner,frame){
   if(this.validate(owner,frame)!==true)return;
   const c=this.c,peer=c.sessions.peerForActualOwner(owner),d=frame.data;
-  if(frame.type==='next-retry'){const old=c.round;this.retryRemaining--;this.lastPlan=clone(d.plan);return c.loadNextGuest(d.plan,old,true);}
+  if(frame.type==='next-retry'){const old=c.round,t=this.reserveGuestLoad(owner,d.plan,old,true);this.retryRemaining--;this.lastPlan=clone(t.plan);return c.loadNextGuest(t.plan,old,true,t);}
   if(frame.type==='next-prepare'){
    if(this.pending?.signature===digest(d.plan)&&this.pending.prepared){this.sendReady(this.pending,peer);return;}
    const oldRound=c.round,t={oldRound,room:c.room.receipt,peers:[peer],plan:clone(d.plan),signature:digest(d.plan),prepared:true};this.pending=t;
@@ -71,7 +87,7 @@ export class RoundContinuation {
   const t=this.pending;if(!this.current(t)||!t.prepared)return;
   clearTimeout(this.timer);this.timer=null;
   this.receipts.push({peer,oldLease:Object.fromEntries(KEYS.map(key=>[key,t.oldRound[key]])),planSignature:t.signature});if(this.receipts.length>4)this.receipts.shift();
-  this.pending=null;this.lastPlan=clone(t.plan);await c.loadNextGuest(t.plan,t.oldRound);
+  this.pending=null;const loading=this.reserveGuestLoad(owner,t.plan,t.oldRound,false);this.lastPlan=clone(loading.plan);await c.loadNextGuest(loading.plan,t.oldRound,false,loading);
  }
  sendReady(t,peer){this.send(peer,'next-ready',t.oldRound,{planId:t.plan.id,planSignature:t.signature,guestScope:clone(t.room.localScope),hostGeneration:t.room.hostScope.documentGeneration,ready:true});}
  async commitHost(t){
@@ -84,7 +100,8 @@ export class RoundContinuation {
   try{if(commitFailure)this.notifyCancel(t,'下一局提交广播未完成');const next=await c.loadNextHost(t.plan,t.oldRound,false,commitFailure);t.resolve(next);}catch(error){t.reject(error);}finally{this.committed=null;}
  }
  cancel(reason,notify=true){
-  const t=this.pending;if(!t)return false;clearTimeout(this.timer);this.timer=null;this.pending=null;
+  const loading=this.guestLoad;if(loading){loading.cancelled=true;this.guestLoad=null;if(notify&&this.c.sessions.isLive(loading.peer))try{this.c.send(loading.peer,'operation-failed',loading.plan.lease,{error:String(reason).slice(0,2000)});}catch(error){this.c.onEvent('next-cancel-notice-failed',{peerId:loading.peer,message:error.message});}if(this.c.live(loading.old)){loading.old.phase='plugin-room';loading.old.nextError=String(reason);this.c.publishState();}}
+  const t=this.pending;if(!t)return !!loading;clearTimeout(this.timer);this.timer=null;this.pending=null;
   if(notify&&t.plan)this.notifyCancel(t,reason);
   t.reject?.(Error(reason));if(this.c.round===t.oldRound&&this.c.live(t.oldRound)){t.oldRound.phase='plugin-room';t.oldRound.nextError=String(reason);this.c.publishState();}
   this.c.onEvent('next-preparation-cancelled',{reason:String(reason),roundId:t.oldRound.roundId});return true;
@@ -97,6 +114,6 @@ export class RoundContinuation {
   this.lastPlan=clone(plan);const promise=c.loadNextHost(plan,r,true,broadcastFailure);this.committed={plan,promise};try{return await promise;}finally{this.committed=null;}
  }
  playing(r){if(same(this.lastPlan?.lease,r))this.retryRemaining=1;}
- snapshot(){return {pending:this.pending&&{plan:clone(this.pending.plan),signature:this.pending.signature,ready:this.pending.ready?[...this.pending.ready]:[],prepared:this.pending.prepared===true},committed:this.committed&&clone(this.committed.plan),retryAvailable:this.c.round?.failed===true&&same(this.lastPlan?.lease,this.c.round)&&this.retryRemaining>0,resources:{timers:Number(this.timer!==null),receipts:this.receipts.length,requestHistory:this.requestHistory.length}};}
+ snapshot(){return {guestLoading:this.guestLoad&&{lease:clone(this.guestLoad.plan.lease),retry:this.guestLoad.retry,failed:!!this.guestLoad.failure},pending:this.pending&&{plan:clone(this.pending.plan),signature:this.pending.signature,ready:this.pending.ready?[...this.pending.ready]:[],prepared:this.pending.prepared===true},committed:this.committed&&clone(this.committed.plan),retryAvailable:this.c.round?.failed===true&&same(this.lastPlan?.lease,this.c.round)&&this.retryRemaining>0,resources:{timers:Number(this.timer!==null),receipts:this.receipts.length,requestHistory:this.requestHistory.length}};}
  dispose(){this.closed=true;this.cancel('续局控制器已退休');clearTimeout(this.timer);this.timer=null;this.receipts=[];this.requestHistory=[];}
 }

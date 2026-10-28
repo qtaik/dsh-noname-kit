@@ -25,11 +25,26 @@ const fileFields={ready:[],ready_ack:[],data:['seq','index','offset','end','data
 const fileOutcomes=new Set(['activation_pending','committed','committed_activation_required','failed','cancelled','expired','recovery_required','disconnected','unknown']);
 
 // Authority belongs to a current registered transport; disk work is supplied by adapters.
+// normalize checks the protocol manifest; checkBatch enforces the local capacity policy.
 export class CarrierTransfer {
- constructor({sessions,getRole,getScope,canTransfer,collect,normalize,digest,createChannel,source,receiver,emit=()=>{},now=()=>Date.now(),newId=fresh,setTimer=(...args)=>setTimeout(...args),clearTimer=(...args)=>clearTimeout(...args),isRequestPending=()=>false}){
-  if(!sessions||[getRole,getScope,canTransfer,collect,normalize,digest,createChannel,source,receiver,emit,now,newId,setTimer,clearTimer,isRequestPending].some(fn=>typeof fn!=='function'))throw TypeError('Transfer dependencies required');
-  Object.assign(this,{sessions,getRole,getScope,canTransfer,collect,normalize,digest,createChannel,source,receiver,emit,now,newId,setTimer,clearTimer,isRequestPending});this.peers=new Map();this.history=[];this.closed=false;this.pendingCleanup=0;this.operations=new Set();
+ constructor({sessions,getRole,getScope,canTransfer,collect,normalize,checkBatch=()=>{},digest,createChannel,source,receiver,emit=()=>{},now=()=>Date.now(),newId=fresh,setTimer=(...args)=>setTimeout(...args),clearTimer=(...args)=>clearTimeout(...args),isRequestPending=()=>false,autoTransfer=true}){
+  if(!sessions||[getRole,getScope,canTransfer,collect,normalize,checkBatch,digest,createChannel,source,receiver,emit,now,newId,setTimer,clearTimer,isRequestPending].some(fn=>typeof fn!=='function'))throw TypeError('Transfer dependencies required');
+  Object.assign(this,{sessions,getRole,getScope,canTransfer,collect,normalize,checkBatch,digest,createChannel,source,receiver,emit,now,newId,setTimer,clearTimer,isRequestPending});this.peers=new Map();this.history=[];this.closed=false;this.pendingCleanup=0;this.operations=new Set();this.autoTransferEnabled=autoTransfer!==false;this.preferenceGeneration=0;
  }
+ setEnabled(value){
+  if(typeof value!=='boolean')throw TypeError('补传开关必须是布尔值');
+  if(this.autoTransferEnabled===value)return Promise.resolve();
+  this.autoTransferEnabled=value;++this.preferenceGeneration;
+  if(value)return Promise.resolve();
+  const cleanup=[];
+  for(const r of this.peers.values()){
+   r.collecting?.controller.abort();const q=r.q;
+   if(q&&active.has(q.status)&&!q.fileCommitted&&!irreversible.has(q.fileState?.status))cleanup.push(this._finish(r,q,'cancelled','本机已关闭扩展补传',true));
+  }
+  return Promise.all(cleanup).then(()=>undefined);
+ }
+ _preferenceCurrent(generation){return this.autoTransferEnabled&&this.preferenceGeneration===generation;}
+ _declineOffer(r,d){this._send(r,'terminate',{from:r.local,to:r.remote,proposal:d.proposal,digest:d.digest,reason:'cancelled'});}
  capabilities(){return [TRANSFER_PROTOCOL];}
  capabilitySnapshot(){return [...this.peers.values()].filter(r=>this._actual(r)).map(r=>({peerId:r.peer,owner:r.owner,connectionSessionId:r.connectionSessionId,protocol:TRANSFER_PROTOCOL,ready:!!r.remote}));}
  _track(promise){this.operations.add(promise);promise.then(()=>this.operations.delete(promise),()=>this.operations.delete(promise));return promise;}
@@ -81,7 +96,7 @@ export class CarrierTransfer {
    if(!r.remote||d.from!==r.remote||d.to!==r.local||!sameScope(d.scope,r.remoteScope)||!nonce(d.proposal)||!hash(d.digest))return 'wrong-transfer-binding';
    const bound=[...base,'op','from','to','proposal','digest'],q=r.q;
    if(d.op==='offer'){
-    if(r.role!=='guest'||!exact(d,[...bound,'batch','ttlMs'])||!this._gate(peer).available||r.used.has(d.proposal)&&q?.id!==d.proposal||r.used.size>=128&&!r.used.has(d.proposal))return 'invalid-transfer-offer';
+    if(r.role!=='guest'||!exact(d,[...bound,'batch','ttlMs'])||this.autoTransferEnabled&&!this._gate(peer).available||r.used.has(d.proposal)&&q?.id!==d.proposal||r.used.size>=128&&!r.used.has(d.proposal))return 'invalid-transfer-offer';
     const normalized=this.normalize(d.batch);if(d.ttlMs!==transferBudgetMs(normalized.total))return 'invalid-transfer-budget';return JSON.stringify(normalized)===JSON.stringify(d.batch)?true:'noncanonical-transfer-manifest';
    }
    if(!q||q.id!==d.proposal||q.digest!==d.digest)return 'retired-transfer-proposal';
@@ -96,9 +111,10 @@ export class CarrierTransfer {
   if(this.validate(owner,frame)!==true)return Promise.resolve(false);
   const r=this.peers.get(this.sessions.peerForActualOwner(owner)),d=clone(frame.data);r.lastSequence=frame.seq;r.seen.add(d.requestId);while(r.seen.size>64)r.seen.delete(r.seen.values().next().value);r.queueDepth++;
   if(frame.type==='transfer-consent'&&d.op==='terminate'&&r.q&&!r.q.fileCommitted)r.q.cancelRequested=true;
-  const task=r.queue.then(async()=>{if(!this._actual(r))return false;if(frame.type==='transfer-file'){const q=r.q,p=d.packet;if(!q||!r.channel||p.from!==r.remote||p.to!==r.local||p.proposal!==q.id||p.digest!==q.digest||!sameScope(d.scope,r.remoteScope))return false;r.channel.handle(JSON.stringify(p));await r.channel.current?.queue;return true;}await this._control(r,d);return true;}).catch(async error=>{if(this._actual(r)&&r.q)await this._finish(r,r.q,'failed',String(error.message||error),true);return false;}).finally(()=>{r.queueDepth--;});r.queue=task;return task;
+  const generation=this.preferenceGeneration;
+  const task=r.queue.then(async()=>{if(!this._actual(r))return false;if(frame.type==='transfer-file'){const q=r.q,p=d.packet;if(!q||!r.channel||p.from!==r.remote||p.to!==r.local||p.proposal!==q.id||p.digest!==q.digest||!sameScope(d.scope,r.remoteScope))return false;r.channel.handle(JSON.stringify(p));await r.channel.current?.queue;return true;}await this._control(r,d,generation);return true;}).catch(async error=>{if(this._actual(r)&&r.q)await this._finish(r,r.q,'failed',String(error.message||error),true);return false;}).finally(()=>{r.queueDepth--;});r.queue=task;return task;
  }
- async _control(r,d){
+ async _control(r,d,generation=this.preferenceGeneration){
   if(d.op==='hello'){
    if(r.remote&&this._canRotate(r,d,true)){
     const old=r.q;if(r.channel)await r.channel.close();if(!this._actual(r)||!this._canRotate(r,d,true))return;
@@ -111,10 +127,12 @@ export class CarrierTransfer {
   if(d.from!==r.remote||d.to!==r.local||!sameScope(d.scope,r.remoteScope))return;
   let q=r.q;
   if(d.op==='offer'){
+   if(!this._preferenceCurrent(generation)){this._declineOffer(r,d);return;}
    if(q?.id===d.proposal){if(q.digest!==d.digest||JSON.stringify(q.batch)!==JSON.stringify(d.batch))throw Error('同一提议的内容发生变化');return;}
    if(q&&(active.has(q.status)||r.diskPending||q.fileCommitted||irreversible.has(q.fileState?.status)))throw Error('本机已有未完成或已提交批次');
-   const batch=this.normalize(d.batch),value=await this.digest(batch);if(!this._actual(r)||!this._gate(r.peer).available)return;if(value!==d.digest)throw Error('整批文件摘要不匹配');
-   if(q)this._remember(r,q);if(r.channel){await r.channel.close();r.channel=null;if(!this._actual(r)||!this._gate(r.peer).available)return;}
+   const batch=this.normalize(d.batch),value=await this.digest(batch);if(!this._actual(r))return;if(!this._preferenceCurrent(generation)){this._declineOffer(r,d);return;}if(!this._gate(r.peer).available)return;if(value!==d.digest)throw Error('整批文件摘要不匹配');
+   try{this.checkBatch(batch);}catch{this._declineOffer(r,d);return;}
+   if(q)this._remember(r,q);if(r.channel){await r.channel.close();r.channel=null;if(!this._actual(r))return;if(!this._preferenceCurrent(generation)){this._declineOffer(r,d);return;}if(!this._gate(r.peer).available)return;}
    const ttlMs=transferBudgetMs(batch.total);q={id:d.proposal,digest:value,batch,ttlMs,status:'pending',expires:this.now()+ttlMs,choice:null,cancelRequested:false};r.q=q;r.used.add(q.id);this._arm(r,q);this._emit(r,q);return;
   }
   if(!q||q.id!==d.proposal||q.digest!==d.digest)return;
@@ -132,7 +150,7 @@ export class CarrierTransfer {
   }
  }
  _arm(r,q){this.clearTimer(q.timer);q.timer=this.setTimer(()=>{q.timer=null;if(r.q===q)this._finish(r,q,'expired','本次逐请求授权已超时',true).catch(()=>{});},Math.max(0,q.expires-this.now()));}
- _authorized(r,q){return this._actual(r)&&r.q===q&&q.choice===true&&q.status==='authorized_paused'&&!q.cancelRequested&&q.expires>this.now()&&!q.fileCommitted&&this._gate(r.peer).available;}
+ _authorized(r,q){return this.autoTransferEnabled&&this._actual(r)&&r.q===q&&q.choice===true&&q.status==='authorized_paused'&&!q.cancelRequested&&q.expires>this.now()&&!q.fileCommitted&&this._gate(r.peer).available;}
  _grant(r,q){return {session:r.local,peerSession:r.remote,proposal:q.id,digest:q.digest,expires:q.expires,batch:clone(q.batch)};}
  _context(r,q){return {peerId:r.peer,owner:r.owner,connectionSessionId:r.connectionSessionId,scope:clone(r.scope),isAuthorized:()=>this._authorized(r,q)};}
  async _start(r,q){
@@ -154,33 +172,34 @@ export class CarrierTransfer {
  _blocksRequest(r,peer){const completedOther=r.peer!==peer&&r.role==='host'&&r.q?.fileCommitted===true&&['committed','committed_activation_required'].includes(r.q.fileState?.status);return r.collecting||r.diskPending||r.queueDepth||!completedOther&&r.q&&(active.has(r.q.status)||r.q.fileCommitted||irreversible.has(r.q.fileState?.status));}
  requestBusy(peer){return this.isRequestPending()||this.operations.size>0||this.pendingCleanup>0||[...this.peers.values()].some(r=>this._blocksRequest(r,peer));}
  async _propose(r,names,explicit=false){
+  const generation=this.preferenceGeneration;if(!this._preferenceCurrent(generation))return false;
   if(this.pendingCleanup||[...this.peers.values()].some(other=>other!==r&&this._blocksRequest(other,r.peer)))return false;
   if(!this._actual(r)||r.role!=='host'||!r.remote||!this._gate(r.peer).available||r.collecting||r.diskPending||r.q&&(active.has(r.q.status)||r.q.fileCommitted||irreversible.has(r.q.fileState?.status)))return false;
   if(!Array.isArray(names)||!names.length||names.length>64||new Set(names).size!==names.length||names.some(name=>!bounded(name,120)))return false;
   const collecting={controller:new AbortController()};r.collecting=collecting;
   try{
-   const batch=this.normalize(await this.collect(names.slice(),{signal:collecting.controller.signal}));if(!this._actual(r)||r.collecting!==collecting||collecting.controller.signal.aborted||!this._gate(r.peer).available)return false;
+   const batch=this.normalize(await this.collect(names.slice(),{signal:collecting.controller.signal}));this.checkBatch(batch);if(!this._preferenceCurrent(generation)||!this._actual(r)||r.collecting!==collecting||collecting.controller.signal.aborted||!this._gate(r.peer).available)return false;
    if(JSON.stringify(batch.extensions.map(e=>e.name).sort())!==JSON.stringify(names.slice().sort()))throw Error('提议采集名单发生变化');
-   const value=await this.digest(batch);if(!hash(value))throw Error('整批摘要无效');if(!this._actual(r)||r.collecting!==collecting||!this._gate(r.peer).available)return false;
+   const value=await this.digest(batch);if(!hash(value))throw Error('整批摘要无效');if(!this._preferenceCurrent(generation)||!this._actual(r)||r.collecting!==collecting||!this._gate(r.peer).available)return false;
    if(!explicit&&r.fingerprints.has(value))return false;if(r.used.size>=128)throw Error('本连接补传提议次数已达上限');
    if(r.q){this._remember(r,r.q);if(r.channel){await r.channel.close();r.channel=null;}}
-   if(!this._actual(r)||r.collecting!==collecting||collecting.controller.signal.aborted||!this._gate(r.peer).available)return false;
+   if(!this._preferenceCurrent(generation)||!this._actual(r)||r.collecting!==collecting||collecting.controller.signal.aborted||!this._gate(r.peer).available)return false;
    const ttlMs=transferBudgetMs(batch.total),id=this.newId();if(!nonce(id)||r.used.has(id))throw Error('必须使用新的补传提议');const q={id,digest:value,batch,ttlMs,status:'pending',expires:this.now()+ttlMs,choice:null,cancelRequested:false};
    const offer={...this._bound(r,q),batch,ttlMs};if(byteSize(offer)>MAX_META-1024)throw Error('整批文件清单超过控制帧上限');r.q=q;r.used.add(id);r.fingerprints.add(value);this._arm(r,q);this._send(r,'offer',offer);this._emit(r,q);return true;
-  }finally{if(r.collecting===collecting)r.collecting=null;}
+  }catch(error){if(!this._preferenceCurrent(generation)||collecting.controller.signal.aborted)return false;throw error;}finally{if(r.collecting===collecting)r.collecting=null;}
  }
  autoOffer(peer,diff){const r=this.peers.get(peer);if(this.isRequestPending()||!r||diff?.verification!=='verified'||diff.inventoryVerified!==true||diff.scope&&!sameScope(diff.scope,r.scope))return Promise.resolve(false);return this._track(this._propose(r,diff.exts?.needsFiles,false));}
  request(peer,diff){const r=this.peers.get(peer);if(!r||diff?.verification!=='verified'||diff.inventoryVerified!==true||!scopeOk(diff.scope)||!sameScope(diff.scope,r.scope))return Promise.resolve(false);return this._track(this._propose(r,diff.exts?.needsFiles,true));}
  _selected(binding){if(!plain(binding)||!bounded(binding.peerId)||!scopeOk(binding.scope))return null;const r=this.peers.get(binding.peerId),q=r?.q;return r&&q&&this._actual(r)&&sameScope(binding.scope,r.scope)&&binding.session===r.local&&binding.peerSession===r.remote&&binding.proposal===q.id&&binding.digest===q.digest?{r,q}:null;}
  decide(binding){
   if(!exact(binding,['session','peerSession','proposal','digest','peerId','scope','yes']))return false;
-  const selected=this._selected(binding);if(!selected||selected.r.role!=='guest'||selected.q.status!=='pending'||typeof binding.yes!=='boolean'||binding.yes&&!this._gate(selected.r.peer).available||selected.q.expires<=this.now())return false;
+  const selected=this._selected(binding);if(!selected||selected.r.role!=='guest'||selected.q.status!=='pending'||typeof binding.yes!=='boolean'||binding.yes&&(!this.autoTransferEnabled||!this._gate(selected.r.peer).available)||selected.q.expires<=this.now())return false;
   const {r,q}=selected;q.choice=binding.yes;q.status=binding.yes?'accepting':'declined';q.reason=binding.yes?'等待房主确认本次授权':'客机拒绝本次补传';this._emit(r,q);
   let attempts=0;const deliver=()=>{if(!this._actual(r)||r.q!==q||q.cancelRequested||!['accepting','declined'].includes(q.status)||q.expires<=this.now())return;try{this._send(r,'decision',{...this._bound(r,q),yes:binding.yes});}catch{this._finish(r,q,'disconnected','授权连接已结束',false).catch(()=>{});return;}if(++attempts<5)q.retryTimer=this.setTimer(deliver,2000);};deliver();return true;
  }
  cancel(binding){if(!exact(binding,['session','peerSession','proposal','digest','peerId','scope']))return Promise.resolve(false);const selected=this._selected(binding);if(!selected||selected.q.fileCommitted||irreversible.has(selected.q.fileState?.status))return Promise.resolve(false);return this._finish(selected.r,selected.q,'cancelled','用户结束本次补传授权',true).then(()=>true);}
  retry(binding){if(this.isRequestPending()||!exact(binding,['session','peerSession','proposal','digest','peerId','scope']))return Promise.resolve(false);const selected=this._selected(binding);if(!selected||selected.r.role!=='host'||!terminal.has(selected.q.status)||selected.q.fileCommitted||irreversible.has(selected.q.fileState?.status))return Promise.resolve(false);return this._track(this._propose(selected.r,selected.q.batch.extensions.map(e=>e.name),true));}
- availability(){const gate=this._gate();if(this.closed)return {available:false,reason:'补传控制器已结束',peers:[]};const peers=[...this.peers.values()].filter(r=>this._actual(r)&&r.remote).map(r=>r.peer);return {available:gate.available&&peers.length>0,reason:gate.available?(peers.length?'':'补传需要双方升级内核并完全重启无名杀'):gate.reason,peers};}
+ availability(){const gate=this._gate();if(this.closed)return {available:false,reason:'补传控制器已结束',peers:[]};const peers=[...this.peers.values()].filter(r=>this._actual(r)&&r.remote).map(r=>r.peer);return {available:this.autoTransferEnabled&&gate.available&&peers.length>0,reason:!this.autoTransferEnabled?'本机已关闭扩展补传；可自行复制扩展后重新体检。':gate.available?(peers.length?'':'补传需要双方升级内核并完全重启无名杀'):gate.reason,peers};}
  busy(){return this.isRequestPending()||this.operations.size>0||this.pendingCleanup>0||[...this.peers.values()].some(r=>r.collecting||r.diskPending||r.queueDepth||r.q&&(active.has(r.q.status)||r.q.fileCommitted||irreversible.has(r.q.fileState?.status)));}
  canStart(){return !this.busy();}
  snapshot(){const proposals=this.history.map(x=>clone(x.proposal)),files=this.history.filter(x=>x.file).map(x=>clone(x.file));for(const r of this.peers.values())if(r.q){proposals.push(this._view(r,r.q));if(r.q.fileState)files.push({...clone(r.q.fileState),...this._binding(r,r.q),...this._display(r,r.q)});}return {proposals,files,...this.availability(),busy:this.busy(),requestBusy:this.requestBusy(),resources:{peers:this.peers.size,history:this.history.length,pendingCleanup:this.pendingCleanup,pendingOperations:[...this.peers.values()].reduce((n,r)=>n+r.queueDepth+r.diskPending+Number(!!r.collecting),0)}};}

@@ -56,6 +56,7 @@ const React = {
       if (!Object.is(next, slot.value)) { slot.value = next; instance.scheduled = true }
     }]
   },
+  useRef(initial) { return this.useState(() => ({ current: initial }))[0] },
   useEffect(effect, deps) {
     const instance = current, index = instance.cursor++
     const previous = instance.hooks[index]

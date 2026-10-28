@@ -9,14 +9,14 @@ const names=['Fixture'],contents=new Map([['extension.js',Buffer.from('export de
 const batch=core.normalize({extensions:[{name:'Fixture',files:[...contents].map(([path,bytes])=>({path,size:bytes.length,sha256:sha(bytes)}))}]});
 const diff={verification:'verified',inventoryVerified:true,exts:{missing:names,changed:[],disabled:[],needsFiles:names}};
 const binding=row=>Object.fromEntries(['session','peerSession','proposal','digest','peerId','scope'].map(key=>[key,clone(row[key])]));
-async function world({sourceGate,chunkGate,collectGate}={}){
+async function world({sourceGate,chunkGate,collectGate,checkBatch=()=>{}}={}){
  const f=fixture();let h,g,p,now=1700000000000,serial=0;const events=[],counts={source:0,receiver:0,chunks:0,commits:0,aborts:0,closedSources:0,collects:0},nodes={};
  try{p=await f.pair({hostOptions:{validateControl:frame=>h?.validate(p.host,frame)===true,onControl:frame=>h.control(p.host,frame)},guestOptions:{validateControl:frame=>g?.validate(p.guest,frame)===true,onControl:frame=>g.control(p.guest,frame)}});
   const newId=()=> (++serial).toString(16).padStart(32,'0');
   for(const role of ['host','guest']){
    const registry=role==='host'?p.hs:p.gs,peer=role==='host'?p.hostRecord.peerId:p.guestRecord.peerId,owner=role==='host'?p.host:p.guest,scope={carrierSessionId:'carrier-'+role,partyEpoch:0},gate={available:true,reason:''};
    const options={sessions:registry,getRole:()=>role,getScope:()=>scope,canTransfer:()=>gate,now:()=>now,newId,
-    collect:async()=>{counts.collects++;if(collectGate)await collectGate.promise;return clone(batch);},normalize:core.normalize,digest:core.manifestDigest,
+    collect:async()=>{counts.collects++;if(collectGate)await collectGate.promise;return clone(batch);},normalize:core.normalize,checkBatch:value=>checkBatch(role,value),digest:core.manifestDigest,
     createChannel:options=>new Channel({...options,now:()=>now,timers:{setTimeout:(...args)=>setTimeout(...args),clearTimeout:(...args)=>clearTimeout(...args)}}),
     source:async(grant,context)=>{counts.source++;assert.equal(context.owner,owner);assert.equal(context.isAuthorized(),true);if(sourceGate)await sourceGate.promise;const files=grant.batch.extensions.flatMap(ext=>ext.files);return {read(index,offset,length){assert.equal(context.isAuthorized(),true);return Buffer.from(contents.get(files[index].path).subarray(offset,offset+length));},close(){counts.closedSources++;}};},
     receiver:async(grant,context)=>{counts.receiver++;assert.equal(context.owner,owner);assert.equal(context.isAuthorized(),true);const files=grant.batch.extensions.flatMap(ext=>ext.files),received=files.map(()=>Buffer.alloc(0));let aborted=false;
@@ -38,6 +38,15 @@ await test('new capability handshakes reuse the exact existing encrypted PC/link
 });
 await test('missing files produce metadata only until the actual guest explicitly agrees',async()=>{
  const w=await world();try{await w.offer();assert.equal(w.counts.collects,1);assert.equal(w.counts.receiver,0);assert.equal(w.counts.source,0);assert.equal(w.counts.chunks,0);assert.equal(w.h.canStart(),false);assert.equal(w.g.canStart(),false);assert.equal(w.g.snapshot().proposals.at(-1).batch.count,2);}finally{await w.close();}
+});
+await test('a guest local batch policy rejects a valid wire offer explicitly and immediately clears host busy',async()=>{
+ const w=await world({checkBatch:(role,value)=>{assert.equal(value.total,batch.total);if(role==='guest')throw Error('local capacity policy');}});try{assert.equal(await w.h.autoOffer(w.nodes.host.peer,diff),true);await until(()=>w.h.snapshot().proposals.at(-1)?.status==='cancelled');await drain();assert.equal(w.g.snapshot().proposals.length,0);assert.equal(w.h.busy(),false);assert.equal(w.g.busy(),false);assert.equal(w.counts.receiver,0);assert.equal(w.counts.source,0);assert.equal(w.p.host.snapshot().negotiations,1);assert.equal(w.p.guest.snapshot().negotiations,1);}finally{await w.close();}
+});
+await test('a disabled guest declines valid wire metadata without invoking its local batch policy',async()=>{
+ let checked=0;const w=await world({checkBatch:role=>{if(role==='guest'){checked++;throw Error('local capacity policy');}}});try{await w.g.setEnabled(false);assert.equal(await w.h.autoOffer(w.nodes.host.peer,diff),true);await until(()=>w.h.snapshot().proposals.at(-1)?.status==='cancelled');await drain();assert.equal(checked,0);assert.equal(w.g.snapshot().proposals.length,0);assert.equal(w.h.busy(),false);assert.equal(w.counts.receiver,0);assert.equal(w.counts.source,0);}finally{await w.close();}
+});
+await test('a host local batch policy remains mandatory before any offer is sent',async()=>{
+ const w=await world({checkBatch:role=>{if(role==='host')throw Error('local capacity policy');}});try{await assert.rejects(w.h.autoOffer(w.nodes.host.peer,diff),/local capacity policy/);await drain();assert.equal(w.h.snapshot().proposals.length,0);assert.equal(w.g.snapshot().proposals.length,0);assert.equal(w.h.busy(),false);assert.equal(w.counts.receiver,0);assert.equal(w.counts.source,0);}finally{await w.close();}
 });
 await test('consent automatically starts the existing v2 chunk channel and commits the complete verified batch',async()=>{
  const w=await world();try{const choice=await w.offer(),before=[w.p.host.actualIdentity(),w.p.guest.actualIdentity()];assert.equal(w.g.decide({...choice,yes:true}),true);await until(()=>w.g.snapshot().files.at(-1)?.status==='committed_activation_required','full batch committed without implicit activation');await drain();assert.equal(w.counts.receiver,1);assert.equal(w.counts.source,1);assert.equal(w.counts.commits,1);assert.equal(w.counts.chunks,2);const progress=w.events.filter(e=>e.role==='guest'&&e.type==='batch_files'&&e.data.status==='receiving').map(e=>e.data.received);assert.ok(progress.some(n=>n>0),'receiving UI reports actual verified bytes before commit');assert.equal(progress.at(-1),batch.total);assert.deepEqual(progress,[...progress].sort((a,b)=>a-b));assert.deepEqual([w.p.host.actualIdentity(),w.p.guest.actualIdentity()],before);assert.equal(w.g.snapshot().files.at(-1).received,batch.total);assert.equal(w.events.some(event=>event.type==='batch_reload'),false);assert.equal(w.g.canStart(),false);}finally{await w.close();}

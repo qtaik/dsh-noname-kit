@@ -72,7 +72,7 @@
           - id: anchor-turn
             name: dsh-noname-kit/presets/noname-dev/anchor-turn.mjs
             config:
-              text: 这一轮是无名杀开发模式的锚定轮,工具尚未开放;从下一轮起工具开放。
+              text: 这是无名杀开发模式的初始化轮。本轮没有需要执行的业务任务，也没有可调用工具；无需检查环境、查询状态或执行操作。请用普通文字确认已就绪，然后结束本轮。下一轮再处理用户的实际需求，并使用届时提供的工具。
 
           - id: tool-bash
             name: '@deepseek-ai/dsh-tool-bash'

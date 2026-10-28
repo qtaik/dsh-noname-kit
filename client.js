@@ -652,7 +652,7 @@ window.__ModuleLoader__.load({
         pileJoin: false, pileRows: [{ suit: 'spade', point: '' }],
         style: 'classic', writeMode: 'auto',
         reference: '', busy: false, err: '',
-        extList: [], extLoading: false, currentInfo: '',
+        extList: [], extLoading: false, extError: '', currentInfo: '',
         goal: 'create', entryId: '', entryList: [], entryLoading: false, editNotes: '', addSkills: false,
         entrySkills: [], entrySkillsLoading: false, pickedSkills: [],
         // 🎲 新玩法(自定义模式)专属字段
@@ -698,17 +698,28 @@ window.__ModuleLoader__.load({
         }, function () { return folder + '-' + Date.now().toString().slice(-4) });
       };
 
+      var loadExtensionFolders = function () {
+        patch({ extLoading: true, extError: '' });
+        // Package selection lists directories directly; unreadable history must not hide other packages.
+        Promise.resolve().then(function () { return fetch('/noname-kit-api/settings?allExtensions=1') }).then(function (r) {
+          return r.json().then(function (body) {
+            if (r.ok === false || body.error) throw new Error(body.error || '扩展包列表请求失败');
+            if (!body.nonameDir) throw new Error('请先在设置中保存有效的游戏目录');
+            if (!Array.isArray(body.extensions) || body.extensions.some(function (name) { return typeof name !== 'string' })) throw new Error('扩展包列表响应格式不正确');
+            return body.extensions;
+          });
+        }).then(function (folders) {
+          setForm(function (prev) { return Object.assign({}, prev, { extLoading: false, extList: folders, extError: '' }) });
+        }).catch(function (error) {
+          setForm(function (prev) { return Object.assign({}, prev, { extLoading: false, extList: [], extError: '扩展包列表获取失败：' + (error && error.message || String(error)) }) });
+        });
+      };
       var switchMode = function (mode) {
         // 🎲 mode 类型两种目标都支持:新建 = 从零生成模式;编辑 = 修改已生成的模式包
         var goal = (form.type === 'mode' && mode === 'edit') ? 'edit' : 'create';
         patch({ mode: mode, goal: goal, err: '', currentInfo: '', usedIds: [], notes: [],
           entryId: '', entryList: [], entrySkills: [], pickedSkills: [], editNotes: '', addSkills: false });
-        if (mode === 'edit' && form.extList.length === 0 && !form.extLoading) {
-          patch({ extLoading: true });
-          fetch('/noname-kit-api/history').then(function (r) { return r.json() }).then(function (body) {
-            setForm(function (prev) { return Object.assign({}, prev, { extLoading: false, extList: (body.extensions || []).map(function (x) { return x.folder }) }) });
-          }, function () { setForm(function (prev) { return Object.assign({}, prev, { extLoading: false, err: '扩展包列表获取失败' }) }) });
-        }
+        if (mode === 'edit' && form.extList.length === 0 && !form.extLoading) loadExtensionFolders();
       };
 
       // 「编辑已有武将/卡牌」:列出目标包内条目(锚点/无锚老包通吃)。
@@ -1125,7 +1136,9 @@ window.__ModuleLoader__.load({
           : null,
         isEdit
           ? [e('label', 'nnk-label', '选择已有扩展包' + (form.extLoading ? '(加载中…)' : '')),
-             form.extList.length === 0 && !form.extLoading ? e('div', 'nnk-hint', '没有可选的扩展包(游戏 extension 目录为空或未配置游戏路径)') : null,
+             form.extError ? h('div', { className: 'nnk-err', role: 'alert' }, form.extError,
+               h('button', { type: 'button', className: 'nnk-smallbtn', disabled: form.extLoading, onClick: loadExtensionFolders }, form.extLoading ? '加载中…' : '重新加载')) : null,
+             form.extList.length === 0 && !form.extLoading && !form.extError ? e('div', 'nnk-hint', '游戏 extension 目录中没有可选的扩展包') : null,
              h('select', { className: 'nnk-input', value: form.folder, onChange: function (ev) { pickExisting(ev.target.value) } },
                [h('option', { key: '', value: '' }, '— 选择扩展包 —')].concat(form.extList.map(function (f) {
                  return h('option', { key: f, value: f }, f)
@@ -1254,8 +1267,9 @@ window.__ModuleLoader__.load({
 
     // ── 历史面板 ────────────────────────────────────────────────
     function HistoryPanel() {
-      var state = React.useState({ loading: true, extensions: [], detail: null, msg: '' });
+      var state = React.useState({ loading: true, extensions: [], detail: null, detailError: '', msg: '' });
       var data = state[0], setData = state[1];
+      var detailRequest = React.useRef(0);
       var load = function () {
         fetch('/noname-kit-api/history').then(function (r) { return r.json() }).then(function (body) {
           setData({ loading: false, extensions: body.extensions || [], detail: null, msg: body.error || '' })
@@ -1263,10 +1277,15 @@ window.__ModuleLoader__.load({
       };
       React.useEffect(function () { load() }, []);
       var openDetail = function (folder) {
-        fetch('/noname-kit-api/history?folder=' + encodeURIComponent(folder)).then(function (r) { return r.json() }).then(function (body) {
-          setData(function (prev) { return Object.assign({}, prev, { detail: body }) })
-        }, function () {
-          setData(function (prev) { return Object.assign({}, prev, { msg: '读取备份详情失败(历史服务不可用)' }) });
+        var request = ++detailRequest.current;
+        Promise.resolve().then(function () { return fetch('/noname-kit-api/history?folder=' + encodeURIComponent(folder)) }).then(function (r) {
+          return r.json().then(function (body) { if (r.ok === false || body.error) throw new Error(body.error || '历史请求失败'); return body; });
+        }).then(function (body) {
+          if (request !== detailRequest.current) return;
+          setData(function (prev) { return Object.assign({}, prev, { detail: body, detailError: '' }) });
+        }).catch(function (error) {
+          if (request !== detailRequest.current) return;
+          setData(function (prev) { return Object.assign({}, prev, { detail: null, detailError: '读取备份详情失败：' + (error && error.message || String(error)) }) });
         });
       };
       var rollback = function (folder, backup) {
@@ -1309,6 +1328,7 @@ window.__ModuleLoader__.load({
 
       return h('div', { className: 'nnk-history' },
         data.msg ? e('div', 'nnk-ok', data.msg) : null,
+        data.detailError ? h('div', { className: 'nnk-err', role: 'alert' }, data.detailError) : null,
         // 详情卡片放列表上方:点「备份/注意点」后立即可见(列表很长时沉底等于没反应)
         data.detail ? (function () {
           var detail = data.detail, backups = detail.backups || [];
@@ -1343,12 +1363,13 @@ window.__ModuleLoader__.load({
             return h('div', { key: ext.folder, className: 'nnk-taskrow' },
               h('div', { className: 'nnk-history-heading' },
                 h('b', null, ext.folder),
-                h('span', { className: 'nnk-badge', style: { marginLeft: '8px' } }, ext.taskCount + ' 个任务'),
-                h('span', { className: 'nnk-badge' }, '累计 ' + ext.totalRounds + ' 轮'),
+                h('span', { className: 'nnk-badge', style: { marginLeft: '8px' } }, ext.error ? '历史不可读取' : ext.taskCount + ' 个任务'),
+                ext.error ? null : h('span', { className: 'nnk-badge' }, '累计 ' + ext.totalRounds + ' 轮'),
                 ext.backupCount ? h('span', { className: 'nnk-badge' }, ext.backupCount + ' 备份') : null
               ),
               ext.lastTask ? e('div', 'nnk-taskmeta', '最近: [' + (ext.lastTask.kind === 'card' ? '卡牌' : ext.lastTask.kind === 'mode' ? '模式' : '武将') + '] ' + ext.lastTask.summary + ' · ' + fmt(ext.lastTask.at)) : null,
-              h('button', { className: 'nnk-copy', onClick: function () { openDetail(ext.folder) } }, '📦 备份/注意点')
+              ext.error ? h('div', { className: 'nnk-err', role: 'alert' }, ext.error) : null,
+              h('button', { className: 'nnk-copy', disabled: !!ext.error, onClick: function () { openDetail(ext.folder) } }, '📦 备份/注意点')
             );
           })
         )
@@ -2214,7 +2235,25 @@ window.__ModuleLoader__.load({
             } }, '保存补传上限')),
           e('div', 'nnk-hint', '1024 MiB = 1 GiB；修改仅用于新提议，不延长当前授权。'),
           known ? e('div', 'nnk-hint', '当前已保存：' + configured + ' MiB。') : null,
-          reason ? e('div', 'nnk-hint', reason) : draft && !valid ? e('div', 'nnk-hint', '请输入 1–1024 的整数（MiB）。') : null);
+          reason ? e('div', 'nnk-hint', reason) : draft && !valid ? e('div', 'nnk-hint', '请输入 1–1024 的整数（MiB）。') : null,
+          renderAutoTransferSwitch());
+      }
+
+      function renderAutoTransferSwitch() {
+        var state = bridge.state || {}, value = bridge.cfg && bridge.cfg.autoTransfer;
+        var known = typeof value === 'boolean';
+        var disabled = !bridgeOnline || !known || !!state.autoTransferSaving;
+        return h('div', { 'data-nnk-auto-transfer': true, style: { marginTop: '12px' } },
+          e('div', 'nnk-label', '自动补传'),
+          known ? e('div', 'nnk-hint', '本机已' + (value ? '开启' : '关闭') + '自动补传。') : null,
+          h('button', { className: 'nnk-copy', type: 'button', disabled: disabled, 'aria-pressed': known ? value : undefined, onClick: function () {
+            if (disabled) return;
+            setNote('正在保存自动补传开关，等待内核确认。');
+            sendCmd('set_config', { key: 'autoTransfer', value: !value });
+          } }, state.autoTransferSaving ? '正在保存…' : value === false ? '开启自动补传' : '关闭自动补传'),
+          e('div', 'nnk-hint', '仅控制本机。关闭后停止补传，可自行安装相同扩展，再重新体检；需要补传时重新开启。'),
+          !bridgeOnline ? e('div', 'nnk-hint', '内核上线后可保存。') : !known ? e('div', 'nnk-hint', '请升级本机内核并重启无名杀后设置。') : null,
+          value !== false ? e('div', 'nnk-hint', '关闭会终止尚未提交的批次；已提交的文件或待恢复的批次仍须按结果提示处理。') : null);
       }
 
       function renderBatchProposals() {
@@ -2374,10 +2413,11 @@ window.__ModuleLoader__.load({
         var availabilityHint = unavailable && unavailableReason ? e('div', 'nnk-hint', unavailableReason) : null;
         var inventorySource = bridge.state && bridge.state.manifestInventorySource;
         var inventoryHint = typeof inventorySource === 'string' && inventorySource ? e('div', 'nnk-hint', inventorySource) : null;
-        var transferReady = bridge.state && bridge.state.transferAvailable === true;
+        var autoTransferOff = bridge.cfg && bridge.cfg.autoTransfer === false;
+        var transferReady = !autoTransferOff && bridge.state && bridge.state.transferAvailable === true;
         var transferReason = !transferReady && bridge.state && typeof bridge.state.transferUnavailableReason === 'string' ? bridge.state.transferUnavailableReason : '';
         if (transferReason && /双方.*升级/.test(transferReason)) transferReason += '；正常联机和包体检仍可使用。';
-        var transferHint = transferReady ? '缺包或同名文件差异会自动生成补传请求，客机逐批同意后开始接收。' : '补传当前不可用，双方仍可自行安装相同版本的扩展。';
+        var transferHint = autoTransferOff ? '本机已关闭自动补传。请双方自行安装相同版本的扩展，完全退出并重启无名杀后重新体检。' : transferReady ? '缺包或同名文件差异会自动生成补传请求，客机逐批同意后开始接收。' : '补传当前不可用，双方仍可自行安装相同版本的扩展。';
         var manualTransfer = hostFlow && bridge.role !== 'guest' ? (function () {
           var state = bridge.state || {}, scope = state.transferScope || state.manifestScope;
           var validScope = scope && !Array.isArray(scope) && Object.keys(scope).length === 2 && typeof scope.carrierSessionId === 'string' && scope.carrierSessionId.length > 0 && scope.carrierSessionId.length <= 160 && !/[\x00-\x1f\x7f]/.test(scope.carrierSessionId) && Number.isSafeInteger(scope.partyEpoch) && scope.partyEpoch >= 0 && scope.partyEpoch <= 1000000000;
@@ -2397,6 +2437,7 @@ window.__ModuleLoader__.load({
           var reason = '';
           if (bridge.online !== true) reason = '内核离线，请先连接当前插件房间。';
           else if (bridge.role !== 'host' || !validScope) reason = '需要房主在当前插件房间中操作。';
+          else if (autoTransferOff) reason = '本机已关闭自动补传，请先开启后再重新传输。';
           else if (playing) reason = '请先返回插件房间并关闭游戏窗口，再重新传输。';
           else if (finalRow) reason = finalRow.status === 'unknown' ? '提交结果待确认，请先核对客机结果，暂不能重新传输。' : finalRow.status === 'recovery_required' ? '文件事务需要先完成恢复，暂不能重新传输。' : '文件已提交，请按客机提示完全退出并重启无名杀，再重新体检；无需再次下载。';
           else if (state.transferRequestPending) reason = '正在重新体检并申请补传，请等待本次结果。';
@@ -2629,7 +2670,10 @@ window.__ModuleLoader__.load({
          * 当前模式且内核报了真容量(如房间设置改了人数)时用真值;客人=房间真值 */
         var sel = isRoomHost ? roomMode : (d.mode || roomMode);
         var cap = (d.mode === sel && d.capacity) ? d.capacity : (caps[sel] || MODE_MAX[sel] || 8);
-        return { data: d, list: list, caps: caps, cap: cap, has: !!ev0 };
+        var failed = Boolean(onlineRound && (onlineRound.failed === true || onlineRound.phase === 'failed'));
+        var failure = failed && typeof onlineRound.error === 'string' ? onlineRound.error : '';
+        var loadFailure = failed && ['loading','awaiting-bind','seating','waiting'].indexOf(onlineRound.failedPhase) >= 0;
+        return { data: d, list: list, caps: caps, cap: cap, has: !!ev0, failed: failed, failure: failure, failureTitle: loadFailure ? '载入未完成' : '本局已中断', initialRetry: failed && onlineRound.initialRetryAllowed === true };
       }
 
       /* 房间大厅按房号、座位和操作区排列，客人只读；头像按名字哈希取色。辅助方法使用函数声明，供前面的渲染调用。 */
@@ -2654,13 +2698,13 @@ window.__ModuleLoader__.load({
         var seated = mList.filter(function (mm) { return mm && !mm.queued; });
         var queuedList = mList.filter(function (mm) { return mm && mm.queued; });
         var empties = Math.max(0, cap - seated.length);
-        var hostEntered = mList.some(function (mm) { return mm && mm.role === 'host' && mm.entered; });
+        var hostEntered = !brief.failed && mList.some(function (mm) { return mm && mm.role === 'host' && mm.entered; });
         var seats = seated.map(function (mm, i) {
           var isHost = mm.role === 'host';
           return h('div', { key: 'm' + i, className: 'nnk-seat' + (isHost ? ' nnk-seat-host' : '') },
             seatAvatar(sName(mm)),
             h('div', { className: 'nnk-seat-name', title: sName(mm) }, isHost ? e('span', 'nnk-ui-text', '👑 ') : null, sName(mm)),
-            e('div', 'nnk-seat-state', mm.entered ? '✅ 已进入' : '⏳ 等待载入'));
+            e('div', 'nnk-seat-state', brief.failed ? '⚠️ ' + brief.failureTitle : mm.entered ? '✅ 已进入' : '⏳ 等待载入'));
         }).concat(Array.apply(null, Array(empties)).map(function (_, i) {
           return h('div', { key: 'e' + i, className: 'nnk-seat nnk-seat-empty' },
             h('div', { className: 'nnk-seat-avatar nnk-ui-text' }, '🪑'),
@@ -2669,7 +2713,7 @@ window.__ModuleLoader__.load({
         return h(ModalFrame, { title: 'NONAME-KIT 插件房间', returnFocusRef: roomOpenerRef, onClose: function () { setRoomPopupOpen(false) } },
             h('div', { className: 'nnk-rm-head' },
               e('div', 'nnk-modal-title', '🏛 NONAME-KIT 插件房间'),
-              e('span', 'nnk-badge', !brief.has ? '同步中…' : (hostEntered ? '✅ 游戏房间已建好' : seated.length + '/' + cap + ' 人在房'))),
+              e('span', 'nnk-badge', brief.failed ? '⚠️ ' + brief.failureTitle : !brief.has ? '同步中…' : (hostEntered ? '✅ 游戏房间已建好' : seated.length + '/' + cap + ' 人在房'))),
             /* 房号牌:大号等宽 + 一键复制 */
             h('div', { className: 'nnk-rm-code' },
               e('span', 'nnk-rm-codelabel', roomCode ? '房号' : '加入方式'),
@@ -2680,6 +2724,9 @@ window.__ModuleLoader__.load({
             brief.has
               ? h('div', { className: 'nnk-rm-seats' }, seats)
               : e('div', 'nnk-hint', '正在同步房间信息…一秒内就位。'),
+            brief.failed ? h('div', { className: 'nnk-err', 'data-nnk-round-failure': true },
+              e('div', null, brief.failure || brief.failureTitle + '，请查看本次错误记录。'),
+              e('div', 'nnk-hint', '先处理本次错误并核对包体检；仍有效的原连接继续保留。' + (onlineNext && onlineNext.retryAvailable ? '本次续局请使用明确重试入口。' : brief.initialRetry ? '旧窗口回收、文件状态确认后，可由房主再次点击载入到游戏。' : '本局不能通过首次载入恢复；没有可用重试入口时，请结束原会话后重新建房。'))) : null,
             queuedList.length ? h('div', {},
               e('div', 'nnk-label', '排队等待(' + queuedList.length + ' 人)'),
               h('div', { className: 'nnk-rm-queue' }, queuedList.map(function (mm, i) {
@@ -2699,12 +2746,12 @@ window.__ModuleLoader__.load({
                         h('input', { type: 'radio', name: onlineScope + '-room-mode', checked: roomMode === m.id, onChange: function () { setRoomMode(m.id); sendCmd('set_mode', { mode: m.id }); } }),
                         m.name + '(最多 ' + capFor(m.id) + ' 人)');
                     })),
-                  h('button', { className: 'nnk-submit', disabled: onlineRound && ['playing','settling','settled','returning','preparing','loading','seating'].indexOf(onlineRound.phase) >= 0 || onlineNext && onlineNext.retryAvailable, onClick: function () { sendCmd('restart_room', { mode: roomMode }); setNote('正在按所选模式载入游戏，原连接保持…'); } }, '🚀 载入到游戏(按所选模式)'),
+                  h('button', { className: 'nnk-submit', disabled: brief.failed && !brief.initialRetry || onlineRound && ['playing','settling','settled','returning','preparing','loading','seating'].indexOf(onlineRound.phase) >= 0 || onlineNext && onlineNext.retryAvailable, onClick: function () { sendCmd('restart_room', { mode: roomMode }); setNote('正在按所选模式载入游戏，原连接保持…'); } }, '🚀 载入到游戏(按所选模式)'),
                   onlineNext && onlineNext.retryAvailable ? h('button', { className: 'nnk-copy', onClick: function () { sendCmd('retry_round', {}); setNote('正在明确重试本次新局载入；原连接保持。'); } }, '明确重试本次载入(一次)') : null,
                   e('div', 'nnk-hint', '结算后点击“返回插件房间”。在这里调整模式，再点“载入到游戏”；客人自动跟随，原连接保持。'),
                   /* 邀请码列表常驻这里:码随时可复制、回执码随时可粘,不依赖弹窗 */
                   roomCode || bridge.state && bridge.state.lobbyOpen === true ? renderInviteCard() : null)
-                : e('div', 'nnk-hint', '这里是客机的插件房间。先核对包体检；模式与载入由房主操作，他点「载入到游戏」后，你会自动跟着进房。')),
+                : e('div', 'nnk-hint', brief.failed ? brief.failureTitle + '。请先核对上方错误、包体检和文件恢复状态；由房主按可用入口操作。' : '这里是客机的插件房间。先核对包体检；模式与载入由房主操作，他点「载入到游戏」后，你会自动跟着进房。')),
             renderManifestCard(evs, isRoomHost, true),
             renderBatchProposals(),
             e('div', 'nnk-hint', '解散或退出会结束当前联机会话并关闭原连接；下次联机需重新加入。'),
@@ -2738,7 +2785,9 @@ window.__ModuleLoader__.load({
                 kernel.state === 'missing' ? e('div', 'nnk-hint', '内核未安装,点下面按钮安装。')
                   : kernel.state === 'stale' ? e('div', 'nnk-hint', kernel.error || '插件更新过,内核也该升级了。')
                     : e('div', 'nnk-ok', '✅ 内核已安装' + (bridge.kernelVersion ? '(v' + bridge.kernelVersion + ')' : '')),
-                bridge.state && bridge.state.transferAvailable === true
+                bridge.cfg && bridge.cfg.autoTransfer === false
+                  ? e('div', 'nnk-hint', '本机已关闭自动补传，可自行安装扩展后重新体检。')
+                  : bridge.state && bridge.state.transferAvailable === true
                   ? e('div', 'nnk-ok', '自动补传已就绪；客机逐批确认后接收并更新扩展，成功后自动启用，完整重启无名杀后生效。')
                   : status.runtimeStatus === 'restart_required'
                   ? e('div', 'nnk-err', '⚠️ 内核状态尚未确认：运行内核或磁盘内容不是当前版本，或旧版补传停用处理尚未就绪。请升级内核并完全重启游戏。')
@@ -3060,8 +3109,9 @@ window.__ModuleLoader__.load({
     function TaskListContent(props) {
       var sessions = props && props.sessions;
       var uiSession = props && props.uiSession;
-      var data = React.useState({ list: [], loading: false, expanded: null, fbFor: null, issue: '', busy: false, err: '', msg: '' });
+      var data = React.useState({ list: [], loading: false, expanded: null, fbFor: null, issue: '', busy: false, err: '', msg: '', imageFor: null, imageSource: '', imageName: '', imageNameEdited: false, imageBusy: false, imageErr: '' });
       var box = data[0], setBox = data[1];
+      var imageRequest = React.useRef(null);
       var setD = function (patch) { setBox(function (prev) { return Object.assign({}, prev, patch) }) };
 
       var load = function () {
@@ -3084,20 +3134,39 @@ window.__ModuleLoader__.load({
           load();
         }, function (error) { setD({ err: error && error.message || String(error) }) });
       };
+      var cleanImageSource = function (value) {
+        var source = String(value || '').trim();
+        if ((source[0] === '"' && source[source.length - 1] === '"') || (source[0] === "'" && source[source.length - 1] === "'")) source = source.slice(1, -1).trim();
+        return source;
+      };
       var addImage = function (task) {
-        var p = window.prompt('图片本地路径(将复制进扩展包 image/ 目录):', '');
-        if (!p || !p.trim()) return;
-        var base = p.trim().split(/[\\/]/).pop() || '';
-        var name = window.prompt('包内保存的文件名(武将立绘/卡面图建议用「内部ID.jpg」,AI 预留的路径以交付说明为准):', base);
-        if (!name || !name.trim()) return;
-        fetch('/noname-kit-api/tasks/image', {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ taskId: task.id, folder: task.folder, source: p.trim(), fileName: name.trim() }),
+        if (imageRequest.current || box.imageFor === task.id) return;
+        setD({ imageFor: task.id, imageSource: '', imageName: '', imageNameEdited: false, imageErr: '', err: '', msg: '' });
+      };
+      var submitImage = function (task, ev) {
+        if (ev) ev.preventDefault();
+        if (imageRequest.current) return;
+        var source = cleanImageSource(box.imageSource);
+        if (!source) { setD({ imageErr: '请输入图片的本地路径' }); return }
+        var fileName = box.imageName.trim() || source.split(/[\\/]/).pop() || '';
+        if (!fileName) { setD({ imageErr: '请输入包内保存的图片文件名' }); return }
+        var request = { taskId: task.id };
+        imageRequest.current = request;
+        setD({ imageBusy: true, imageErr: '', err: '', msg: '' });
+        Promise.resolve().then(function () {
+          return fetch('/noname-kit-api/tasks/image', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ taskId: task.id, folder: task.folder, source: source, fileName: fileName }),
+          });
         }).then(function (r) { return r.json() }).then(function (b) {
-          if (!b.ok) { setD({ err: b.error || '补图失败' }); return }
-          setD({ msg: '📷 「' + task.id + '」图片已复制进扩展包: ' + (b.copied || []).join(', ') + (b.autoCompleted ? ' —— 🎉 全部确认+图片配音就位,自动完成并归档!' : '') });
+          if (!b.ok) throw new Error(b.error || '补图失败');
+          setD({ imageBusy: false, imageFor: null, imageSource: '', imageName: '', imageNameEdited: false, imageErr: '', msg: '📷 「' + task.id + '」图片已复制进扩展包: ' + (b.copied || []).join(', ') + (b.autoCompleted ? ' —— 🎉 全部确认+图片配音就位,自动完成并归档!' : '') });
           load();
-        }, function (error) { setD({ err: error && error.message || String(error) }) });
+        }).catch(function (error) {
+          setD({ imageBusy: false, imageErr: error && error.message || String(error) });
+        }).finally(function () {
+          if (imageRequest.current === request) imageRequest.current = null;
+        });
       };
       /** 补配音:源路径 → 目标(skill/…或die/…)→ 技能配音再问归属技能。
        * 与补图同语义:复制进包 + 登记任务一步到位,补齐触发自动完成。 */
@@ -3173,11 +3242,11 @@ window.__ModuleLoader__.load({
         if (!task.image && task.type !== 'mode' && !task.target) warn.push('未登记图片');   /* 编辑任务不涉及图片(与浮窗展示逻辑同口径) */
         if (skills.length && confirmed < skills.length) warn.push('技能确认 ' + confirmed + '/' + skills.length);
         if (audioNeed(task)) warn.push('有已登记未交付的配音');
-        if (warn.length && !window.confirm('「' + task.id + '」' + warn.join('、') + '。\n确定仍要标记完成并归档吗?')) return;
+        if (warn.length && !window.confirm('「' + task.id + '」' + warn.join('、') + '。\n确定标记整个任务完成、同时确认全部子项并归档吗?')) return;
         fetch('/noname-kit-api/tasks/complete', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           /* 任务完成时同时提交 notes，将技能写入过程中登记的引擎级注意点保存到 history.notes。 */
-          body: JSON.stringify({ taskId: task.id, notes: task.notes || [], summary: task.summary || '手动标记完成' + (skills.length ? '(确认 ' + confirmed + '/' + skills.length + ')' : '') }),
+          body: JSON.stringify({ taskId: task.id, notes: task.notes || [], summary: task.summary || '用户手动完成并确认全部子项' }),
         }).then(function (r) { return r.json() }).then(function (body) {
           if (!body.ok) { setD({ err: body.error || '完成失败' }); return }
           load();
@@ -3238,12 +3307,32 @@ window.__ModuleLoader__.load({
           h('div', { className: 'nnk-task-actions' },
             h('button', { className: 'nnk-smallbtn', onClick: function () { setD({ expanded: expanded ? null : task.id, fbFor: null, msg: '' }) } }, expanded ? '收起' : (skills.length ? '展开技能树' : '展开')),
             !isDoneSection ? h('button', { className: 'nnk-smallbtn', onClick: function () { setD({ expanded: task.id, fbFor: fbTarget && !fbTarget.skill ? null : { id: task.id, skill: '' }, issue: '', msg: '' }) } }, '🔁 反馈') : null,
-            !isDoneSection && !task.image && !isModeTask ? h('button', { className: 'nnk-smallbtn', onClick: function () { addImage(task) } }, '📷 补图') : null,
+            !isDoneSection && !task.image && !isModeTask ? h('button', { className: 'nnk-smallbtn', disabled: box.imageBusy, onClick: function () { addImage(task) } }, '📷 补图') : null,
             !isDoneSection && audioNeed(task) ? h('button', { className: 'nnk-smallbtn', onClick: function () { addAudio(task) } }, '🔊 补配音') : null,
-            !isDoneSection ? h('button', { className: 'nnk-smallbtn', onClick: function () { markDone(task) } }, '✅ 标记完成') : null,
+            !isDoneSection ? h('button', { className: 'nnk-smallbtn', disabled: box.imageBusy && box.imageFor === task.id, onClick: function () { markDone(task) } }, '✅ 标记完成') : null,
             isDoneSection ? h('button', { className: 'nnk-smallbtn', title: '回到进行中:可补图/补配音或重新确认后再次收口' , onClick: function () { reopenTask(task) } }, '🔁 重开') : null,
-            h('button', { className: 'nnk-smallbtn nnk-danger', onClick: function () { removeTask(task) } }, '🗑 删除')
+            h('button', { className: 'nnk-smallbtn nnk-danger', disabled: box.imageBusy && box.imageFor === task.id, onClick: function () { removeTask(task) } }, '🗑 删除')
           ),
+          box.imageFor === task.id && !isDoneSection ? h('form', { className: 'nnk-card nnk-task-image', 'aria-label': '给任务' + task.id + '补图', onSubmit: function (ev) { submitImage(task, ev) } },
+            e('div', 'nnk-hint', '将本地图片复制到此扩展的 image/ 目录，并登记到任务。'),
+            h('label', { style: { display: 'block', marginTop: '8px' } },
+              e('span', 'nnk-label', '图片本地路径'),
+              h('input', { className: 'nnk-input', value: box.imageSource, disabled: box.imageBusy, autoFocus: true, placeholder: '例如 D:\\图片\\武将.png', onChange: function (ev) {
+                var patch = { imageSource: ev.target.value, imageErr: '' };
+                if (!box.imageNameEdited) patch.imageName = cleanImageSource(ev.target.value).split(/[\\/]/).pop() || '';
+                setD(patch);
+              } })
+            ),
+            h('label', { style: { display: 'block', marginTop: '8px' } },
+              e('span', 'nnk-label', '包内图片文件名'),
+              h('input', { className: 'nnk-input', value: box.imageName, disabled: box.imageBusy, placeholder: '例如 武将内部ID.jpg；留空使用原文件名', onChange: function (ev) { setD({ imageName: ev.target.value, imageNameEdited: true, imageErr: '' }) } })
+            ),
+            box.imageErr ? h('div', { className: 'nnk-err', role: 'alert' }, box.imageErr) : null,
+            h('div', { className: 'nnk-task-actions', style: { marginTop: '8px' } },
+              h('button', { type: 'submit', className: 'nnk-smallbtn', disabled: box.imageBusy }, box.imageBusy ? '正在补图…' : '保存图片'),
+              h('button', { type: 'button', className: 'nnk-smallbtn', disabled: box.imageBusy, onClick: function () { if (!imageRequest.current) setD({ imageFor: null, imageErr: '' }) } }, '取消')
+            )
+          ) : null,
           expanded && skills.length ? h('div', { className: 'nnk-task-skills', role: 'list' }, skills.map(function (s, i) {
             var badge = SKILL_BADGE[s.status] || SKILL_BADGE.open;
             return h('div', { key: s.name + '-' + i, className: 'nnk-card nnk-task-skill', role: 'listitem', style: { padding: '8px', marginBottom: '4px' } },

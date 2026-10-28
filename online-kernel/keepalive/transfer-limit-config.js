@@ -7,10 +7,11 @@ export async function saveTransferLimit({profile,value,indexedDB,storage,isCurre
 }
 // Fixed local configuration fields only; callers cannot select arbitrary game keys.
 export async function saveConfigValue({profile,key,value,indexedDB,storage,isCurrent=()=>true,timeoutMs=10000}={}){
- if(![KEY,'nnk_mqttUrl'].includes(key))throw Error('不允许修改的游戏配置字段');
+ if(![KEY,'nnk_mqttUrl','nnk_autoTransfer'].includes(key))throw Error('不允许修改的游戏配置字段');
  if(key===KEY&&!validTransferLimit(value))throw Error('补传容量须为 1 至 1024 MiB 的整数');
+ if(key==='nnk_autoTransfer'&&typeof value!=='boolean')throw Error('自动补传开关必须为布尔值');
  if(key==='nnk_mqttUrl'&&typeof value!=='string')throw Error('信令服务器地址必须是字符串');
- const label=key===KEY?'补传容量':'信令服务器地址';
+ const label=key===KEY?'补传容量':key==='nnk_autoTransfer'?'自动补传开关':'信令服务器地址';
  const config=profile?.configStorage;
  if(!plain(config)||typeof config.prefix!=='string'||!config.prefix.length||config.prefix.length>160||/[\x00-\x1f\x7f]/.test(config.prefix)||typeof config.useDB!=='boolean')throw Error('缺少当前游戏的配置存储信息');
  if(typeof isCurrent!=='function'||!Number.isSafeInteger(timeoutMs)||timeoutMs<=0||timeoutMs>60000)throw Error(label+'保存参数无效');

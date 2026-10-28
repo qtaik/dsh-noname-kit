@@ -862,7 +862,7 @@ export function apply(ctx, config) {
             version: pkg.version,
             nonameDir: active ? nonameDir : '',
             source: config.nonameDir && isValidGameDir(config.nonameDir) ? 'cordis.yml' : (current.nonameDir ? 'workshop' : 'none'),
-            extensions: active ? listExtensionFolders(nonameDir) : [],
+            extensions: active ? listExtensionFolders(nonameDir, url.searchParams.get('allExtensions') === '1' ? Infinity : 100) : [],
             bashMaxOutputBytes: clampBashMaxOutput(current.bashMaxOutputBytes) ?? BASH_MAX_OUTPUT_DEFAULT,
             updateCheck: current.updateCheck !== false,
           })
@@ -927,6 +927,11 @@ export function apply(ctx, config) {
           // 补图 = 复制文件进扩展包 image/ + 登记进任务(一步到位)
           if (!active) return json(503, { error: 'noname-kit 未配置 nonameDir(或目录无效)' })
           const body = await readBody()
+          const task = await getTask(dshHomeDir, body.taskId)
+          if (!task) return json(404, { ok: false, error: '任务不存在，请刷新任务列表后重试' })
+          if (task.status !== 'open') return json(400, { ok: false, error: '任务已完成，请先重开任务再补图' })
+          if (task.type === 'mode') return json(400, { ok: false, error: '模式任务不需要补图' })
+          if (body.folder !== task.folder) return json(400, { ok: false, error: '任务扩展目录已变化，请刷新任务列表后重试' })
           const src = String(body.source || '').trim()
           if (!src) return json(400, { ok: false, error: '图片本地路径为空' })
           const fileName = String(body.fileName || '').trim() || src.split(/[\\/]/).pop() || ''

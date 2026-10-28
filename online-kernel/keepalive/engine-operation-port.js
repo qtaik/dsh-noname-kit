@@ -1,4 +1,5 @@
 import {normalizeSignalingUrl,saveSignalingUrl} from './signaling-config.js';
+import {saveConfigValue} from './transfer-limit-config.js';
 // Operations run in the captured, real official document, never a carrier env.
 export function createEngineOperationPort(nnk,{isCurrent,scope=null,onEvent=()=>{},timeoutMs=10000}={}) {
   if (!nnk?.env || typeof isCurrent!=='function') throw Error('A current official environment and lease guard are required');
@@ -13,7 +14,7 @@ export function createEngineOperationPort(nnk,{isCurrent,scope=null,onEvent=()=>
     retiredNativePending:[...nativePending.values()].filter(value=>value.retired).length,
     timers:timers.size,scope:capturedScope,nativePendingKinds:[...nativePending.values()].map(value=>({kind:value.kind,retired:value.retired,timedOut:value.timedOut})),
     limits:'Native save/getDB work is not cancellable. A missing callback remains pending until it actually completes or the native document is destroyed.'};}
-  async function emit(name,data,op){guard(op);await onEvent(name,clone(data));guard(op);}
+  async function emit(name,data,op){guard(op);await op.onEvent(name,clone(data));guard(op);}
   function nativeWait(op,kind,start) {
     guard(op);
     const token=++nextId, record={kind,retired:false,timedOut:false};nativePending.set(token,record);
@@ -63,8 +64,9 @@ export function createEngineOperationPort(nnk,{isCurrent,scope=null,onEvent=()=>
     guard(op);const config=nnk.modules.config, compat=nnk.modules.compat, manifest=nnk.modules.manifest;
     if(action==='get_config'||action==='config.get'||action==='profile')return profile();
     if(action==='set_config'||action==='config.set'){
-      const allowed={unlockUIExtensions:'boolean',autoUnlockExtensions:'boolean',mqttUrl:'string',transferLimitMB:'number'};
+      const allowed={unlockUIExtensions:'boolean',autoUnlockExtensions:'boolean',autoTransfer:'boolean',mqttUrl:'string',transferLimitMB:'number'};
       if(!Object.hasOwn(allowed,args.key))throw Error('不允许修改的配置: '+args.key);
+      if(args.key==='autoTransfer'&&typeof args.value!=='boolean')throw Error('自动补传开关必须为布尔值');
       let value=args.value===true;
       if(allowed[args.key]==='number'){
         if(!Number.isSafeInteger(args.value)||args.value<1||args.value>1024)throw Error('补传容量须为 1 至 1024 MiB 的整数');
@@ -78,6 +80,9 @@ export function createEngineOperationPort(nnk,{isCurrent,scope=null,onEvent=()=>
       if(args.key==='mqttUrl'&&!env.lib.db){
         persistence=await saveSignalingUrl({profile:{configStorage:{prefix:env.lib.configprefix,useDB:false}},value,isCurrent:()=>{guard(op);return true;},timeoutMs});
         guard(op);env.lib.config.nnk_mqttUrl=value;
+      }else if(args.key==='autoTransfer'&&!env.lib.db){
+        persistence=await saveConfigValue({profile:{configStorage:{prefix:env.lib.configprefix,useDB:false}},key:'nnk_autoTransfer',value,isCurrent:()=>{guard(op);return true;},timeoutMs});
+        guard(op);env.lib.config.nnk_autoTransfer=value;
       }else persistence=await saveVerified(op,'nnk_'+args.key,value);
       guard(op);
       const actual=config.get(args.key);if(!equal(actual,value))throw Error('Current configuration differs from persisted readback');
@@ -130,10 +135,10 @@ export function createEngineOperationPort(nnk,{isCurrent,scope=null,onEvent=()=>
     }
     throw Error('Unknown current engine operation: '+action);
   }
-  function execute(action,args={}){
+  function execute(action,args={},operationEvent=onEvent){
     try{guard();if(typeof action!=='string'||active.size>=16)throw Error('Invalid or saturated current operation');}
     catch(error){return Promise.reject(error);}
-    const op={id:++nextId,retired:false,cancels:new Set()};active.set(op.id,op);
+    const op={id:++nextId,retired:false,cancels:new Set(),onEvent:operationEvent};active.set(op.id,op);
     // Serialize actual writes, including calls from the ordinary HTTP bridge.
     const result=serial.then(()=>{guard(op);return perform(action,clone(args)||{},op);});
     serial=result.catch(()=>{});

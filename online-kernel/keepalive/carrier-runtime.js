@@ -9,7 +9,7 @@ import {collectLobbyInventory} from './lobby-inventory.js';
 import {SettledPartyRecovery} from './party-recovery.js';
 import {CarrierTransfer,TRANSFER_TYPES,TRANSFER_PROTOCOL} from './carrier-transfer.js';
 import {enableBatchExtensions,withBatchActivation} from './batch-activation.js';
-import {saveTransferLimit,validTransferLimit} from './transfer-limit-config.js';
+import {saveConfigValue,saveTransferLimit,validTransferLimit} from './transfer-limit-config.js';
 import {normalizeSignalingUrl,saveSignalingUrl} from './signaling-config.js';
 import {transferPeerDisplay} from './transfer-display.js';
 const clone=value=>JSON.parse(JSON.stringify(value));
@@ -23,7 +23,7 @@ function profileIdentity(profile){
 export class CarrierRuntime {
   constructor({nnk,native,ipc,profile,onDisplay=()=>{}}){
     Object.assign(this,{nnk,native,ipc,profile,onDisplay});this.events=[];this.identities=new Map();this.stopped=false;this.nativeSnapshot=null;this.nativePollPending=false;this.leaving=false;this.leavePromise=null;this.carrierSessionId=crypto.randomUUID();this.partyEpoch=0;
-    this.profileOperations=new Map();this.profileOperationSequence=0;this.profileConfirmedSequence=0;this.transferLimitSaving=null;this.signalingSaving=null;this.transferRequest=null;this.manualManifestRows=new WeakMap();
+    this.profileOperations=new Map();this.profileOperationSequence=0;this.profileConfirmedSequence=0;this.transferLimitSaving=null;this.autoTransferSaving=null;this.signalingSaving=null;this.transferRequest=null;this.manualManifestRows=new WeakMap();
     const bridge=nnk.modules.bridge;
     const event=(name,data={})=>{const row={at:Date.now(),name,data:clone(data)};this.events.push(row);if(this.events.length>160)this.events.shift();if(name==='error')onDisplay(data.message,true);};
     this.event=event;this.sessions=new SessionRegistry({onStopped:record=>{
@@ -103,8 +103,8 @@ export class CarrierRuntime {
       this.files=disk.createCarrierFilesProxy({native:this.native,ipc:this.ipc});
       this.filePrimitives={normalize:core.normalize,digest:core.manifestDigest,createChannel:options=>new (require(path.join(base,'batch-wire.cjs')).Channel)(options)};
     }catch{this.fileAdapterError='本机补传文件接口未就绪，请双方升级内核并重启游戏。';}
-    this.transfer=new CarrierTransfer({sessions:this.sessions,getRole:()=>this.coordinator.role,getScope:()=>this.manifestScope(),canTransfer:()=>this.transferEligibility(),isRequestPending:()=>!!this.transferRequest||!!this.transferLimitSaving,
-      collect:(names,options)=>this.files.collect(names,options),normalize:value=>this.normalizeTransferBatch(value),digest:value=>this.filePrimitives.digest(value),createChannel:options=>this.filePrimitives.createChannel(options),
+    this.transfer=new CarrierTransfer({sessions:this.sessions,getRole:()=>this.coordinator.role,getScope:()=>this.manifestScope(),canTransfer:()=>this.transferEligibility(),isRequestPending:()=>!!this.transferRequest||!!this.transferLimitSaving,autoTransfer:this.autoTransferEnabled(),
+      collect:(names,options)=>this.files.collect(names,options),normalize:value=>this.filePrimitives.normalize(value),checkBatch:value=>this.normalizeTransferBatch(value),digest:value=>this.filePrimitives.digest(value),createChannel:options=>this.filePrimitives.createChannel(options),
       source:(grant,context)=>this.files.source(grant,context),receiver:(grant,context)=>this.receiveBatch(grant,context),emit:(name,data)=>{this.event(name,data);this.nnk.modules.bridge.emit(name,data);this.update();this.maybeAutoHealth();}});
     this.coordinator.lobbyTransfer=this.files?this.transfer:null;this.nnk.modules.carrierTransfer=this.transfer;for(const row of capable)if(this.sessions.getOwner(row.peerId)===row.owner&&this.sessions.get(row.peerId)?.connectionSessionId===row.connectionSessionId)this.transfer.setPeerCapability(row.peerId,true);if(this.files)this.nnk.state.transferProtocol=TRANSFER_PROTOCOL;
   }
@@ -113,11 +113,41 @@ export class CarrierRuntime {
     if(!validTransferLimit(limit)||batch.total>limit*1048576)throw Error('本批文件超过当前补传容量限制，请先调整容量后重新提议。');
     return batch;
   }
+  autoTransferEnabled(){return this.autoTransferSaving?.value===false?false:this.profile.config?.autoTransfer!==false;}
+  async saveAutoTransfer(args,context=this.nnk.modules.bridge.captureContext?.()||this.nnk.modules.bridge){
+    if(this.autoTransferSaving||this.profileOperations.size||this.transferLimitSaving||this.signalingSaving)throw Error('其它配置正在保存，请完成后再设置扩展补传。');
+    if(this.profileOperationSequence>=1000000000)throw Error('当前配置操作已达上限，请重新打开联机入口。');
+    const binding=this.engines.current,ticket={value:args.value,coordinator:this.coordinator,epoch:this.partyEpoch,binding,sequence:++this.profileOperationSequence,requestId:crypto.randomUUID()};
+    this.autoTransferSaving=ticket;this.profileOperations.set(ticket.sequence,ticket);
+    if(args.value===false&&this.transferRequest)this.clearTransferRequest(this.transferRequest,'已停止本次补传申请，包体检结果仍可查看。');
+    const cleanup=args.value===false?this.transfer.setEnabled(false).catch(error=>{context.emit('error',{message:'扩展补传已停止，旧批次清理仍需核对：'+String(error.message||error).slice(0,160)});}):Promise.resolve();
+    const current=()=>!this.stopped&&!this.leaving&&this.autoTransferSaving===ticket&&this.coordinator===ticket.coordinator&&!ticket.coordinator.closed&&this.partyEpoch===ticket.epoch&&this.engines.current===binding&&(!binding||binding.closed!==true);
+    this.update();
+    try{
+      let result;
+      if(binding){
+        result=await this.engines.operation('set_config',{key:'autoTransfer',value:args.value},binding);
+        if(!current()||result?.profile?.config?.autoTransfer!==args.value)throw Error('本次补传开关未取得当前游戏的保存确认。');
+      }else{
+        const saved=await saveConfigValue({profile:this.profile,key:'nnk_autoTransfer',value:args.value,isCurrent:current});
+        if(!current()||saved?.saved!==true)throw Error('原补传开关设置操作已失效');
+        result={profile:{config:{...this.profile.config,autoTransfer:args.value}}};
+      }
+      this.profileConfirmedSequence=ticket.sequence;this.confirmProfile(result.profile,ticket.requestId);
+      await cleanup;if(!current())throw Error('原补传开关设置操作已失效');
+      if(args.value===true)this.autoHealthSeen.clear();
+      const profile=clone(this.profile);context.emit('config_applied',{key:'autoTransfer',value:args.value,profile,requestId:ticket.requestId});
+      return {profile,key:'autoTransfer',value:args.value};
+    }finally{
+      await cleanup;this.profileOperations.delete(ticket.sequence);
+      if(this.autoTransferSaving===ticket){this.autoTransferSaving=null;await this.transfer.setEnabled(this.autoTransferEnabled());this.update();this.maybeAutoHealth();}
+    }
+  }
   assertTransferLimitIdle(){
     const transfer=this.nativeSnapshot?.transfer;
-    if(this.transferLimitSaving||this.transferRequest||this.profileOperations.size||this.transfer.busy()||transfer?.owned||transfer?.cancelled||transfer?.recoveryRequired)throw Error('补传、授权或文件恢复尚未结束，请完成或取消后再修改容量。');
+    if(this.autoTransferSaving||this.transferLimitSaving||this.transferRequest||this.profileOperations.size||this.transfer.busy()||transfer?.owned||transfer?.cancelled||transfer?.recoveryRequired)throw Error('补传、授权或文件恢复尚未结束，请完成或取消后再修改容量。');
   }
-  async saveRoomTransferLimit(args){
+  async saveRoomTransferLimit(args,context=this.nnk.modules.bridge.captureContext?.()||this.nnk.modules.bridge){
     this.assertTransferLimitIdle();
     const ticket={coordinator:this.coordinator,epoch:this.partyEpoch},requestId=crypto.randomUUID();this.transferLimitSaving=ticket;this.nnk.state.transferLimitSaving=true;this.update();
     const current=()=>!this.stopped&&!this.leaving&&this.transferLimitSaving===ticket&&this.coordinator===ticket.coordinator&&!ticket.coordinator.closed&&this.partyEpoch===ticket.epoch&&!this.engines.current;
@@ -127,19 +157,19 @@ export class CarrierRuntime {
       const saved=await saveTransferLimit({profile:this.profile,value:args.value,isCurrent:current});
       if(!current()||saved?.saved!==true)throw Error('原补传容量设置操作已失效');
       this.confirmProfile({config:{...this.profile.config,transferLimitMB:saved.value}},requestId);
-      const profile=clone(this.profile);this.nnk.modules.bridge.emit('config_applied',{key:'transferLimitMB',value:saved.value,profile,requestId});
+      const profile=clone(this.profile);context.emit('config_applied',{key:'transferLimitMB',value:saved.value,profile,requestId});
       return {profile,key:'transferLimitMB',value:saved.value};
     }finally{if(this.transferLimitSaving===ticket){this.transferLimitSaving=null;this.nnk.state.transferLimitSaving=false;this.update();this.maybeAutoHealth();}}
   }
-  async saveRoomSignaling(args){
-    if(this.signalingSaving)throw Error('信令地址正在保存，请稍后重试');
+  async saveRoomSignaling(args,context=this.nnk.modules.bridge.captureContext?.()||this.nnk.modules.bridge){
+    if(this.autoTransferSaving||this.signalingSaving)throw Error('其它配置正在保存，请稍后重试');
     const value=normalizeSignalingUrl(args.value),ticket={coordinator:this.coordinator,epoch:this.partyEpoch};this.signalingSaving=ticket;this.update();
     const current=()=>!this.stopped&&!this.leaving&&this.signalingSaving===ticket&&this.coordinator===ticket.coordinator&&!ticket.coordinator.closed&&this.partyEpoch===ticket.epoch&&!this.engines.current;
     try{
       const saved=await saveSignalingUrl({profile:this.profile,value,isCurrent:current});
       if(!current()||saved?.saved!==true)throw Error('原信令地址保存操作已失效');
       this.confirmProfile({config:{...this.profile.config,mqttUrl:saved.value}});
-      const profile=clone(this.profile);this.nnk.modules.bridge.emit('config_applied',{key:'mqttUrl',value:saved.value,profile,...(args.requestId?{requestId:args.requestId}:{})});
+      const profile=clone(this.profile);context.emit('config_applied',{key:'mqttUrl',value:saved.value,profile,...(args.requestId?{requestId:args.requestId}:{})});
       return {profile,key:'mqttUrl',value:saved.value};
     }finally{if(this.signalingSaving===ticket){this.signalingSaving=null;this.update();}}
   }
@@ -190,7 +220,7 @@ export class CarrierRuntime {
     this.coordinator.lobbyManifest=this.manifest;
   }
   transferRequestCurrent(ticket){
-    return this.transferRequest===ticket&&!ticket.done&&!this.stopped&&!this.leaving&&this.transfer===ticket.transfer&&this.manifest===ticket.manifest&&this.coordinator===ticket.coordinator&&!ticket.coordinator.closed&&ticket.coordinator.role==='host'&&sameTransferScope(this.manifestScope(),ticket.scope)&&this.sessions.get(ticket.peerId)?.connectionSessionId===ticket.connectionSessionId&&this.sessions.getOwner(ticket.peerId)===ticket.owner&&this.sessions.peerForActualOwner(ticket.owner)===ticket.peerId&&this.sessions.isLive(ticket.peerId)&&!ticket.owner.stopped;
+    return this.autoTransferEnabled()&&this.transferRequest===ticket&&!ticket.done&&!this.stopped&&!this.leaving&&this.transfer===ticket.transfer&&this.manifest===ticket.manifest&&this.coordinator===ticket.coordinator&&!ticket.coordinator.closed&&ticket.coordinator.role==='host'&&sameTransferScope(this.manifestScope(),ticket.scope)&&this.sessions.get(ticket.peerId)?.connectionSessionId===ticket.connectionSessionId&&this.sessions.getOwner(ticket.peerId)===ticket.owner&&this.sessions.peerForActualOwner(ticket.owner)===ticket.peerId&&this.sessions.isLive(ticket.peerId)&&!ticket.owner.stopped;
   }
   clearTransferRequest(ticket,message='',error=false){
     if(this.transferRequest!==ticket)return;clearTimeout(ticket.timer);ticket.timer=null;ticket.done=true;this.transferRequest=null;
@@ -198,6 +228,7 @@ export class CarrierRuntime {
   }
   requestTransfer(args){
     this.assertSessionOpen();
+    if(!this.autoTransferEnabled())throw Error('本机已关闭扩展补传；请重新开启后再使用重新传输。');
     if(!exactTransferRequest(args)||!sameTransferScope(args.scope,this.manifestScope()))throw Error('本次重新传输的连接或会话已失效');
     if(this.coordinator.role!=='host')throw Error('只有房主可以发起重新传输');
     const gate=this.transferEligibility();if(!gate.available)throw Error(gate.reason);
@@ -250,7 +281,8 @@ export class CarrierRuntime {
   }
   confirmProfile(value,requestId=crypto.randomUUID(),forceIdentity=false){
     if(this.stopped)return false;const before=JSON.stringify(this.coordinator.getLocalIdentity());
-    if(value.config)this.profile.config=clone(value.config);
+    if(value.config){const config=clone(value.config);if(!Object.hasOwn(config,'autoTransfer')&&typeof this.profile.config?.autoTransfer==='boolean')config.autoTransfer=this.profile.config.autoTransfer;this.profile.config=config;}
+    this.transfer?.setEnabled(this.autoTransferEnabled()).catch(error=>this.nnk.modules.bridge.emit('error',{message:'旧补传批次清理仍需核对：'+String(error.message||error).slice(0,160)}));
     if(value.identity)this.profile.identity={...this.profile.identity,...clone(value.identity)};
     if(forceIdentity||JSON.stringify(this.coordinator.getLocalIdentity())!==before)this.coordinator.localIdentityChanged(requestId);
     return true;
@@ -268,28 +300,34 @@ export class CarrierRuntime {
     // An invitation does not prove that the Host's internal lobby code was publicly published.
     const roomCodeAvailable=lobby.role==='guest'?lobby.joinKind==='room'&&roomCode!==null:lobby.roomCodeAvailable===true;
     this.nnk.modules.bridge.setPhase(phase,{roomCode,roomCodeAvailable,lobbyOpen:lobby.role==='guest'?roomCode!==null:lobby.lobbyOpen,signalingSaving:!!this.signalingSaving,stage:this.coordinator.room.ready()?'lobby':r?'loaded':'lobby',nextMode:lobby.role==='guest'?remote?.mode||lobby.nextMode:lobby.nextMode,roundPhase:r?.phase||null,round:r,continuation:this.sessions.hasEnteredConnections()?c:null,
-      members:c.members,invites:this.lobby.inviteMetadata(),transferPaused:!transferState.available,transferProtocol:TRANSFER_PROTOCOL,transferAvailable:transferState.available,transferUnavailableReason:transferState.reason,transferScope:this.manifestScope(),transferBusy:transferState.busy||!!this.transferRequest,transferRequestPending:!!this.transferRequest,transferLimitSaving:!!this.transferLimitSaving,transferRequestBusy:transferState.requestBusy,transferPeers:transferState.peers.map(peerId=>({peerId,name:String(this.sessions.get(peerId)?.identity?.name||'').slice(0,12),...transferPeerDisplay(this.sessions.get(peerId),this.coordinator.role)})),transferParticipants:this.sessions.snapshot().filter(record=>this.sessions.isLive(record.peerId)).map(record=>({peerId:record.peerId,...transferPeerDisplay(record,this.coordinator.role),transferCapable:transferState.peers.includes(record.peerId),scope:this.manifestScope()})),batchProposals:transferState.proposals,fileBatches:transferState.files,manifestScope:this.manifestScope(),manifestAvailable:!this.leaving&&manifestState.available,manifestUnavailableReason:this.leaving?'正在退出原联机会话':manifestState.reason,
+      members:c.members,invites:this.lobby.inviteMetadata(),transferPaused:!transferState.available,transferProtocol:TRANSFER_PROTOCOL,transferAvailable:transferState.available,transferUnavailableReason:transferState.reason,transferScope:this.manifestScope(),transferBusy:transferState.busy||!!this.transferRequest,transferRequestPending:!!this.transferRequest,transferLimitSaving:!!this.transferLimitSaving,autoTransferSaving:!!this.autoTransferSaving,transferRequestBusy:transferState.requestBusy,transferPeers:transferState.peers.map(peerId=>({peerId,name:String(this.sessions.get(peerId)?.identity?.name||'').slice(0,12),...transferPeerDisplay(this.sessions.get(peerId),this.coordinator.role)})),transferParticipants:this.sessions.snapshot().filter(record=>this.sessions.isLive(record.peerId)).map(record=>({peerId:record.peerId,...transferPeerDisplay(record,this.coordinator.role),transferCapable:transferState.peers.includes(record.peerId),scope:this.manifestScope()})),batchProposals:transferState.proposals,fileBatches:transferState.files,manifestScope:this.manifestScope(),manifestAvailable:!this.leaving&&manifestState.available,manifestUnavailableReason:this.leaving?'正在退出原联机会话':manifestState.reason,
       manifestInventorySource:this.engines.current?'当前游戏配置与本机文件清单':'最近游戏配置快照与实时文件指纹；更改游戏内启用状态后需重新打开联机入口。',partyRecovery:recoveryState,
 
       keepaliveDiagnostics:{scope:'actual current process observations; finite samples',carrierPid:process.pid,carrierMemoryBytes:process.memoryUsage(),native:this.nativeSnapshot,
         transportIdentity:this.transportIdentity(),engine:this.engines.snapshot(),registryResources:this.sessions.resourceSnapshot(),lobbyResources:this.lobby.resourceSnapshot(),initialResources:this.connector.resourceSnapshot?.()||null}});
     this.onDisplay(r?.failed?r.error:r?.phase==='returning'?'正在返回插件房间…':r?.phase==='plugin-room'?'已返回插件房间，等待房主选择模式并载入':r?.phase==='loading'?'正在载入新的游戏窗口…':r?.phase==='playing'?'对局进行中':r?.phase==='waiting'?'游戏等待房已就绪':this.sessions.snapshot().length?'已连接，等待本局入座':'网络窗口已就绪');
   }
-  async createInternetRoom(mode,signaling){this.assertSessionOpen();const before=this.coordinator;await this.recovery.maybeRecover();this.assertSessionOpen();if(this.coordinator!==before||before.closed)throw Error('原联机会话已结束，本次旧操作已取消');this.coordinator.setRole('host');return this.lobby.createInternetRoom(mode,signaling);}
+  async createInternetRoom(mode,signaling,context=this.nnk.modules.bridge.captureContext?.()||this.nnk.modules.bridge){this.assertSessionOpen();const before=this.coordinator;await this.recovery.maybeRecover();this.assertSessionOpen();if(context.isCurrent?.()===false)throw Error('原绑定的联机操作已失效');if(this.coordinator!==before||before.closed)throw Error('原联机会话已结束，本次旧操作已取消');this.coordinator.setRole('host');return this.lobby.createInternetRoom(mode,signaling,context);}
   async restartRoom(mode){this.assertSessionOpen();const before=this.coordinator;await this.recovery.maybeRecover();this.assertSessionOpen();if(this.coordinator!==before||before.closed)throw Error('原联机会话已结束，本次旧操作已取消');const c=this.coordinator;c.assertFilesIdle();if(this.recovery.status().blocked)throw Error('旧局名单中仍有玩家在线，请保留原组或结束原会话后重新建房；新连接不会替换旧座位。');if(c.round?.failed&&c.next.lastPlan?.lease.roundId===c.round.roundId)throw Error('本次续局载入失败，须使用明确重试；不会自动重连');if(c.round&&['settled','settling','returning'].includes(c.round.phase))throw Error('请先在结算页点击“返回插件房间”');const result=await (c.round&&['plugin-room','preparing'].includes(c.round.phase)?c.prepareNext({mode:mode||this.lobby.nextMode}):c.start(mode||this.lobby.nextMode));this.update();return result;}
   async retryRound(){this.assertSessionOpen();const result=await this.coordinator.next.retry();this.update();return result;}
   setRoomMode(mode){this.assertSessionOpen();if(this.coordinator.role!=='host')throw Error('只有房主可以调整模式');return this.lobby.setRoomMode(mode);}
-  refreshInvite(kind,id){this.assertSessionOpen();return this.lobby.refreshInvite(kind,id);}
-  acceptAnswer(id,code){this.assertSessionOpen();return this.lobby.acceptAnswer(id,code);}
-  async joinByRoomCode(code){this.assertSessionOpen();const before=this.coordinator;await this.recovery.maybeRecover();this.assertSessionOpen();if(this.coordinator!==before||before.closed)throw Error('原联机会话已结束，本次旧操作已取消');this.coordinator.setRole('guest');return this.lobby.joinByRoomCode(code);}
-  async joinByInvite(code){this.assertSessionOpen();const before=this.coordinator;await this.recovery.maybeRecover();this.assertSessionOpen();if(this.coordinator!==before||before.closed)throw Error('原联机会话已结束，本次旧操作已取消');this.coordinator.setRole('guest');return this.lobby.joinByInvite(code);}
+  refreshInvite(kind,id,context){this.assertSessionOpen();return this.lobby.refreshInvite(kind,id,context);}
+  acceptAnswer(id,code,context){this.assertSessionOpen();return this.lobby.acceptAnswer(id,code,context);}
+  async joinByRoomCode(code,context=this.nnk.modules.bridge.captureContext?.()||this.nnk.modules.bridge){this.assertSessionOpen();const before=this.coordinator;await this.recovery.maybeRecover();this.assertSessionOpen();if(context.isCurrent?.()===false)throw Error('原绑定的联机操作已失效');if(this.coordinator!==before||before.closed)throw Error('原联机会话已结束，本次旧操作已取消');this.coordinator.setRole('guest');return this.lobby.joinByRoomCode(code,context);}
+  async joinByInvite(code,context=this.nnk.modules.bridge.captureContext?.()||this.nnk.modules.bridge){this.assertSessionOpen();const before=this.coordinator;await this.recovery.maybeRecover();this.assertSessionOpen();if(context.isCurrent?.()===false)throw Error('原绑定的联机操作已失效');if(this.coordinator!==before||before.closed)throw Error('原联机会话已结束，本次旧操作已取消');this.coordinator.setRole('guest');return this.lobby.joinByInvite(code,context);}
   cancelAll(){return this.endSession('user-leave');}
   cancelJoin(){return this.lobby.cancelJoin();}
-  async dispatch(cmd){
+  async dispatch(cmd,context=this.nnk.modules.bridge.captureContext?.()||this.nnk.modules.bridge){
     const a=cmd.args||{};if(cmd.action!=='cancel')this.assertSessionOpen();
+    if(cmd.action==='set_config'&&a.key==='autoTransfer'){
+      if(!a||typeof a!=='object'||Array.isArray(a)||![Object.prototype,null].includes(Object.getPrototypeOf(a))||Object.keys(a).length!==2||!Object.hasOwn(a,'key')||!Object.hasOwn(a,'value')||typeof a.value!=='boolean')throw Error('补传开关必须是布尔值');
+      return this.saveAutoTransfer(a,context);
+    }
+    if(this.autoTransferSaving&&['set_config','set_identity','clear_quarantine'].includes(cmd.action))throw Error('补传开关正在保存，请完成后再修改其它配置。');
+    if(!this.autoTransferEnabled()&&(cmd.action==='batch_request'||cmd.action==='batch_retry'||cmd.action==='batch_decision'&&a.yes===true))throw Error('本机已关闭扩展补传；请重新开启后再使用本批传输。');
     if(cmd.action==='batch_request')return this.requestTransfer(a);
     if(cmd.action==='manifest_recheck')return this.manifest.recheck(a);
-    const actions={create_room:()=>this.createInternetRoom(a.mode,a.signaling),restart_room:()=>this.restartRoom(a.mode),return_plugin_room:()=>this.coordinator.returnToPluginRoom(a),next_round:()=>this.coordinator.prepareNext(a),retry_round:()=>this.retryRound(),set_mode:()=>this.setRoomMode(a.mode),join_room:()=>this.joinByRoomCode(a.code),join_invite:()=>this.joinByInvite(a.code),invite_refresh:()=>this.refreshInvite(a.kind,a.id),accept_answer:()=>this.acceptAnswer(a.id,a.code),cancel:()=>this.cancelAll()};
+    const actions={create_room:()=>this.createInternetRoom(a.mode,a.signaling,context),restart_room:()=>this.restartRoom(a.mode),return_plugin_room:()=>this.coordinator.returnToPluginRoom(a),next_round:()=>this.coordinator.prepareNext(a),retry_round:()=>this.retryRound(),set_mode:()=>this.setRoomMode(a.mode),join_room:()=>this.joinByRoomCode(a.code,context),join_invite:()=>this.joinByInvite(a.code,context),invite_refresh:()=>this.refreshInvite(a.kind,a.id,context),accept_answer:()=>this.acceptAnswer(a.id,a.code,context),cancel:()=>this.cancelAll()};
     if(actions[cmd.action])return await actions[cmd.action]();
     if(cmd.action==='batch_decision'){if(!this.transfer.decide(a))throw Error('本次补传提议或授权已失效');return {accepted:true};}
     if(cmd.action==='batch_cancel'){if(!await this.transfer.cancel(a))throw Error('当前批次已提交或正在恢复，不能撤销文件更新');return {cancelled:true};}
@@ -298,11 +336,11 @@ export class CarrierRuntime {
     if(cmd.action==='batch_reload')throw Error('请按补传结果提示完全退出并重启无名杀；Ctrl+R不能代替重启。');
     if(cmd.action==='set_config'&&a.key==='mqttUrl'){
       if(!a||typeof a!=='object'||Array.isArray(a)||![Object.prototype,null].includes(Object.getPrototypeOf(a))||Object.keys(a).some(k=>!['key','value','requestId'].includes(k))||!Object.hasOwn(a,'value')||a.requestId!==undefined&&(typeof a.requestId!=='string'||!a.requestId.length||a.requestId.length>160||/[\x00-\x1f\x7f]/.test(a.requestId)))throw Error('信令地址保存参数无效');
-      normalizeSignalingUrl(a.value);if(!this.engines.current)return this.saveRoomSignaling(a);
+      normalizeSignalingUrl(a.value);if(!this.engines.current)return this.saveRoomSignaling(a,context);
     }
     if(cmd.action==='set_config'&&a.key==='transferLimitMB'){
       if(!a||typeof a!=='object'||Array.isArray(a)||![Object.prototype,null].includes(Object.getPrototypeOf(a))||Object.keys(a).length!==2||!Object.hasOwn(a,'key')||!Object.hasOwn(a,'value')||!validTransferLimit(a.value))throw Error('补传容量须为 1 至 1024 MiB 的整数');
-      this.assertTransferLimitIdle();if(!this.engines.current)return this.saveRoomTransferLimit(a);
+      this.assertTransferLimitIdle();if(!this.engines.current)return this.saveRoomTransferLimit(a,context);
     }
     if(['set_config','set_identity','clear_quarantine'].includes(cmd.action)){
       const binding=this.engines.current;if(this.stopped||!binding)throw Error('当前没有可操作的游戏文档；请先载入到游戏。');
@@ -313,8 +351,8 @@ export class CarrierRuntime {
         if(this.stopped||this.engines.current!==binding||binding.closed===true||Object.keys(operation.scope).some(k=>binding.scope?.[k]!==operation.scope[k]))throw Error('原配置操作的游戏文档已退休，未提交旧身份回调。');
         if(result?.profile&&operation.sequence>this.profileConfirmedSequence){
           this.profileConfirmedSequence=operation.sequence;this.confirmProfile(result.profile,operation.requestId,cmd.action==='set_identity');
-          if(cmd.action==='set_identity'){const applied=this.coordinator.getLocalIdentity();this.nnk.modules.bridge.emit('identity_applied',{...applied,avatarLabel:applied.avatar,profile:result.profile,requestId:operation.requestId});}
-          if(cmd.action==='set_config')this.nnk.modules.bridge.emit('config_applied',{key:a.key,value:result.profile.config?.[a.key],profile:result.profile,requestId:a.key==='mqttUrl'&&a.requestId?a.requestId:operation.requestId});
+          if(cmd.action==='set_identity'){const applied=this.coordinator.getLocalIdentity();context.emit('identity_applied',{...applied,avatarLabel:applied.avatar,profile:result.profile,requestId:operation.requestId});}
+          if(cmd.action==='set_config')context.emit('config_applied',{key:a.key,value:result.profile.config?.[a.key],profile:result.profile,requestId:a.key==='mqttUrl'&&a.requestId?a.requestId:operation.requestId});
         }
         return result;
       }finally{this.profileOperations.delete(operation.sequence);}

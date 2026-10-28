@@ -3,9 +3,12 @@ import {RoundContinuation} from './round-continuation.js';
 import {PluginRoom,ROOM_TYPES} from './plugin-room.js';
 import {sameScope} from './engine-binding.js';
 import {projectLobbyMembers} from './lobby-owner.js';
+import {transferPeerDisplay} from './transfer-display.js';
 const MODES=['identity','guozhan','versus','doudizhu','single'];
+const INITIAL_PHASES=['loading','awaiting-bind','seating','waiting'];
 const leaseKeys=['partySessionId','roundId','operationId'];
 const same=(a,b)=>!!a&&!!b&&leaseKeys.every(k=>a[k]===b[k]);
+const initialFailure=r=>r?.failed===true&&INITIAL_PHASES.includes(r.failedPhase)&&!r.continuationPeers;
 const id=x=>typeof x==='string'&&x.length>0&&x.length<=160;
 const identity=x=>!!x&&typeof x.name==='string'&&x.name.length<=12&&typeof x.avatar==='string'&&x.avatar.length<=24;
 const exactIdentity=x=>identity(x)&&!Array.isArray(x)&&Object.keys(x).length===2&&Object.hasOwn(x,'name')&&Object.hasOwn(x,'avatar');
@@ -26,6 +29,8 @@ export class InitialPartyCoordinator {
     Object.assign(this,{sessions,engines,onEvent,onState,getLobbyState,getLocalIdentity,onIdentity});this.role=null;this.round=null;this.operationGeneration=0;this.guestPeer=null;this.members=new Map();this.supportedPeers=new Set();this.capabilityTimers=new Map();this.requestTimer=null;this.closed=false;
     this.settlement=new RoundSettlement(this);this.room=new PluginRoom(this);this.next=new RoundContinuation(this);this.continuationCapable=new Set();this.roomCapable=new Set();
     this.identityRevision=0;this.identityVersions=new Map();this.identityPending=null;this.identityAcknowledged=0;
+    this.guestApproval=null;this.guestApprovalSequence=0;this.guestRoundIds=new Set();this.guestOperationIds=new Set();
+    this.guestApprovalOwners=new WeakMap();
   }
   live(round){return !!round&&!this.closed&&this.round===round&&!round.failed;}
   assert(round){if(!this.live(round))throw Error('旧局次操作已失效');if(round.continuationPeers?.some(peer=>!this.sessions.isLive(peer)))throw Error('原参加玩家的实际连接已终止，不能继续本次局次');}
@@ -64,7 +69,15 @@ export class InitialPartyCoordinator {
     if(['party-request','lobby-state'].includes(frame.type)&&d.roundCapabilities!==undefined&&(!Array.isArray(d.roundCapabilities)||d.roundCapabilities.length>8||!d.roundCapabilities.every(id)||new Set(d.roundCapabilities).size!==d.roundCapabilities.length))return 'invalid-round-capabilities';
     if(frame.type==='party-request')return this.role==='host'&&!this.sessions.wasEverEntered(peer)&&d.partySessionId===null&&d.roundId===null&&d.operationId===null&&identity(d.identity);
     if(frame.type==='lobby-state')return this.role==='guest'&&peer===this.guestPeer&&leaseKeys.every(k=>d[k]===null)&&(d.roomCode===null||typeof d.roomCode==='string'&&/^[A-HJ-NP-Z2-9]{6}$/.test(d.roomCode))&&identity(d.hostIdentity)&&MODES.includes(d.mode)&&(d.nextMode===undefined||MODES.includes(d.nextMode))&&(d.caps===undefined||d.caps&&MODES.every(mode=>Number.isSafeInteger(d.caps[mode])&&d.caps[mode]>=2&&d.caps[mode]<=64))&&(d.capacity===null||Number.isSafeInteger(d.capacity)&&d.capacity>=2&&d.capacity<=64)&&Array.isArray(d.members)&&d.members.length<=64&&d.members.every(m=>m&&id(m.peerId)&&typeof m.name==='string'&&m.name.length<=12&&['host','guest'].includes(m.role)&&typeof m.entered==='boolean'&&typeof m.queued==='boolean')&&(d.targetPeerId===undefined||id(d.targetPeerId)&&d.members.some(m=>m.peerId===d.targetPeerId&&m.role==='guest'));
-    if(frame.type==='party-accepted')return this.role==='guest'&&peer===this.guestPeer&&this.supportedPeers.has(peer)&&leaseKeys.every(k=>id(d[k]))&&id(d.targetPeerId)&&Number.isSafeInteger(d.slot)&&d.slot>=1&&MODES.includes(d.mode)&&(!r||same(r,d))&&(!r||['loading','awaiting-bind','seating','waiting'].includes(r.phase));
+    if(frame.type==='party-accepted'){
+      if(!(this.role==='guest'&&peer===this.guestPeer&&this.sessions.getOwner(peer)===owner&&this.supportedPeers.has(peer)&&leaseKeys.every(k=>id(d[k]))&&id(d.targetPeerId)&&Number.isSafeInteger(d.slot)&&d.slot>=1&&MODES.includes(d.mode)))return false;
+      if(!r)return !this.guestRoundIds.has(d.roundId)&&!this.guestOperationIds.has(d.operationId);
+      if(same(r,d))return this.live(r)&&INITIAL_PHASES.includes(r.phase)&&d.targetPeerId===r.remotePeerToken&&d.mode===r.mode&&d.slot===r.slot;
+      const pending=this.guestApproval;
+      if(pending)return this.pendingGuestApproval(pending,owner,d)&&!pending.cancelled&&d.targetPeerId===pending.data.targetPeerId&&d.mode===pending.data.mode&&d.slot===pending.data.slot;
+      return this.freshGuestApproval(owner,frame,r);
+    }
+    if(frame.type==='operation-failed'&&(this.pendingGuestApproval(this.guestApproval,owner,d)||this.next.pendingGuestLoad(owner,d)))return typeof d.error==='string'&&d.error.length>0&&d.error.length<=2000;
     if(!r||!same(r,d)||!this.live(r))return 'wrong-current-round-operation';
     if(frame.type==='operation-failed')return typeof d.error==='string'&&d.error.length>0&&d.error.length<=2000&&((this.role==='host'&&(!!m||r.continuationPeers?.includes(peer)))||(this.role==='guest'&&peer===this.guestPeer));
     if(frame.type==='document-ready')return this.role==='host'&&!!m&&['accepted','awaiting-bind-ready','seating'].includes(m.phase)&&d.targetPeerId===peer&&Number.isSafeInteger(d.documentGeneration)&&d.documentGeneration>0&&(!d.engineScope||engineScope(d.engineScope,r,d.documentGeneration))&&(!m.engineScope||sameScope(d.engineScope,m.engineScope));
@@ -95,10 +108,39 @@ export class InitialPartyCoordinator {
     this.send(peer,'lobby-state',null,{roomCode:view.roomCode,hostIdentity,roundCapabilities:['nnk-settle/1','nnk-next/1','nnk-room/1',...(this.lobbyManifest?['nnk-lobby-manifest/1']:[]),...(this.lobbyTransfer?['nnk-transfer/2']:[])],targetPeerId:peer,mode:view.mode,nextMode:view.nextMode,members:view.list,capacity:view.capacity,caps:view.caps});
   }
   assertFilesIdle(){if(this.lobbyTransfer&&!this.lobbyTransfer.canStart())throw Error('请先完成或取消当前补传；文件更新后须重启游戏再载入。');}
+  freshGuestApproval(owner,frame,r){const d=frame.data;return initialFailure(r)&&this.guestApprovalOwners.get(r)===owner&&d.partySessionId===r.partySessionId&&d.targetPeerId===r.remotePeerToken&&d.roundId!==r.roundId&&d.operationId!==r.operationId&&!this.guestRoundIds.has(d.roundId)&&!this.guestOperationIds.has(d.operationId)&&Number.isSafeInteger(frame.seq)&&frame.seq>this.guestApprovalSequence;}
+  pendingGuestApproval(pending,owner,data){return !!pending&&this.guestApproval===pending&&this.round===pending.old&&pending.owner===owner&&this.guestPeer===pending.peer&&this.sessions.getOwner(pending.peer)===owner&&this.sessions.isLive(pending.peer)&&same(pending.data,data);}
+  rememberGuestApproval(frame){this.guestRoundIds.add(frame.data.roundId);this.guestOperationIds.add(frame.data.operationId);this.guestApprovalSequence=Math.max(this.guestApprovalSequence,frame.seq||0);}
+  async openGuestApproval(peer,owner,frame){
+    const d=frame.data,r={...Object.fromEntries(leaseKeys.map(k=>[k,d[k]])),operationGeneration:++this.operationGeneration,role:'guest',mode:d.mode,remotePeerToken:d.targetPeerId,slot:d.slot,phase:'loading',failed:false};
+    this.guestApprovalOwners.set(r,owner);this.round=r;
+    if(this.requestTimer!==null)clearInterval(this.requestTimer);this.requestTimer=null;this.sessions.bindEnrollment(peer,r);this.publishState();
+    // Bind the approved identity before any file gate or engine work can fail.
+    this.assertFilesIdle();
+    const b=await this.engines.create(r);this.assert(r);await this.engines.command('approve-peer',{peerId:peer},b);this.assert(r);r.phase='awaiting-bind';
+    this.send(peer,'document-ready',r,{targetPeerId:r.remotePeerToken,documentGeneration:b.scope.documentGeneration,engineScope:b.scope});this.publishState();return r;
+  }
+  async retryGuestApproval(pending){
+    try{
+      if(this.cleanupPromise)await this.cleanupPromise;
+      if(this.closed||!this.pendingGuestApproval(pending,pending.owner,pending.data)||pending.cancelled)return;
+      const old=pending.old,result=old.cleanupResult;
+      if(!old.cleanupComplete||old.cleanupError||this.engines.current||old.cleanupHadEngine&&!result?.confirmation?.confirmed)throw Error('旧局原生引擎回收未确认，不能重新载入'+(old.cleanupError?'：'+old.cleanupError:''));
+      await this.openGuestApproval(pending.peer,pending.owner,pending.frame);
+    }catch(error){
+      if(this.closed||this.guestApproval!==pending||pending.cancelled)return;
+      const r=this.round;
+      if(r!==pending.old&&same(r,pending.data)){if(this.live(r))this.fail(r,error);return;}
+      if(!this.pendingGuestApproval(pending,pending.owner,pending.data))return;
+      const message=error?.message||String(error);this.onEvent('error',{message,...Object.fromEntries(leaseKeys.map(k=>[k,pending.data[k]]))});
+      try{this.send(pending.peer,'operation-failed',pending.data,{error:String(message).slice(0,2000)});}catch(sendError){this.onEvent('operation-failure-notice-error',{error:String(sendError)});}
+    }finally{if(this.guestApproval===pending)this.guestApproval=null;}
+  }
   async start(mode='identity'){
     this.assertFilesIdle();
     this.setRole('host');if(!MODES.includes(mode))throw Error('不支持的模式：'+mode);
     if(this.round&&!this.round.failed){if(this.round.phase==='waiting')return this.round;throw Error('当前对局尚未结束，不能载入新局');}
+    if(this.round?.failed&&!initialFailure(this.round))throw Error('本局已中断；续局须使用既有明确重试，其他情况请结束原会话后重新建房');
     if(this.cleanupPromise)await this.cleanupPromise;
     if(this.engines.current)await this.retire('initial operation retry');this.assertFilesIdle();
     const r={partySessionId:this.round?.partySessionId||crypto.randomUUID(),roundId:crypto.randomUUID(),operationId:crypto.randomUUID(),operationGeneration:++this.operationGeneration,role:'host',mode,phase:'loading',failed:false};this.round=r;this.members.clear();this.publishState();
@@ -149,15 +191,25 @@ export class InitialPartyCoordinator {
     const peer=this.sessions.peerForActualOwner(owner),d=frame.data;let r=this.round;
     if(frame.type==='party-request'){this.supportedPeers.add(peer);this.lobbyManifest?.setPeerCapability(peer,d.roundCapabilities?.includes('nnk-lobby-manifest/1')===true);this.lobbyTransfer?.setPeerCapability(peer,d.roundCapabilities?.includes('nnk-transfer/2')===true);if(d.roundCapabilities?.includes('nnk-settle/1')&&d.roundCapabilities.includes('nnk-next/1'))this.continuationCapable.add(peer);if(d.roundCapabilities?.includes('nnk-room/1'))this.roomCapable.add(peer);clearTimeout(this.capabilityTimers.get(peer));this.capabilityTimers.delete(peer);this.sessions.setIdentity(peer,owner,d.identity);this.onIdentity(peer);this.publishLobby(peer);const m=this.members.get(peer);if(m&&r)this.send(peer,'party-accepted',r,{targetPeerId:peer,slot:m.slot,mode:r.mode});else await this.promote();return;}
     if(frame.type==='lobby-state'){this.supportedPeers.add(peer);this.lobbyManifest?.setPeerCapability(peer,d.roundCapabilities?.includes('nnk-lobby-manifest/1')===true);this.lobbyTransfer?.setPeerCapability(peer,d.roundCapabilities?.includes('nnk-transfer/2')===true);if(d.roundCapabilities?.includes('nnk-settle/1')&&d.roundCapabilities.includes('nnk-next/1'))this.continuationCapable.add(peer);if(d.roundCapabilities?.includes('nnk-room/1'))this.roomCapable.add(peer);this.sessions.setIdentity(peer,owner,d.hostIdentity);const capacity=d.capacity??projectLobbyMembers({mode:d.mode}).capacity;this.remoteLobby={roomCode:d.roomCode,mode:d.mode,nextMode:d.nextMode||d.mode,members:d.members,capacity,caps:d.caps,selfPeerId:d.targetPeerId||null};this.onIdentity(peer);this.onEvent('room_members',{list:d.members,mode:d.mode,nextMode:d.nextMode||d.mode,capacity,caps:d.caps,roomCode:d.roomCode,lobbyOpen:d.roomCode!==null});this.publishState();return;}
-    if(frame.type==='party-accepted'){this.assertFilesIdle();
-      if(r){if(this.engines.current?.status?.environmentProofReady&&['awaiting-bind','seating','waiting'].includes(r.phase))this.send(peer,'document-ready',r,{targetPeerId:r.remotePeerToken,documentGeneration:this.engines.current.scope.documentGeneration,engineScope:this.engines.current.scope});return;}
-      r={...Object.fromEntries(leaseKeys.map(k=>[k,d[k]])),operationGeneration:++this.operationGeneration,role:'guest',mode:d.mode,remotePeerToken:d.targetPeerId,slot:d.slot,phase:'loading',failed:false};this.round=r;
-      if(this.requestTimer!==null)clearInterval(this.requestTimer);this.requestTimer=null;this.sessions.bindEnrollment(peer,r);this.publishState();
-      const b=await this.engines.create(r);this.assert(r);await this.engines.command('approve-peer',{peerId:peer},b);this.assert(r);r.phase='awaiting-bind';
-      this.send(peer,'document-ready',r,{targetPeerId:r.remotePeerToken,documentGeneration:b.scope.documentGeneration,engineScope:b.scope});this.publishState();return;
+    if(frame.type==='party-accepted'){
+      if(this.validate(owner,frame)!==true)return false;
+      if(r&&same(r,d)){this.assertFilesIdle();if(this.engines.current?.status?.environmentProofReady&&['awaiting-bind','seating','waiting'].includes(r.phase))this.send(peer,'document-ready',r,{targetPeerId:r.remotePeerToken,documentGeneration:this.engines.current.scope.documentGeneration,engineScope:this.engines.current.scope});return;}
+      if(this.guestApproval)return this.guestApproval.promise;
+      this.rememberGuestApproval(frame);
+      if(!r)return this.openGuestApproval(peer,owner,frame);
+      // Reserve before awaiting cleanup: duplicate approvals share this task.
+      const pending={old:r,owner,peer,data:{...d},frame,cancelled:false,promise:null};this.guestApproval=pending;
+      pending.promise=this.retryGuestApproval(pending);return pending.promise;
     }
+    if(frame.type==='operation-failed'&&this.pendingGuestApproval(this.guestApproval,owner,d)){
+      this.guestApproval.cancelled=true;this.guestApproval=null;this.onEvent('error',{message:d.error,...Object.fromEntries(leaseKeys.map(k=>[k,d[k]]))});return;
+    }
+    if(frame.type==='operation-failed'&&this.next.pendingGuestLoad(owner,d)){if(this.validate(owner,frame)!==true)return false;this.next.failGuestLoad(owner,d);return;}
     this.assert(r);
-    if(frame.type==='operation-failed'){this.fail(r,Error('对端本次引擎操作失败：'+d.error));return;}
+    if(frame.type==='operation-failed'){
+      const message=this.role==='host'?transferPeerDisplay(this.sessions.get(peer),'host').peerLabel+(INITIAL_PHASES.includes(r.phase)?'载入未完成：':'本局已中断：')+d.error:d.error;
+      this.fail(r,Error(message));return;
+    }
     if(frame.type==='document-ready'){
       const m=this.members.get(peer),b=this.engines.current;
       if(m.documentGeneration!==null){if(m.documentGeneration!==d.documentGeneration)throw Error('同一入座操作的文档世代变化');this.sendBind(m,r,b);return;}
@@ -226,20 +278,32 @@ export class InitialPartyCoordinator {
       await this.engines.wait(b,()=>r.continuationPeers.every(peer=>this.members.get(peer)?.phase==='entered'&&this.sessions.isEntered(peer)),'下一局全部原玩家的新 init 和入座',30000);this.assert(r);this.onEvent('next-native-seated',{...this.envelope(r),peers:r.continuationPeers.slice()});return r;
     }catch(error){this.fail(r,error);throw error;}
   }
-  async loadNextGuest(plan,old,retry=false){
-    this.assertFilesIdle();
-    const valid=()=>this.round===old&&(retry&&old.failed&&plan.retryOf===old.roundId||this.live(old));if(!valid())throw Error('旧客端提交已失效');const remotePeerToken=old.remotePeerToken,slot=old.slot;
-    if(this.cleanupPromise)await this.cleanupPromise;await this.retire('committed next native round');this.assertFilesIdle();if(!valid())throw Error('旧客端回收已失效');
-    this.room.reset();const r={...plan.lease,operationGeneration:++this.operationGeneration,role:'guest',mode:plan.mode,remotePeerToken,slot,phase:'loading',failed:false,continuationPeers:[this.guestPeer]};this.round=r;this.sessions.bindEnrollment(this.guestPeer,r);this.publishState();
-    try{this.assert(r);const b=await this.engines.create(r);this.assert(r);await this.engines.command('approve-peer',{peerId:this.guestPeer},b);this.assert(r);r.phase='awaiting-bind';this.guestRoundTimer=setTimeout(()=>{this.guestRoundTimer=null;if(this.live(r)&&!this.sessions.isEntered(this.guestPeer))this.fail(r,Error('下一局房主绑定或原生入座超时'));},30000);this.send(this.guestPeer,'document-ready',r,{targetPeerId:r.remotePeerToken,documentGeneration:b.scope.documentGeneration,engineScope:b.scope});this.publishState();return r;}catch(error){this.fail(r,error);throw error;}
+  async loadNextGuest(plan,old,retry=false,pending=null){
+    const valid=()=>this.next.currentGuestLoad(pending)&&pending.old===old&&pending.plan===plan&&pending.retry===retry;let r=null;
+    try{
+      if(!valid())throw Error('旧客端提交已失效');this.assertFilesIdle();
+      if(this.cleanupPromise)await this.cleanupPromise;if(!valid())return;
+      const hadEngine=!!this.engines.current,result=await this.retire('committed next native round');if(!valid())return;
+      if(this.engines.current||result?.errors?.length||result&&!result.confirmation?.confirmed||hadEngine&&!result?.confirmation?.confirmed||retry&&(!old.cleanupComplete||old.cleanupError||old.cleanupHadEngine&&!old.cleanupResult?.confirmation?.confirmed))throw Error('旧局原生引擎回收未确认，不能重新载入');
+      this.assertFilesIdle();if(!valid())return;
+      this.room.reset();r={...plan.lease,operationGeneration:++this.operationGeneration,role:'guest',mode:plan.mode,remotePeerToken:old.remotePeerToken,slot:old.slot,phase:'loading',failed:false,continuationPeers:[pending.peer]};this.guestApprovalOwners.set(r,pending.owner);this.round=r;this.next.guestLoad=null;this.sessions.bindEnrollment(pending.peer,r);this.publishState();
+      // A matching failure during old cleanup retires the new lease without opening a document.
+      if(pending.failure){this.fail(r,Error(pending.failure));return r;}
+      this.assert(r);const b=await this.engines.create(r);this.assert(r);await this.engines.command('approve-peer',{peerId:pending.peer},b);this.assert(r);r.phase='awaiting-bind';this.guestRoundTimer=setTimeout(()=>{this.guestRoundTimer=null;if(this.live(r)&&!this.sessions.isEntered(pending.peer))this.fail(r,Error('下一局房主绑定或原生入座超时'));},30000);this.send(pending.peer,'document-ready',r,{targetPeerId:r.remotePeerToken,documentGeneration:b.scope.documentGeneration,engineScope:b.scope});this.publishState();return r;
+    }catch(error){
+      if(r){this.fail(r,error);throw error;}
+      if(!valid())return;
+      const message=error?.message||String(error);old.nextError=message;this.onEvent('error',{message,...plan.lease});this.publishState();try{this.send(pending.peer,'operation-failed',plan.lease,{error:String(message).slice(0,2000)});}catch(sendError){this.onEvent('operation-failure-notice-error',{error:String(sendError)});}throw error;
+    }finally{if(this.next.guestLoad===pending)this.next.guestLoad=null;}
   }
   fail(r,error){
-    if(!this.live(r))return;r.failed=true;r.phase='failed';r.error=error?.message||String(error);this.next.cancel(r.error);this.room.abort(r.error);for(const m of this.members.values()){clearTimeout(m.timer);m.timer=null;}
+    if(!this.live(r))return;r.failedPhase=r.phase;r.failed=true;r.phase='failed';r.error=error?.message||String(error);this.next.cancel(r.error);this.room.abort(r.error);for(const m of this.members.values()){clearTimeout(m.timer);m.timer=null;}
     this.onEvent('error',{message:r.error,partySessionId:r.partySessionId,roundId:r.roundId,operationId:r.operationId});this.publishState();
     for(const record of this.sessions.snapshot())if((same(record.lease,r)||r.continuationPeers?.includes(record.peerId))&&this.sessions.isLive(record.peerId)){
-      try{this.send(record.peerId,'operation-failed',r,{error:r.error});}catch(sendError){this.onEvent('operation-failure-notice-error',{error:String(sendError)});}
+      try{this.send(record.peerId,'operation-failed',r,{error:String(r.error).slice(0,2000)});}catch(sendError){this.onEvent('operation-failure-notice-error',{error:String(sendError)});}
     }
-    const cleanup=this.retire('failed current engine operation').catch(cleanupError=>{
+    r.cleanupHadEngine=!!this.engines.current;
+    const cleanup=this.retire('failed current engine operation').then(result=>{r.cleanupResult=result;r.cleanupComplete=true;return result;}).catch(cleanupError=>{
       r.cleanupError=String(cleanupError);this.onEvent('error',{message:'本次原生引擎回收未完成：'+cleanupError.message});if(this.cleanupPromise===cleanup)this.cleanupPromise=null;throw cleanupError;
     });
     this.cleanupPromise=cleanup;cleanup.catch(()=>{});
@@ -258,7 +322,7 @@ export class InitialPartyCoordinator {
     this.settlement=new RoundSettlement(this);this.room=new PluginRoom(this);this.next=new RoundContinuation(this);this.publishState();
   }
   publishState(){this.onState(this.snapshot());}
-  snapshot(){const r=this.round;return {role:this.role,round:r&&Object.fromEntries(['partySessionId','roundId','operationId','mode','phase','capacity','failed','error','settlementReady','settlementError','nextError'].map(k=>[k,r[k]??null])),next:this.next.snapshot(),room:this.room.snapshot(),settlement:this.settlement.snapshot(),members:[...this.members.values()].map(m=>({peerId:m.peerId,phase:m.phase,slot:m.slot,documentGeneration:m.documentGeneration})),remoteLobby:this.remoteLobby||null};}
+  snapshot(){const r=this.round;return {role:this.role,round:r&&{...Object.fromEntries(['partySessionId','roundId','operationId','mode','phase','capacity','failed','failedPhase','error','settlementReady','settlementError','nextError'].map(k=>[k,r[k]??null])),initialRetryAllowed:initialFailure(r)},next:this.next.snapshot(),room:this.room.snapshot(),settlement:this.settlement.snapshot(),members:[...this.members.values()].map(m=>({peerId:m.peerId,phase:m.phase,slot:m.slot,documentGeneration:m.documentGeneration})),remoteLobby:this.remoteLobby||null};}
   unregister(peer){this.lobbyManifest?.forgetPeer(peer);this.lobbyTransfer?.forgetPeer(peer).catch(()=>{});if(this.role==='guest'&&this.guestPeer===peer){this.guestPeer=null;this.remoteLobby=null;if(this.requestTimer!==null)clearInterval(this.requestTimer);this.requestTimer=null;}this.supportedPeers.delete(peer);this.continuationCapable.delete(peer);this.roomCapable.delete(peer);this.identityVersions.delete(peer);if(this.identityPending?.peer===peer)this.clearIdentityPending();clearTimeout(this.capabilityTimers.get(peer));this.capabilityTimers.delete(peer);}
   dispose(){this.closed=true;this.clearIdentityPending();this.identityVersions.clear();clearTimeout(this.guestRoundTimer);this.guestRoundTimer=null;this.next.dispose();this.room.dispose();this.settlement.dispose();if(this.requestTimer!==null)clearInterval(this.requestTimer);this.requestTimer=null;for(const m of this.members.values())clearTimeout(m.timer);for(const timer of this.capabilityTimers.values())clearTimeout(timer);this.capabilityTimers.clear();this.supportedPeers.clear();this.continuationCapable.clear();this.roomCapable.clear();this.members.clear();}
 }

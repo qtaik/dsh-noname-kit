@@ -132,17 +132,30 @@ export async function listExtensionHistories(nonameDir) {
   const out = []
   for (const entry of folders) {
     if (!entry.isDirectory()) continue
-    const history = await readHistory(nonameDir, entry.name)
-    const last = history.tasks[history.tasks.length - 1]
-    const totalRounds = history.tasks.reduce((sum, t) => sum + (t.rounds || 1), 0)
-    out.push({
-      folder: entry.name,
-      taskCount: history.tasks.length,
-      totalRounds,
-      noteCount: history.notes.length,
-      backupCount: history.backups.length,
-      lastTask: last ? { summary: last.summary, kind: last.kind, at: last.at } : null,
-    })
+    try {
+      const history = await readHistory(nonameDir, entry.name)
+      const last = history.tasks[history.tasks.length - 1]
+      const totalRounds = history.tasks.reduce((sum, t) => sum + (t.rounds || 1), 0)
+      out.push({
+        folder: entry.name,
+        taskCount: history.tasks.length,
+        totalRounds,
+        noteCount: history.notes.length,
+        backupCount: history.backups.length,
+        lastTask: last ? { summary: last.summary, kind: last.kind, at: last.at } : null,
+      })
+    } catch (error) {
+      // One unreadable package must not hide other packages or look like empty history.
+      out.push({
+        folder: entry.name,
+        taskCount: null,
+        totalRounds: null,
+        noteCount: null,
+        backupCount: null,
+        lastTask: null,
+        error: error && error.message || String(error),
+      })
+    }
   }
   return out.sort((a, b) => (b.lastTask?.at || 0) - (a.lastTask?.at || 0))
 }

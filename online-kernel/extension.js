@@ -14,7 +14,7 @@
 	}
 	window.__nnkLoaded = true;
 	if (!window.__nnk__) {
-		window.__nnk__ = { version: "0.3.98", build: "keepalive-free-choice-picker-2", modules: {}, env: null, state: {} };
+		window.__nnk__ = { version: "0.3.99", build: "keepalive-1.10.8", modules: {}, env: null, state: {} };
 	}
 
 	game.import("extension", function(lib, game, ui, get, ai, _status) {

@@ -189,15 +189,24 @@ export async function deleteTask(dshHome, taskId) {
 }
 
 /**
- * 完成任务:标记 done + 返回任务信息(调用方负责把摘要同步进扩展文件夹 history)。
+ * 用户手动完成任务:同时确认现有技能节点并标记 done，保留轮次和反馈记录。
+ * manualCompletion 记录手动完成来源，不表示新增测试经过；调用方负责归档摘要。
  * @returns {{ok:boolean, task?:object, error?:string}}
  */
 export async function completeById(dshHome, { taskId, summary, notes }) {
   const registry = await readRegistry(dshHome)
   const task = registry.tasks.find((t) => t.id === taskId)
   if (!task) return { ok: false, error: `找不到任务「${taskId}」` }
+  const completedAt = Date.now()
+  const skills = Array.isArray(task.skills) ? task.skills : []
+  const changed = skills.filter((s) => s.status !== 'confirmed')
+    .map((s) => ({ name: s.name, from: s.status }))
+  if (task.status !== 'done' || changed.length) {
+    for (const node of skills) node.status = 'confirmed'
+    task.manualCompletion = { at: completedAt, changed }
+  }
   task.status = 'done'
-  task.updatedAt = Date.now()
+  task.updatedAt = completedAt
   if (summary) task.summary = String(summary).slice(0, 2000)
   if (Array.isArray(notes) && notes.length) {
     task.notes = (task.notes || []).concat(notes.map((n) => String(n).slice(0, 500))).slice(-20)

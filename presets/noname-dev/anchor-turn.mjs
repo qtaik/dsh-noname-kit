@@ -6,7 +6,7 @@ import { createSessionState, stateSchema } from './session-state.mjs'
 export const name = 'anchor-turn'
 
 /** Default anchor text shown to the model in the synthetic first user turn. */
-export const ANCHOR_TEXT = 'This round is a test. Tools are not open yet; all tools will open next round.'
+export const ANCHOR_TEXT = '这是无名杀开发模式的初始化轮。本轮没有需要执行的业务任务，也没有可调用工具；无需检查环境、查询状态或执行操作。请用普通文字确认已就绪，然后结束本轮。下一轮再处理用户的实际需求，并使用届时提供的工具。'
 
 /** Current attribution plus the historical attribution accepted when reading older sessions. */
 const isAnchor = (message) => message?.source?.kind === name || message?.source?.kind === 'plugin:' + name

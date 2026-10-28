@@ -12,13 +12,20 @@
 	var seq = 0;
 	var events = [];
 	var backlog = [];   /* 保存尚未确认送达的事件，下次心跳继续发送；应答异常时保留队列，确保邀请码等内容可重试送达。 */
-	var stopped = false, epoch = 0, controller = null, configController = null, initializing = false, commandOverride = null, ordinaryOperations = null;
+	var stopped = false, epoch = 0, controller = null, configControllers = new Set(), initializing = false, commandOverride = null, ordinaryOperations = null;
 	var confirmedTransferLimitMB = nnk.modules.config && nnk.modules.config.get("transferLimitMB");
+	var confirmedAutoTransfer = nnk.modules.config && nnk.modules.config.get("autoTransfer");
+	var commandQueue = [], commandRunner = null, maxPendingCommands = 64, bindingGeneration = 0, configReadSequence = 0, acceptedConfigRead = 0;
 	var polling = false;   /* 串行化:0.7 秒一拍比一次请求快时,不让两轮并发 */
 	var state = { phase: "idle", ts: Date.now() };
 
-	function emit(type, data) {
+	function confirmConfig(type, data) {
 		if (type === "config_applied" && data && data.key === "transferLimitMB" && Number.isSafeInteger(data.value) && data.value >= 1 && data.value <= 1024) confirmedTransferLimitMB = data.value;
+		if (type === "config_applied" && data && data.key === "autoTransfer" && typeof data.value === "boolean") confirmedAutoTransfer = data.value;
+	}
+
+	function emit(type, data) {
+		confirmConfig(type, data);
 		seq++;
 		events.push({ seq: seq, type: type, data: data || null, ts: Date.now() });
 		if (events.length > 100) {
@@ -30,10 +37,27 @@
 		state = Object.assign({ phase: phase, ts: Date.now() }, extra || {});
 	}
 
+	/* Contexts belong to the initiating binding generation, including A -> B -> A. */
+	function captureContext() {
+		var contextEpoch = epoch, generation = bindingGeneration;
+		var current = function() { return !stopped && contextEpoch === epoch && generation === bindingGeneration; };
+		return { isCurrent: current, emit: function(type, data) { confirmConfig(type, data); if (current()) emit(type, data); }, setPhase: function(phase, extra) { if (current()) setPhase(phase, extra); } };
+	}
+
+	function observeBinding(value) {
+		if (!sameBinding(cfg, value)) {
+			bindingGeneration++;
+			/* Already-produced events may follow the same owner to its new local port. */
+			if (cfg && cfg.token !== value.token) { events = []; backlog = []; }
+		}
+		cfg = value;
+	}
+
 	function readBridgeConfig() {
+		var readEpoch = epoch, readSequence = ++configReadSequence;
 		var url = location.origin + "/extension/" + encodeURIComponent("联机助手") + "/nnk-bridge.json";
 		var abort = new AbortController();
-		configController = abort;
+		configControllers.add(abort);
 		var deadline = setTimeout(function() { abort.abort(); }, 2500);
 		return fetch(url, { cache: "no-store", signal: abort.signal })
 			.then(function(r) { return r.ok ? r.json() : null; })
@@ -41,27 +65,33 @@
 				if (!value || typeof value.token !== "string" || !value.token || typeof value.baseUrl !== "string") return null;
 				var endpoint = new URL(value.baseUrl);
 				if (endpoint.protocol !== "http:" || ["127.0.0.1", "localhost", "[::1]"].indexOf(endpoint.hostname) < 0 || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) return null;
+				if (stopped || readEpoch !== epoch) return null;
+				/* A delayed earlier read cannot roll back a newer observed binding. */
+				if (readSequence < acceptedConfigRead) return cfg;
+				acceptedConfigRead = readSequence; observeBinding(value);
 				return value;
 			})
 			.catch(function() { return null; })
-			.finally(function() { clearTimeout(deadline); if (configController === abort) configController = null; });
+			.finally(function() { clearTimeout(deadline); configControllers.delete(abort); });
 	}
 
 	function sameBinding(a, b) {
 		return !!a && !!b && a.baseUrl === b.baseUrl && a.token === b.token;
 	}
 
-	async function dispatch(cmd) {
-		if (commandOverride) return await commandOverride(cmd);
+	async function dispatch(cmd, context) {
+		var emit = context.emit, setPhase = context.setPhase;
+		if (commandOverride) return await commandOverride(cmd, context);
 		if (cmd.action === "batch_request") throw Error("请在双方连接的插件房间中重新申请补传。");
-		if (nnk.keepaliveEntry && ["create_room", "join_room", "join_invite"].indexOf(cmd.action) >= 0) return await nnk.keepaliveEntry.beginCarrier(cmd);
+		if (nnk.keepaliveEntry && ["create_room", "join_room", "join_invite"].indexOf(cmd.action) >= 0) return await nnk.keepaliveEntry.beginCarrier(cmd, context);
 		if (["set_config", "set_identity", "clear_quarantine", "manifest_recheck", "transfer_pack", "batch_decision", "batch_cancel", "batch_reload", "batch_retry"].indexOf(cmd.action) >= 0 && nnk.keepaliveEntry) {
 			if (!ordinaryOperations) {
 				var operations = await import("../keepalive/engine-operation-port.js");
-				if (stopped) throw Error("旧文档操作已失效");
-				ordinaryOperations = operations.createEngineOperationPort(nnk, { isCurrent: function () { return !stopped; }, scope: nnk.keepaliveEntry.scope || null, onEvent: emit });
+				if (stopped || !context.isCurrent()) throw Error("旧文档操作已失效");
+				var operationEpoch = epoch;
+				ordinaryOperations = operations.createEngineOperationPort(nnk, { isCurrent: function () { return !stopped && operationEpoch === epoch; }, scope: nnk.keepaliveEntry.scope || null, onEvent: function(type, data) { confirmConfig(type, data); } });
 			}
-			return await ordinaryOperations.execute(cmd.action, cmd.args || {});
+			return await ordinaryOperations.execute(cmd.action, cmd.args || {}, emit);
 		}
 		var host = nnk.modules.host;
 		var guest = nnk.modules.guest;
@@ -118,14 +148,16 @@
 				}
 				break;
 			case "set_config": {
-				if (args.key === "transferLimitMB") {
-					if (!Number.isSafeInteger(args.value) || args.value < 1 || args.value > 1024) throw Error("补传容量须为 1 至 1024 MiB 的整数");
+				if (args.key === "transferLimitMB" || args.key === "autoTransfer") {
+					if (args.key === "autoTransfer" && typeof args.value !== "boolean") throw Error("自动补传开关必须为布尔值");
+					if (args.key === "transferLimitMB" && (!Number.isSafeInteger(args.value) || args.value < 1 || args.value > 1024)) throw Error("补传容量须为 1 至 1024 MiB 的整数");
 					if (!ordinaryOperations) {
 						var limitOperations = await import("../keepalive/engine-operation-port.js");
-						if (stopped) throw Error("旧文档操作已失效");
-						ordinaryOperations = limitOperations.createEngineOperationPort(nnk, { isCurrent: function () { return !stopped; }, scope: null, onEvent: emit });
+						if (stopped || !context.isCurrent()) throw Error("旧文档操作已失效");
+						var limitEpoch = epoch;
+						ordinaryOperations = limitOperations.createEngineOperationPort(nnk, { isCurrent: function () { return !stopped && limitEpoch === epoch; }, scope: null, onEvent: function(type, data) { confirmConfig(type, data); } });
 					}
-					return await ordinaryOperations.execute("set_config", { key: "transferLimitMB", value: args.value });
+					return await ordinaryOperations.execute("set_config", { key: args.key, value: args.value }, emit);
 				}
 				/* 只放行允许工坊改的内核配置键,值按类型强转 */
 				var allowed = { unlockUIExtensions: "boolean", autoUnlockExtensions: "boolean", mqttUrl: "string" };
@@ -178,10 +210,11 @@
 	}
 
 	/* 命令执行报错时把堆栈前几行带回工坊——引擎/扩展深处的错误只有堆栈能定位 */
-	async function dispatchSafe(cmd) {
+	async function executeSafe(cmd, context) {
 		try {
-			return await dispatch(cmd);
+			return await dispatch(cmd, context);
 		} catch (err) {
+			if (!context.isCurrent()) return;
 			console.error("[联机助手] 命令执行失败:", cmd.action, err);
 			var stack = "";
 			try {
@@ -192,9 +225,44 @@
 				detail.key = "mqttUrl";
 				if (typeof cmd.args.requestId === "string" && cmd.args.requestId.length > 0 && cmd.args.requestId.length <= 160 && !/[\x00-\x1f\x7f]/.test(cmd.args.requestId)) detail.requestId = cmd.args.requestId;
 			}
-			emit("error", detail);
+			context.emit("error", detail);
 		}
 	}
+
+	function enqueueCommand(cmd, binding, bridgeEpoch, generation) {
+		if (stopped || bridgeEpoch !== epoch) return Promise.resolve();
+		return new Promise(function(resolve) {
+			commandQueue.push({ command: cmd, binding: binding, epoch: bridgeEpoch, generation: generation === undefined ? bindingGeneration : generation, resolve: resolve });
+			drainCommands();
+		});
+	}
+
+	function drainCommands() {
+		if (commandRunner || stopped || !commandQueue.length) return;
+		var runner = { epoch: epoch, waiting: false }; commandRunner = runner;
+		(async function() {
+			while (!stopped && runner.epoch === epoch && commandQueue.length) {
+				var item = commandQueue.shift(); runner.active = item;
+				try {
+					if (item.epoch !== epoch || item.generation !== bindingGeneration) continue;
+					var verified = item.binding ? await readBridgeConfig() : cfg;
+					if (stopped || item.epoch !== epoch || item.generation !== bindingGeneration) continue;
+					if (item.binding && !verified) {
+						/* Unknown is not revoked: keep the received head and retry on a later poll. */
+						commandQueue.unshift(item); item = null; runner.waiting = true; break;
+					}
+					if (item.binding && !sameBinding(item.binding, verified)) continue;
+					item.resolve(await executeSafe(item.command, captureContext()));
+				} finally { if (item) item.resolve(); runner.active = null; }
+			}
+		})().catch(function(error) {
+			if (!stopped && runner.epoch === epoch) emit('error', { message: '本机操作执行失败：' + String(error.message || error) });
+		}).finally(function() {
+			if (commandRunner === runner) { commandRunner = null; if (!runner.waiting) drainCommands(); }
+		});
+	}
+
+	function dispatchSafe(cmd) { return enqueueCommand(cmd, cfg, epoch); }
 
 	async function poll() {
 		if (polling || stopped) {
@@ -203,11 +271,10 @@
 		polling = true;
 		var capturedEpoch = epoch;
 		var latest = await readBridgeConfig();
-		if (stopped || capturedEpoch !== epoch || !latest) { polling = false; return; }
+		if (stopped || capturedEpoch !== epoch || !latest) { if (capturedEpoch === epoch) polling = false; return; }
 		/* 本地绑定文件是显式绑定的依据；切换凭据时不转送前一实例的私有事件。 */
-		if (cfg && cfg.token !== latest.token) { events = []; backlog = []; }
-		cfg = latest;
-		var binding = cfg;
+		var binding = cfg, generation = bindingGeneration;
+		drainCommands();
 		controller = new AbortController();
 		var requestController = controller;
 		var deadline = setTimeout(function() { requestController.abort(); }, 2500);
@@ -221,6 +288,7 @@
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
 					token: cfg.token,
+					commandCapacity: Math.max(0, maxPendingCommands - commandQueue.length - (commandRunner ? 1 : 0)),
 					kernel: (function() {
 						var role = "";
 						try {
@@ -252,6 +320,7 @@
 					}),
 					cfg: {
 						transferLimitMB: confirmedTransferLimitMB,
+						autoTransfer: confirmedAutoTransfer,
 						unlockUIExtensions: !!nnk.modules.config.get("unlockUIExtensions"),
 						autoUnlockExtensions: !!nnk.modules.config.get("autoUnlockExtensions"),
 						root: !!(nnk.networkProfile ? nnk.networkProfile.root : nnk.modules.compat && nnk.modules.compat.gameRoot()),
@@ -297,14 +366,11 @@
 		}).then(async function(body) {
 			if (stopped || capturedEpoch !== epoch) return;
 			/* 旧端口的延迟应答不能在用户更换绑定后继续下发命令。 */
-			if (!sameBinding(binding, await readBridgeConfig()) || stopped || capturedEpoch !== epoch) return;
-			backlog = [];   /* 收到送达确认后清空本次发送的事件积压。 */
-			var cmds = body && body.commands || [];
-			for (var i = 0; i < cmds.length; i++) {
-				if (stopped || capturedEpoch !== epoch) break;
-				if (i && (!sameBinding(binding, await readBridgeConfig()) || stopped || capturedEpoch !== epoch)) break;
-				await dispatchSafe(cmds[i]);
-			}
+			await readBridgeConfig();
+			if (stopped || capturedEpoch !== epoch) return;
+			if (generation === bindingGeneration) backlog = [];   /* 收到送达确认后清空本次发送的事件积压。 */
+			var cmds = body && Array.isArray(body.commands) ? body.commands : [];
+			for (var i = 0; i < cmds.length; i++) enqueueCommand(cmds[i], binding, capturedEpoch, generation);
 		}).catch(function(err) {
 			if (stopped || capturedEpoch !== epoch) return;
 			failures++;
@@ -314,7 +380,7 @@
 		}).then(function() {
 			clearTimeout(deadline);
 			if (controller === requestController) controller = null;
-			polling = false;
+			if (capturedEpoch === epoch) polling = false;
 		});
 	}
 
@@ -333,6 +399,8 @@
 			} else {
 				console.log("[联机助手] 等待有效桥配置，可在工坊绑定到当前 DSH");
 			}
+			var pending = options && options.pendingCommands || [];
+			for (var i = 0; i < pending.length; i++) enqueueCommand(pending[i], c, initEpoch);
 			poll();
 			timer = setInterval(poll, c && c.intervalMs || 700);
 		},
@@ -347,13 +415,16 @@
 			}
 		},
 		stop: function(reason) {
-			stopped = true; epoch++; if (timer) clearInterval(timer); timer = null;
+			stopped = true; epoch++; polling = false; if (timer) clearInterval(timer); timer = null;
 			if (controller) controller.abort(reason); controller = null; cfg = null; commandOverride = null;
-			if (configController) configController.abort(reason); configController = null;
+			configControllers.forEach(function(pending) { pending.abort(reason); }); configControllers.clear();
+			commandQueue.splice(0).forEach(function(item) { item.resolve(); });
+			if (commandRunner && commandRunner.active) commandRunner.active.resolve(); commandRunner = null;
 			if (ordinaryOperations) ordinaryOperations.dispose(reason); ordinaryOperations = null;
 		},
 		dispatchSafe: dispatchSafe,
-		snapshot: function() { return { stopped: stopped, polling: polling, timer: !!timer, events: events.length, backlog: backlog.length, state: Object.assign({}, state) }; },
+		snapshot: function() { return { stopped: stopped, polling: polling, timer: !!timer, events: events.length, backlog: backlog.length, commandPending: commandQueue.length, commandRunning: !!commandRunner, state: Object.assign({}, state) }; },
+		captureContext: captureContext,
 		emit: emit,
 		setPhase: setPhase
 	};

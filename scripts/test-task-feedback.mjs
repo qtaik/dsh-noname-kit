@@ -331,9 +331,15 @@ await test('done 仅在真正产生 written 节点时重开，未知 retest 名�
   await persisted(home, missing.task)
 
   await tasks.setSkillStatus(home, { taskId: '反馈任务', skill: 'B', status: 'open' })
-  await tasks.completeById(home, { taskId: '反馈任务', summary: '保留的手工完成任务' })
+  // 明确构造修复前遗留记录；当前 completeById 已同步确认子项，不能再借它制造旧状态。
+  const legacyRegistry = JSON.parse(await readFile(join(home, 'noname-kit.tasks.json'), 'utf8'))
+  const legacyTask = legacyRegistry.tasks.find((task) => task.id === '反馈任务')
+  legacyTask.status = 'done'
+  legacyTask.summary = '保留的旧版手工完成任务'
+  await writeFile(join(home, 'noname-kit.tasks.json'), JSON.stringify(legacyRegistry, null, 2), 'utf8')
   const before = await tasks.getTask(home, '反馈任务')
-  assert.equal(before.status, 'done', '使用手工完成任务可能留下未确认技能的既有状态')
+  assert.equal(before.status, 'done', '兼容旧版主任务完成但子项未确认的遗留状态')
+  assert.equal(node(before, 'B').status, 'open', '遗留 fixture 保留 B 的未确认状态')
   const written = await tasks.markSkillsWritten(home, { taskId: '反馈任务', skills: ['A', 'B', '未知名'] })
   assert.equal(written.ok, false)
   assert.deepEqual(written.missing, ['未知名'])

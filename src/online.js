@@ -271,8 +271,11 @@ export function createBridgeSession({ token, syncSource }) {
       if (session.events.length > 200) session.events.splice(0, session.events.length - 200)
       const now = Date.now()
       const due = []
+      const requestedCapacity = payload?.commandCapacity
+      const capacity = requestedCapacity === undefined ? Infinity : Number.isSafeInteger(requestedCapacity) && requestedCapacity >= 0 && requestedCapacity <= 64 ? requestedCapacity : 0
       session.commands = session.commands.filter((cmd) => {
         if (now - cmd.createdAt > COMMAND_TTL_MS) return false
+        if (due.length >= capacity) return true
         due.push(cmd)
         return false
       })

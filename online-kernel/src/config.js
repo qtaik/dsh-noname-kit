@@ -13,6 +13,8 @@
 		/* 房号信令(MQTT over WebSocket):默认公共 broker,工坊「📡 信令服务器」
 		 * 卡可改(自建/其它公共服务器,双方须一致),空值经 set_config 恢复此默认 */
 		mqttUrl: "wss://broker.emqx.io:8084/mqtt",
+		/* 本机自动补传；关闭后可自行安装扩展再体检。 */
+		autoTransfer: true,
 		/* 自动补包的单次传输体积上限(MB) */
 		transferLimitMB: 300,
 		/* 联机开闸的总开关 */

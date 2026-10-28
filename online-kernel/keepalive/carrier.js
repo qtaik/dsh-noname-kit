@@ -19,6 +19,5 @@ const display=(text,error=false)=>{document.getElementById(error?'notice':'statu
 const runtime=new CarrierRuntime({nnk,native,ipc,profile,onDisplay:display});nnk.keepaliveRuntime=runtime;
 nnk.state.bootStage='ready';
 window.addEventListener('pagehide',()=>runtime.dispose(),{once:true});
-await nnk.modules.bridge.init({dispatch:command=>runtime.dispatch(command)});
-for(const command of boot.pendingCommands||[])await nnk.modules.bridge.dispatchSafe(command);
+await nnk.modules.bridge.init({dispatch:(command,context)=>runtime.dispatch(command,context),pendingCommands:boot.pendingCommands||[]});
 runtime.update();

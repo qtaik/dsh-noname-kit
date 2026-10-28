@@ -45,18 +45,19 @@ async function scan(dir, depth, matched, out) {
 }
 
 /**
- * 列出游戏目录 extension/ 下已安装的扩展包名(子目录,排序,上限 100)。
+ * 列出游戏目录 extension/ 下已安装的扩展包名(子目录,排序,默认上限 100)。
  * 设置页用它向用户证明"目录填对了:你的扩展包都在这里"。
  * @param {string} nonameDir - 游戏本体目录。
+ * @param {number} [limit=100] - 设置页摘要上限；已有包选择传 Infinity 读取完整目录。
  * @returns {string[]}
  */
-export function listExtensionFolders(nonameDir) {
+export function listExtensionFolders(nonameDir, limit = 100) {
   try {
     return readdirSync(join(nonameDir, 'extension'), { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
       .sort()
-      .slice(0, 100)
+      .slice(0, limit)
   } catch {
     return []
   }

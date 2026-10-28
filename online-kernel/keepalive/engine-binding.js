@@ -1,6 +1,12 @@
 const scopeKeys=['sessionId','roundId','documentGeneration','bindingId','bindingNonce','expectedOrigin'];
 export const sameScope=(a,b)=>!!a&&!!b&&scopeKeys.every(k=>a[k]===b[k]);
 const errorText=e=>e?.message||String(e);
+const creationKeys=['role','partySessionId','roundId','operationId','operationGeneration'];
+function creationLease(lease){
+  const value=Object.fromEntries(creationKeys.map(key=>[key,lease?.[key]]));
+  if(!['host','guest'].includes(value.role)||!['partySessionId','roundId','operationId'].every(key=>typeof value[key]==='string'&&value[key].length>0&&value[key].length<=160)||!Number.isSafeInteger(value.operationGeneration)||value.operationGeneration<=0)throw Error('Exact bounded game operation required');
+  return Object.freeze(value);
+}
 export class EngineBindingManager {
   constructor({native,ipc,onSend,onStatus,onModuleEvent,onFailure,onEvent=()=>{}}) {
     Object.assign(this,{native,ipc,onSend,onStatus,onModuleEvent,onFailure,onEvent});
@@ -22,10 +28,12 @@ export class EngineBindingManager {
   }
   async create(lease){
     if(this.current)throw Error('旧原生引擎尚未回收');
-    const b={lease:Object.freeze({...lease}),windowId:null,closeCapability:null,scope:null,port:null,status:null,closed:false,error:null,pending:new Map(),readyAt:null};this.current=b;
+    // Keep local round state and connection references outside the native IPC payload.
+    const operation=creationLease(lease);
+    const b={lease:operation,windowId:null,closeCapability:null,scope:null,port:null,status:null,closed:false,error:null,pending:new Map(),readyAt:null};this.current=b;
     try{
-      const value=await this.native.createGame(lease);
-      if(!Number.isSafeInteger(value?.windowId)||value.windowId<1||value.closeCapability?.operationId!==lease.operationId||value.closeCapability?.operationGeneration!==lease.operationGeneration)throw Error('原生创建回执未匹配当前操作');
+      const value=await this.native.createGame(operation);
+      if(!Number.isSafeInteger(value?.windowId)||value.windowId<1||value.closeCapability?.operationId!==operation.operationId||value.closeCapability?.operationGeneration!==operation.operationGeneration)throw Error('原生创建回执未匹配当前操作');
       b.windowId=value.windowId;b.closeCapability=Object.freeze({...value.closeCapability});this.assert(b);
       for(const item of this.pendingPorts.splice(0)){if(item.binding===b)await this.acceptPort(item.event,item.detail);else for(const port of item.event.ports||[])port.close();}
       await this.wait(b,()=>b.port&&b.status?.environmentProofReady,'新引擎完整启动',20000);b.readyAt=Date.now();return b;
@@ -85,7 +93,7 @@ export class EngineBindingManager {
     b.closed=true;for(const r of b.pending.values()){clearTimeout(r.timer);r.reject(Error(reason));}b.pending.clear();if(b.port){b.port.onmessage=null;b.port.close();b.port=null;}
     this.pendingPorts=this.pendingPorts.filter(item=>{if(item.binding!==b)return true;for(const port of item.event.ports||[])port.close();return false;});
     if(b.windowId===null){
-      const receipt=await this.native.retireGameCreation(b.lease),fields=['role','partySessionId','roundId','operationId','operationGeneration'];
+      const receipt=await this.native.retireGameCreation(b.lease),fields=creationKeys;
       if(receipt?.cancelled!==true||!fields.every(k=>receipt.operation?.[k]===b.lease[k]))throw Error('原生创建回收回执未匹配原操作');
       if(receipt.confirmed===true&&receipt.ownerAbsent===true){if(this.current!==b)throw Error('原生创建回收期间当前操作已更换');this.current=null;b.status=null;b.scope=null;const result={windowId:receipt.windowId,confirmation:receipt,detachEvidence:b.detachEvidence||null,errors,warnings};this.onEvent('engine-retired',result);return result;}
       if(!Number.isSafeInteger(receipt.windowId)||receipt.windowId<1||!receipt.closeCapability)throw Error('原生创建回收尚未确认');

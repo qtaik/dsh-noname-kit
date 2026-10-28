@@ -45,7 +45,7 @@ function profile(nnk,lease){
 export async function install(nnk,lease){
   const {native,info}=lease;let transition=null;
   nnk.keepaliveEntry={role:info.role,classification:info,documentToken:lease.documentToken,
-    async beginCarrier(command){
+    async beginCarrier(command,context=nnk.modules.bridge.captureContext?.()){
       if(info.role!=='ordinary')throw Error('Only an actual ordinary document may begin a carrier');
       if(transition)throw Error('A carrier transition is already pending');
       assertCurrent(lease);
@@ -56,8 +56,10 @@ export async function install(nnk,lease){
       // Document lifetime and actual location before navigating its one ticket.
       try{
         await nnk.modules.bridge.beforeTransition();assertCurrent(lease);
+        if(context&&!context.isCurrent())throw Error('原绑定的联机入口操作已失效');
         transition=native.request('beginCarrier',[info.bootCapability,profile(nnk,lease),first]);
         accepted=await transition;
+        if(context&&!context.isCurrent())throw Error('原绑定的联机入口操作已失效');
         if(!lease.isDocumentAlive()||location.origin!==info.origin)throw Error('Ordinary transition source changed');
         await nnk.modules.bridge.stop('keepalive carrier transition');
         if(!lease.isDocumentAlive()||location.origin!==info.origin)throw Error('Ordinary transition source changed');
