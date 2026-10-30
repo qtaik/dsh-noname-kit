@@ -54,6 +54,13 @@
               complete: true
               includeRuntimeContext: false
 
+          # 工具选择按原生工具名工作，使用预设级呈现避免继承部署的 PTC 包装。
+          - id: noname-tool-presentation
+            name: '@deepseek-ai/dsh-agent-tool-presentation'
+            disabled: !!js (() => { try { process.getBuiltinModule('node:module').createRequire(String(baseUrl)).resolve('@deepseek-ai/dsh-agent-tool-presentation/package.json'); return false } catch { return true } })()
+            config:
+              mode: native
+
           - id: instruction-hint
             name: dsh-noname-kit/presets/noname-dev/instruction-hint.mjs
             config:
