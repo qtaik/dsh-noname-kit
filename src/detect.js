@@ -45,8 +45,7 @@ async function scan(dir, depth, matched, out) {
 }
 
 /**
- * 列出游戏目录 extension/ 下已安装的扩展包名(子目录,排序,默认上限 100)。
- * 设置页用它向用户证明"目录填对了:你的扩展包都在这里"。
+ * 列出 extension/ 下已安装的扩展包，按包名排序。
  * @param {string} nonameDir - 游戏本体目录。
  * @param {number} [limit=100] - 设置页摘要上限；已有包选择传 Infinity 读取完整目录。
  * @returns {string[]}

@@ -1,12 +1,19 @@
-/** Keep the first top-level request on an empty tool catalog, then expose configured resident tools and names unlocked by dev_tool_search. Promotion is reconstructed from durable session events. After compaction, expose shells and compactionTools until a new promotion signal appears. Filter configured context sources during controlled requests. Subagents start promoted unless includeSubagents is enabled; filter failures retain the full catalog. Adapted from xiaobright/dsh-anchored-standard (MIT). */
+/**
+ * Keep the initial top-level request tool-free, then expose resident and discovered tools.
+ * Restore phase state from session events; compaction uses the configured recovery tool set.
+ * Adapted from xiaobright/dsh-anchored-standard (MIT).
+ */
 
 import { createEpochPromotion } from './compaction-epoch.mjs'
 import { createSessionState, stateSchema } from './session-state.mjs'
 
-/** Cordis plugin name used by loader diagnostics. */
+
 export const name = 'zero-tool-bootstrap'
 
-/** Listeners access services at event time. prepend keeps the pre-step context filter outermost. */
+/** Tool presentation is selected through the current host's tools service. */
+export const inject = ['tools', 'systemPrompt']
+
+
 
 /** Context source kinds suppressed during controlled requests by default. */
 const DEFAULT_SUPPRESSED_SOURCES = ['skill-catalog', 'agent-instructions']
@@ -34,11 +41,11 @@ function sourceList(value, field, fallback) {
 }
 
 /** Register the per-session bootstrap filters. */
-export function apply(ctx, config) {
+export async function apply(ctx, config) {
   // Core work set exposed after a compaction, before re-promotion.
   const compactionTools = stringListOrEmpty(config?.compactionTools, 'compactionTools')
-  // noname-kit: extra tools that stay resident after promotion alongside the
-  // shells / str_replace_editor / discovery set (the noname dev toolchain).
+  // Keep the configured development tools resident after promotion.
+  
   const residentTools = stringListOrEmpty(config?.residentTools, 'residentTools')
   const suppressedSources = sourceList(config?.suppressedContextSources, 'suppressedContextSources', DEFAULT_SUPPRESSED_SOURCES)
 
@@ -77,52 +84,85 @@ export function apply(ctx, config) {
   ctx.on('session/event', (session, event) => unlocks.observe(session, event))
   const unlockedFor = (session) => session === undefined ? [] : unlocks.state(session).names
 
-  ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
-    // Downstream errors propagate untouched; only this filter's own logic is guarded.
-    const assembled = await next()
-    const select = (tools) => {
-      if (context.agent !== undefined) selectedCounts.set(context.agent, tools.length)
-      return { ...assembled, tools }
+  await Promise.all([promotion.ready, unlocks.ready])
+
+  /** Select declarations without changing the host's scoped admission or tool execution. */
+  const selectTools = (tools, agent) => {
+    const select = (chosen) => {
+      if (agent !== undefined) selectedCounts.set(agent, chosen.length)
+      return chosen
     }
     try {
-      const status = promotion.status(context.agent)
+      const status = promotion.status(agent)
       if (status.promoted) {
-        // PROMOTED: keep the minimal resident set — the shells +
-        // str_replace_editor + the discovery tools + whatever the model
-        // explicitly unlocked via dev_tool_search — instead of dumping the
-        // whole Standard catalog at once (the post-promotion regression fix).
-        const available = new Set(assembled.tools.map((tool) => tool.name))
+        const available = new Set(tools.map((tool) => tool.name))
         const keep = new Set([
           ...SHELLS.filter((name) => available.has(name)),
           'str_replace_editor', ...RESIDENT_DISCOVERY_TOOLS,
-          ...residentTools, ...unlockedFor(context.agent?.session),
+          ...residentTools, ...unlockedFor(agent?.session),
         ])
-        return select(assembled.tools.filter((tool) => keep.has(tool.name)))
+        return select(tools.filter((tool) => keep.has(tool.name)))
       }
-      const { boundary } = status
-      // First request (no compaction yet): zero tools, the "we" anchor.
-      if (boundary < 0) return select([])
-      // Post-compaction: core work set so mid-task work can continue.
-      if (compactionTools.length === 0) return select([])
-      const available = new Set(assembled.tools.map((tool) => tool.name))
+      if (status.boundary < 0 || compactionTools.length === 0) return select([])
+      const available = new Set(tools.map((tool) => tool.name))
       const selectedShells = SHELLS.filter((toolName) => available.has(toolName))
       const missing = compactionTools.filter((toolName) => !available.has(toolName))
       if (selectedShells.length === 0 || missing.length > 0) {
-        warnOnce(
-          `${name}: expected at least one phase shell and every phase tool; `
-          + `shells=${JSON.stringify(selectedShells)}, missing=${JSON.stringify(missing)} — `
-          + 'bootstrap disabled, full catalog exposed',
-        )
-        return assembled
+        warnOnce(name + ': expected at least one phase shell and every phase tool; '
+          + 'shells=' + JSON.stringify(selectedShells) + ', missing=' + JSON.stringify(missing)
+          + ' — bootstrap disabled, full catalog exposed')
+        return select(tools)
       }
       const keep = new Set([...selectedShells, ...compactionTools])
-      return select(assembled.tools.filter((tool) => keep.has(tool.name)))
+      return select(tools.filter((tool) => keep.has(tool.name)))
     } catch (error) {
-      // A filter bug must never brick a session: degrade to the full catalog.
-      warnOnce(`${name}: bootstrap filter failed, exposing the full catalog: ${String((error && error.message) || error)}`)
-      return assembled
+      warnOnce(name + ': bootstrap filter failed, exposing the full catalog: ' + String((error && error.message) || error))
+      return select(tools)
     }
-  })
+  }
+
+  if (typeof ctx.tools?.setExecutor === 'function' && typeof ctx.tools?.resolve === 'function'
+    && typeof ctx.tools?.executable === 'function') {
+    // 0.2.2+: the selected executor owns declarations. Register on this
+    // preset's standing scope so official scope rebinding handles preset
+    // switches, existing blank sessions, child Agents, and disposal.
+    const { NativeToolExecutor } = await import('@deepseek-ai/dsh-tool-executor-native')
+    const native = new NativeToolExecutor(ctx)
+    const scopes = []
+    // The current host evaluates variables and tool providers synchronously,
+    // in that order, before the asynchronous presentation waterfall. Carry an
+    // assembly-local scope token to describe(), whose API only takes tools.
+    // Reentrant or incomplete assembly must not select another Agent's phase:
+    // ambiguous tokens retain the full scoped catalog, and unused tokens expire.
+    ctx.systemPrompt.variable('noname_kit_bootstrap_scope', ({ scope }) => {
+      const token = { scope }
+      scopes.push(token)
+      queueMicrotask(() => {
+        const index = scopes.indexOf(token)
+        if (index >= 0) scopes.splice(index, 1)
+      })
+      return undefined
+    })
+    ctx.tools.setExecutor({
+      describe(tools) {
+        if (scopes.length !== 1) {
+          scopes.length = 0
+          warnOnce(name + ': ambiguous assembly scope, exposing the full scoped catalog')
+          return native.describe(tools)
+        }
+        return native.describe(selectTools(tools, scopes.pop().scope))
+      },
+      execute(input) { return native.execute(input) },
+    })
+
+  } else {
+    // Older hosts expose declarations on the assembly waterfall.
+    ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
+      const assembled = await next()
+      return { ...assembled, tools: selectTools(assembled.tools, context.agent) }
+    })
+  }
+
 
   // Register the context filter with prepend so it runs as the outermost pre-step transform.
   ctx.on('agent/pre-step', async ({ agent }, next) => {

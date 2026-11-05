@@ -21,6 +21,7 @@ export function createEpochPromotion(promoteEvents, options = {}) {
     },
   })
   return {
+    ready: state.ready,
     /** Current bootstrap phase, rebuilt by the host when a session is restored. */
     status(agent) {
       if (agent === undefined || agent.session === undefined) return { boundary: -1, promoted: true }

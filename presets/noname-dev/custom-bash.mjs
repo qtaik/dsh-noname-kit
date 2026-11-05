@@ -3,7 +3,7 @@
 import { posix, win32 } from 'node:path'
 import { ensureWorkingDirectory } from './working-directory.mjs'
 
-/** Cordis plugin name used by loader diagnostics. */
+
 export const name = 'custom-bash'
 
 /** The subprocess and tools services must exist before this tool can register. */

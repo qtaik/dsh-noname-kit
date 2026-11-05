@@ -373,6 +373,91 @@ try {
     assert.ok(result.error)
     assert.equal(result.code, undefined)
   })
+  const SHARED_TRANSLATE = `game.import("extension", function () { return {
+  name: "ModuleFixture",
+  package: {
+    character: {
+      character: {
+        fixture_actor: ["male", "wei", 4, ["fixture_keep"]],
+      },
+      translate: {
+        fixture_shared: "角色名",
+        fixture_actor: "角色",
+      },
+    },
+    card: {
+      card: {
+        fixture_card: { type: "basic" },
+      },
+      translate: {
+        fixture_card: "卡牌",
+      },
+    },
+    skill: {
+      skill: {
+        fixture_keep: { power: 1 },
+      },
+      translate: {
+        fixture_shared: "技能名",
+        fixture_shared_info: "技能说明",
+        fixture_keep: "安全技",
+        fixture_keep_info: "安全说明",
+      },
+    },
+  },
+}; });
+`
+  await test('partial migration indexes unique entries without choosing either shared translation', () => {
+    assert.ok(blocks.migrateCode(SHARED_TRANSLATE).error)
+    const result = blocks.migrateCode(SHARED_TRANSLATE, { allowPartial: true })
+    assert.equal(result.error, undefined)
+    assert.equal(result.partial, true)
+    assert.equal(result.blocks, 6)
+    assert.equal(result.totalEntries, 8)
+    assert.deepEqual(result.skipped.map(x => [x.key, x.reason]), [['translate:fixture_shared', 'duplicate-key'], ['translate:fixture_shared', 'duplicate-key']])
+    assert.equal(blocks.stripAnchors(result.code), SHARED_TRANSLATE)
+    assert.equal(effective(result.code).length, 6)
+    assert.equal(blocks.extractBlock(result.code, 'translate', 'fixture_shared'), null)
+    rejected(blocks.assembleBlocks(result.code, [{ kind: 'translate', id: 'fixture_shared', code: 'fixture_shared: "Changed",' }]), result.code)
+    rejected(blocks.assembleBlocks(result.code, [], [], ['translate:fixture_shared']), result.code)
+    const edit = blocks.assembleBlocks(result.code, [{ kind: 'skill', id: 'fixture_keep', code: 'fixture_keep: { power: 2 },' }])
+    assert.deepEqual(edit.errors, [])
+    assert.ok(edit.code.includes('fixture_shared: "角色名"'))
+    assert.ok(edit.code.includes('fixture_shared: "技能名"'))
+    assert.equal(blocks.migrateCode(result.code, { allowPartial: true }).code, result.code)
+  })
+  await test('partial migration leaves non-contiguous translations unindexed while preserving other entries', () => {
+    const result = blocks.migrateCode(GAP_TRANSLATE, { allowPartial: true })
+    assert.equal(result.blocks, 1)
+    assert.equal(result.skipped.length, 1)
+    assert.equal(result.skipped[0].key, 'translate:fixture_gap')
+    assert.equal(result.skipped[0].reason, 'non-contiguous')
+    assert.equal(blocks.stripAnchors(result.code), GAP_TRANSLATE)
+    assert.deepEqual(effective(result.code).map(x => x.key), ['translate:fixture_other'])
+    rejected(blocks.assembleBlocks(result.code, [{ kind: 'translate', id: 'fixture_gap', code: 'fixture_gap: "Changed",' }]), result.code)
+  })
+  await test('partial migration cannot report success when every entry is ambiguous', () => {
+    const result = blocks.migrateCode(DUPLICATE, { allowPartial: true })
+    assert.ok(result.error)
+    assert.equal(result.code, undefined)
+    assert.equal(result.skipped.length, 2)
+  })
+  await test('file migration backs up the complete input and reports partial coverage', async () => {
+    const sample = await fixture(SHARED_TRANSLATE)
+    const result = await migrateAnchors(sample.nonameDir, folder, 'modules/skills.js')
+    assert.equal(result.ok, true)
+    assert.equal(result.partial, true)
+    assert.equal(result.blocks, 6)
+    assert.equal(result.totalEntries, 8)
+    assert.equal(result.skipped.length, 2)
+    assert.equal(await readFile(join(sample.nonameDir, result.backup), 'utf8'), SHARED_TRANSLATE)
+    const indexed = await readFile(sample.target, 'utf8')
+    assert.equal(blocks.stripAnchors(indexed), SHARED_TRANSLATE)
+    const denied = await writeExtension(sample.nonameDir, { folder, file: 'modules/skills.js', blocks: [{ kind: 'translate', id: 'fixture_shared', code: 'fixture_shared: "Wrong target",' }] })
+    assert.equal(denied.ok, false)
+    assert.equal(denied.wrote, false)
+    assert.equal(await readFile(sample.target, 'utf8'), indexed)
+  })
   await test('a translation anchor cannot swallow another real translation entry', () => {
     const code = GAP_TRANSLATE.replace(GAP_BODY, wrap('translate', 'fixture_gap', GAP_BODY))
     assert.deepEqual(effective(code), [])

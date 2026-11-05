@@ -119,15 +119,7 @@
 		bridgeApi().emit("ext_error", { message: "隔离名单已清空,重启游戏后全部扩展恢复联机加载" });
 	}
 
-	/*
-	 * 闸1:引擎在联机模式默认整段跳过扩展 content(init/loading.js:
-	 * !extension[5] && mode==="connect")。把 lib.extensions 里每条记录的
-	 * 第 6 格(connect 标志)统一置真。
-	 * 时机:onload 用 lib.extensions.map(loadExtension) 起内容加载,闸门检查
-	 * 在 map 调用里同步跑完——所以必须在那之前翻完。boot 在导入期执行,先翻
-	 * 一遍现存记录并包住 push;再包 game.import,每次新扩展注册都重翻一遍,
-	 * 保证无论如何最后一条注册完成后全部标志就位。
-	 */
+	
 	/* 对象内容优先,目录特征兜底;供联机裁决与体检共同使用。 */
 	function extKind(name, obj) {
 		try {
@@ -144,6 +136,10 @@
 		return isContentExt(name) ? "content" : "ui";
 	}
 	var importWrapped = false;
+	/**
+	 * 扩展内容加载：联机模式按 lib.extensions 记录的 connect 标志决定是否加载内容。
+	 * 必须在 onload 开始遍历前设置现有记录，并处理 push 和 game.import 新增的记录。
+	 */
 	function unlockExtensions() {
 		if (!enabled()) {
 			return;
@@ -215,11 +211,9 @@
 		}
 	}
 
-	/*
-	 * 闸2:扩展武将包/卡牌包须在 lib.connectCharacterPack / lib.connectCardPack
-	 * 里才进联机选将池(init/loading.js 只认包对象上的 connect 标志)。
-	 * 在建房/进房时调用——此刻所有包已解析完毕,直接把本地全部包名推进去。
-	 * 双方都开:房间的包列表由房主定,客人侧同名包可用是补包生效的前提。
+	/**
+	 * 联机选将池：扩展包名需要加入 lib.connectCharacterPack / lib.connectCardPack。
+	 * 建房或进房时，包已解析完毕，再将本地包加入列表；房主决定房间使用哪些包。
 	 */
 	function unlockPacks() {
 		if (!enabled()) {
@@ -395,8 +389,7 @@
 				if (!Array.isArray(ext)) {
 					return;
 				}
-				/* 与闸1 共用 extKind 口径(对象特征优先):只看磁盘特征会把
-				 * "package 里声明武将/卡牌"的现代扩展误报成美化类,透视误导排查 */
+				/* 扩展分类同样使用 extKind，优先读取对象声明，避免把含武将或卡牌的现代扩展误判为美化包。 */
 				var kind = extKind(ext[0], ext[4]);
 				if (ext[5]) {
 					loaded.push(ext[0]);

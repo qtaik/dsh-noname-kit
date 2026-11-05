@@ -466,6 +466,27 @@ export function migrateCode(oldCode, options = {}) {
     }
     return { error: '未能识别出可锚定的区块(skill/card/character/translate 区段)——该文件可能是非常规格式,请走全文模式处理。' }
   }
+  // 手动迁移可保留冲突定义，只为能唯一定位的条目建索引；默认严格模式不变。
+  const totalEntries = items.length
+  const skipped = []
+  if (options.allowPartial === true) {
+    const counts = new Map()
+    for (const b of items) counts.set(b.key, (counts.get(b.key) || 0) + 1)
+    const safe = []
+    for (const b of items) {
+      let reason = counts.get(b.key) > 1 ? 'duplicate-key' : b.readOnly ? 'read-only' : b.contiguous === false ? 'non-contiguous' : ''
+      if (!reason) {
+        const ls = base.lastIndexOf('\n', b.start) + 1
+        let le = base.indexOf('\n', b.end + 1)
+        if (le < 0) le = base.length
+        if (!commentTrivia(base, ls, b.start, false, options) || !commentTrivia(base, b.end + 1, le, true, options)) reason = 'inline-boundary'
+      }
+      if (reason) skipped.push({ key: b.key, reason })
+      else safe.push(b)
+    }
+    if (!safe.length) return { error: '未找到可安全建立索引的唯一条目;原文件未改动，请使用唯一原文 edits 精确修改。', skipped, totalEntries }
+    items.splice(0, items.length, ...safe)
+  }
   if (items.some(b => b.readOnly)) return { error: '该文件包含只读或间接内容定义,不能安全建立可写索引;请使用唯一原文 edits 精确修改。' }
   if (items.some(b => b.contiguous === false || items.filter(x => x.key === b.key).length !== 1)) {
     return { error: '条目重复或翻译条目不连续,无法安全建立区块索引;请使用唯一原文 edits 精确修改。' }
@@ -515,7 +536,7 @@ export function migrateCode(oldCode, options = {}) {
   if (verified.length !== items.length || items.some(b => !verified.some(x => x.key === b.key))) {
     return { error: '锚点有效性自检失败,已放弃写入。' }
   }
-  return { code, inserted, commas, blocks: items.length }
+  return { code, inserted, commas, blocks: items.length, ...(skipped.length ? { partial: true, skipped, totalEntries } : {}) }
 }
 
 /** 迁移自检用:剥掉行尾逗号(迁移合法差异=新增锚点行与收尾逗号;CRLF 行尾的 \r 一并剥)。 */

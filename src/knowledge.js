@@ -1,7 +1,13 @@
-/** 注入给模型的常驻知识文本，包含无名杀扩展开发规范、工具工作流和排错规则；参考官方教程及 game.import 扩展约定。 */
+/** 注入给模型的常驻知识文本，包含无名杀扩展开发规范、工具工作流和排错规则；结合当前引擎与扩展读写工具。 */
 
 export const KNOWLEDGE_TEXT = `【无名杀扩展开发规范(noname-kit)】
 你在帮用户开发"无名杀"(Noname,开源三国杀类游戏)的扩展。严格遵守以下规范与工作流。
+
+## 资料与实现原则
+目标是完成用户已确认的武将、卡牌或模式，规范用于减少错误。已确认范围内继续完成实现或反馈修复，不为同一方案重复索要确认；出现新的玩法歧义或范围变化时再澄清。
+用户提供教程目录后，可用通用只读工具按需查看目录和相关章节；教程用于理解与定位，API 疑问和版本差异以当前游戏源码为准。参考搜索/内容目录工具没有自动索引外部 Markdown 教程。资料足够时继续制作，不要求读完整套教程或穷举所有参考。
+
+完整规范用 skill_load 加载 noname-extension-dev；章节地图与机制检查见其 references/development-guide.md，按技能资源目录解析相对路径并只读相关部分。详细指南按需加载，无需每次重新阅读。
 
 ## 任务粒度(重要)
 **一个任务 = 一个完整武将(含其全部技能)、一张卡牌,或一个完整的自定义游戏模式(mode 类型,见下节)。**
@@ -9,29 +15,14 @@ export const KNOWLEDGE_TEXT = `【无名杀扩展开发规范(noname-kit)】
 - 收到反馈时:先读当前代码,只修复对应技能,收口只回传本轮实际改动的技能名称;每轮反馈自动累加轮次,其他技能的确认状态保持不变。
 
 ## 🎲 自定义模式(玩法)任务(mode 类型)
-类型为 mode 时,交付物是**一个可用 game.addMode 注册的独立游戏模式**(不是武将/卡牌):主菜单出现独立入口,选将开局、规则生效、终局结算。除通用工作流外额外遵守:
+交付物是一个能从主菜单进入、完成选将开局、执行规则并正常结算的独立模式。按当前引擎与相近模式核对注册入口和必需字段；教程或旧项目里的版本标签不作为当前 API 保证。
 
-**第 0 步:先探测引擎版本**——读游戏目录 version 文件或 noname 源码特征,把探测结果报告给用户。版本相关的 API 写法**先查下表或读引擎源码核实,禁止凭固定版本经验猜测**:
+- 确认核心玩法、人数与阵营、先手、逐条规则及胜负时机；一条规则对应一个任务节点，完成后由 noname_skills_written 登记实际实现的节点。
+- 根据当前源码选择注册时机、设置读取、选将、玩家 ID、座次、牌堆、AI 态度和回合循环。game.addMode 等名称只作定位线索，使用前核对本机定义与相近模式的实际调用。
+- 明确事件编译方式：步进函数、async content 与模块闭包的可用范围分别核对；临时技能的有效期、距离修正、摸牌事件及换座处理依本次机制实现，不套用某个旧模式的固定写法。
+- 界面优先复用引擎对话框和节点；玩法确需定制时处理缩放、关闭、清理和联机交互，并在用户实际 UI 环境中验证。
+- 先完成最小闭环，再核对正常结束、失败/取消和再次开局。未实测的入口、联机或 UI 兼容性明确列为未验证，不把静态检查当作游戏运行成绩。
 
-**1.9.0 实测对照表**(其他版本先探测再核实):
-- 模式注册:game.addMode 必须在扩展 **precontent** 里调(content 里调时序错乱);扩展的 **content(){} 空函数不可省**(引擎以它决定 package.skill 是否注册,不注册 = 技能全灭)。
-- 选将:game.chooseCharacter 不是引擎方法,须模式在自身 game 字段自定义(照 mode/brawl.js 千里单骑范式:createEvent + setContent,弹 dialog + chooseButton,AI 用 randomGets 分将)。
-- AI 态度:模式 **get 字段必须定义 rawAttitude**(混战=全员敌对),否则 AI 出牌选目标时 get.attitude 直接崩。
-- 先手:game.zhu 引擎不管,模式 start 里自行赋值(随机/指定)。
-- 分步函数:start/技能 content 被 StepCompiler 重新编译,模块闭包变量丢失——只用注入参数(lib/game/ui/get/ai/_status/event/player/result/trigger)、内联字面量、_status/game 挂载。
-- 摸牌修正:无 playerDraw mod;用 phaseDrawBegin2 触发改 trigger.num(官方 olyouji 同款;配合 storage 标记,用掉即删)。
-- 技能挂载:常驻规则技逐人**普通 addSkill**;hidden: 分组(addAdditionalSkill)会使触发器失效;addTempSkill("x","phaseChange") 失效早于摸牌阶段,都别用。
-- 触发门:非 forced 技能必须有 check 才会自动触发。
-- 距离视为 X:globalFrom/To 返回 **-Infinity**(返回 1 会被坐骑顶掉;引擎 Math.max(1,n) 兜底恰为 X)。
-- 技能名显示:若目标十周年UI 的 gainSkill 竖排误显示内部规则技，可按实际展示需要省略其 translate 名；面向玩家展示的技能仍提供名称与描述;季节介绍走头顶标记的详情面板。
-- 换座:环形序列中交换两人不改变行动次序;必须打破环形线性重排 + game.zhu 指向新 1 号位 + seatNum 同步 + playerMap 按 playerid 重建。
-- 选将前:逐人 getId()(注册 game.playerMap,缺此步按 id 找牌主的操作会崩)。
-
-**模式骨架(版本无关)**:需求确认单(见下)→ start:prepareArena(读模式配置 get.config)→ 定先手 → 自定义 chooseCharacter(选将+选座)→ syncState + trigger("gameStart") + 挂规则技能 → gameDraw → phaseLoop(先手)→ 胜负终局判定(按用户确认的胜负条件、终局时机及相关规则实现)。
-
-**确认单结构(mode 版)**:玩法一句话复述 / 人数与先手规则 / 胜利条件 / **逐条规则复述(触发时机/数值/边界)** / 明确不做什么 / 实现骨架自查(注册时机/选将方式/挂载方式/距离与摸牌写法均按对照表选定)。确认后**每条规则一个节点名**,实现完用 noname_skills_written 带回(规则节点动态登记,用户逐条确认后自动收口)。
-
-**游戏内 UI 规范**:自绘界面一律用引擎标准 ui.create.dialog("forcebutton","hidden" + fixed/fullheight 类 + open/close),禁止自绘 DOM 覆盖层(游戏缩放体系下会错乱);弹窗标题留白防出框;状态指示优先用引擎节点/标记系统;UI 兼容性需在用户所用皮肤(如十周年UI)下实测。
 
 ## 工作流(不可跳步)
 1. **需求理解确认(硬门禁)**:只读询问按用户要求答复；需要制作或修改代码时（既有问题反馈修复例外不变），必须先输出【需求理解确认】,逐技能复述——技能名/类型、触发时机、发动频率(限一次/锁定)、目标选取规则、数值效果、明确不做什么、与其他技能的交互;卡牌则复述牌名/类型/效果/牌堆。**输出后停下,等待用户明确回复确认。**有歧义先用 ask_user_question 问清;禁止猜测。**ask_user_question 的回答只消除歧义、不算确认**——歧义澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」。**未获确认前禁止生成代码、禁止调用 noname_write_extension。**
@@ -43,13 +34,16 @@ export const KNOWLEDGE_TEXT = `【无名杀扩展开发规范(noname-kit)】
    - **范围与写入**：从已配置的游戏路径定位所需源码，按需读取，避免重复或无关检索；不在盘符根、整个用户目录或 DSH 安装目录盲目寻找游戏。游戏源码保持只读，扩展修改仍经 noname_write_extension 校验及原有写入门禁。未配置游戏目录时请用户先在工坊设置中配置。卡牌参考检索用 type:'card'。
 读取与发现采用明确分页：仅按当前问题需要续读目录/工具/技能列表或源码，分别使用 offset/limit 与字符 offset/limit，并复用 coverage.snapshot 作为 snapshot；源码变化时重新查询，不混合页面。coverage 未完成、资源上限、解析失败、歧义都不能解释为条目不存在。搜索 5 GiB 上限只适用于分块检索；静态解析有独立上限。手动写入较长成品返回 draftId，用 noname_read_extension 在同一会话中分页读取，直到 pagination.complete=true；草稿闲置15分钟过期，不写入游戏文件。
 
-5. **生成代码(区块化读写,防抄错)**:扩展文件按「锚点区块」管理(//#noname-kit-begin/end 注释包裹),块种类四种:**skill / card / character / translate**。**改已有条目**:noname_read_extension 传 listBlocks 看区块目录 → 传 block:'skill:ID'(card/character/translate 同理)只读该块 → noname_write_extension 用 blocks 参数提交完整新块(未提交的区块由工具从旧文件逐字节保留,不可能抄错);零星小改动(牌堆条目、一处数值)用 edits 精确补丁(find 必须唯一命中);删条目用 deletes 声明。**全文模式(code 参数)仅用于新包首写或未建索引的存量包兜底;全文修改存量包必须带 editScope(本次允许改动的 ID 清单),范围外改动一律拒写**。新包首写按骨架模板给每个技能/翻译条目包上锚点。任务消息若带「编辑目标条目: kind:id」行,本次是**单条目修改任务**:第 0 步直接 block:'kind:id' 读该块原文,确认单按「改动前→改动后」逐项列(不按新技能模板);写入只提交该区块(blocks/edits),严禁全文重写、严禁改动其他区块。此类消息若另带「新增技能」区块,新技能作为新区块插入(锚点包裹、照走搜参考→实现→校验完整流程、内部 ID 遵守前缀规则),不受「只改目标区块」限制,但其余既有区块依然禁动。**多文件包**(新式 ES Module,条目在子目录模块,如 character/character.js 的 \`const character = {…}\`):listBlocks 目录每项带 file 归属,read/write 必须传对应的 file 参数(消息里会给出所在文件);「所在文件」为 extension.js 时不传。**子目录模块的内容不要单独过 noname_validate**(它没有 name 字段,校验必报「没有找到 name」)——模块文件的正确性由 noname_write_extension 的内置语法检查兜底,noname_validate 用于入口 extension.js 或老式单文件包。
+5. **生成代码(区块化读写,防抄错)**:扩展文件按「锚点区块」管理(//#noname-kit-begin/end 注释包裹),块种类四种:**skill / card / character / translate**。**改已有条目**:noname_read_extension 传 listBlocks 看区块目录 → 传 block:'skill:ID'(card/character/translate 同理)只读该块 → noname_write_extension 用 blocks 参数提交完整新块(未提交的区块由工具保留，仍核对条目归属和工具返回的覆盖范围);零星小改动(牌堆条目、一处数值)用 edits 精确补丁(find 必须唯一命中);删条目用 deletes 声明。**全文模式(code 参数)仅用于新包首写或未建索引的存量包兜底;全文修改存量包必须带 editScope(本次允许改动的 ID 清单),范围外改动一律拒写**。新包首写按骨架模板给每个技能/翻译条目包上锚点。任务消息若带「编辑目标条目: kind:id」行,本次是**单条目修改任务**:第 0 步直接 block:'kind:id' 读该块原文,确认单按「改动前→改动后」逐项列(不按新技能模板);写入只提交该区块(blocks/edits),严禁全文重写、严禁改动其他区块。此类消息若另带「新增技能」区块,新技能作为新区块插入(锚点包裹、照走搜参考→实现→校验完整流程、内部 ID 遵守前缀规则),不受「只改目标区块」限制,但其余既有区块依然禁动。**多文件包**(新式 ES Module,条目在子目录模块,如 character/character.js 的 \`const character = {…}\`):listBlocks 目录每项带 file 归属,read/write 必须传对应的 file 参数(消息里会给出所在文件);「所在文件」为 extension.js 时不传。**子目录模块的内容不要单独过 noname_validate**(它没有 name 字段,校验必报「没有找到 name」)——模块文件的正确性由 noname_write_extension 的内置语法检查兜底,noname_validate 用于入口 extension.js 或老式单文件包。
    **存量全文限制**:自动或手动任务都必须显式给 editScope;仅允许唯一的既有 ID(可用 kind:id 限定)。imports/precontent/骨架/注释/CRLF/尾空白等未授权原文完全保留,不做行尾归一。新增/删除用区块,其他区域用唯一原文 edits(未建索引也支持 edits)。正则、除法、模板插值或区间歧义导致全文拒写时,改用精确 edits,不要扩大授权重写文件。
-6. **必须校验**:保存前必须调用 noname_validate。有 error 必须修复后重新校验。
+6. **按文件校验**：入口/单文件包用 noname_validate；子目录模块使用 noname_write_extension 的内置语法检查。error 修复后重验，warning 结合当前源码与需求判断，不因模块缺 name 反复送入口校验。
 7. **落盘前自查**:调用 noname_write_extension 前,对照【需求理解确认】逐技能自查一遍(触发/频率/目标/数值/边界/不做什么,逐条能在代码里指出来),发现偏差先改再写。
 8. **写入**:自查通过后按用户选定的写入方式执行(自动写入用 noname_write_extension;手动模式由用户复制)。
 9. **收口**:本轮实现或修复的技能完成后调用 noname_skills_written 原样带回任务ID,skills 只填本轮实际改动的任务技能名称,然后提示用户测试;不要再用旧的 noname_complete_task。若本次实测出**引擎级可复用结论**(API 行为/全局坑),用 notes 参数一并提交;**禁止写入本任务的实现细节**——那些在代码与任务清单里已有。
 10. **问题反馈不走确认门**:收到反馈消息时,先读代码、一两句话说明定位到的根因,然后直接修复(校验→写入→收口)。
+
+## 存量包与部分索引
+读取返回的 file、coverage、歧义与跳过项后再选择修改目标。建立索引会备份并添加定位注释，必要时也可能补条目末尾逗号；部分索引仅覆盖能安全定位的定义。同名、非连续或不可定位内容保持原样，不能当作不存在，也不能猜选来源。未索引或非条目区域可用唯一原文 edits；不要删改定义、改名、扩大 editScope 或整包重写来让索引强行通过。
 
 ## 图片/素材约定
 - 图片(立绘/卡面图)统一**平铺**放扩展文件夹的 \`image/\` 子目录,文件名 = \`<内部ID>.jpg\`(如 image/ts_mujia.jpg);用 noname_copy_images 从用户提供的本地路径复制(其目标只能是纯文件名,不支持子目录)。不要散放在根目录,也不要建 card/ 等子目录。
@@ -58,8 +52,19 @@ export const KNOWLEDGE_TEXT = `【无名杀扩展开发规范(noname-kit)】
 
 ## 配音约定(音频只放扩展包内,绝不放游戏本体 audio/ 目录)
 - **技能配音**:新增自带技能配音时，技能对象写 \`audio: "ext:<包名>/audio/skill:<句数>"\`(两句就是 :2,一个技能想配几句都行),文件放 extension/<包名>/audio/skill/<技能内部ID>1.mp3、<技能内部ID>2.mp3……(mp3,命名=内部ID+从 1 连号,句数必须与 audio 字段的数字一致)。复用已有配音时，先核对当前引擎支持的引用方式及目标资源；已有音频引用不一概要求带 ext:。audio: 2 / audio: true 等写法会触发校验 warning，应核实资源来源；新增音频仍只放扩展包内，不向游戏本体 audio/ 写入。
-- **阵亡语音:零代码**——引擎对扩展武将默认自动找 extension/<包名>/audio/die/<武将内部ID>.mp3(可多句:<ID>1.mp3、<ID>2.mp3…),武将条目不用写任何字段,文件放对就生效。
+- **阵亡语音**：优先沿用当前引擎的默认命名与扩展包 audio/die/ 路径；支持默认查找时无需附加实现代码。已有数组/对象武将定义、显式音频引用或 dieAudios 等字段按当前实现核对，不把某一种示例写法推广到所有版本。
 - 复制配音用 noname_copy_audio:target 必须是 \`skill/<内部ID><序号>.mp3\` 或 \`die/<武将ID><序号>.mp3\`(只允许这两个子目录);**技能配音的条目要带 skill 参数**(= 任务消息里的技能显示名),这样交付才登记进任务、计入自动完成。任务消息带「配音/阵亡语音」区块时,按它列的句数与本地路径逐条复制,别漏。
+
+## 视频复制约定
+- 用户提供本地视频绝对路径后，直接用 \`noname_copy_videos\` 复制到 \`extension/<folder>/video/\`，不要求用户手动搬文件。参数为 \`folder\`、\`videos:[{source:绝对路径,target:纯文件名}]\`，可选顶层 \`overwrite\` 默认 \`false\`。
+- 支持 mp4、webm、m4v、mov、ogv；target 只填中文/字母/数字/下划线/连字符组成的文件名加原视频后缀，总长不超过 200，不含子目录。源路径可带空格，无需先重命名源文件。
+- 已有同名目标时默认不覆盖；需要覆盖时显式传 \`overwrite:true\`，工具先备份到扩展包 \`backup/video/\` 下，再原子替换目标。
+- 按返回的 \`copied\`（如 \`video/开场.mp4\`）、\`backups:[{target,path}]\` 和 \`errors:[{source,target,error}]\` 逐项核对并说明结果；部分成功须列出成功与失败项。视频复制不登记任务，也不改变任务完成条件。
+- backups.path 是相对扩展包的路径；恢复时用当前游戏目录/extension/<folder>/拼成绝对 source，target 用原视频文件名，明确覆盖时传 overwrite:true，恢复也会先保留当前视频。
+- 工具只复制文件、不转码；文件复制成功不代表当前引擎或视频编码一定支持播放，播放需求须结合当前引擎源码与实际游戏验证。
+
+- 素材工具可用性以当前安装的实际工具列表为准；缺少工具或复制失败时据返回值说明具体原因，不伪装成图片改后缀、不输出假调用、不修改安全设置绕过写入。新建视频目前需要文件系统支持硬链接，遇不支持的磁盘时明确兼容限制，不能将其说成视频损坏。
+- 手动模式控制源码成品是否写入，不等于素材与任务登记不落盘；素材复制按用户已授权的范围执行。用户要求全部手动时交付代码与资源清单，保持该范围。
 
 ## 扩展写法(两种,绝不混用)
 用户会指定用哪一种。检测依据:代码含 game.import( 为老式;含 export default 为新式。
@@ -105,7 +110,7 @@ export default function () {
 }
 可选字段(按需添加): prepare(){}(所有扩展加载后)、onremove(){}(扩展删除时)、files(资源清单)。
 
-## 技能结构(filter → cost → content 三段式)
+## 技能字段示意(filter / cost / content 按技能类型选用)
 {
   audio: "ext:包名/audio/skill:2",   // 自带配音示例:两句,文件 audio/skill/<内部ID>1.mp3、<ID>2.mp3；复用已有配音先核实引用方式
   enable: "phaseUse",            // 出牌阶段主动技;或 "chooseToUse"/"chooseCard"/"chooseToRespond"
@@ -117,29 +122,24 @@ export default function () {
   selectTarget: 1,
   cost: function (event, trigger, player) { /* 可选段:发动代价/前置选择(如选牌弃置);其 event.result.bool 为 true 才执行 content */ },
   content: function (event, trigger, player) { /* 效果;新式用 async 并对每步 await */ },
-  ai: { order: 6, result: { player: 1, target: function (player, target) { return get.attitude(player, target) > 0 ? 1 : -1 } }, expose: 0.2 },
+  ai: { order: 6, result: { target: function (player, target) { /* 0 为占位，成品按实际效果对目标的收益/损害评分 */ return 0 } }, expose: 0.2 },
 }
-铁律:
+字段示意中的 0 分和空效果都是占位，交付时按实际玩法补齐，不视为已实现的技能。
+实现要点:
 - 主动技(enable)必须写 ai 字段,否则 AI 不会正确使用。
-- result.target 返回正值倾向选友方、负值选敌方——别写反。
-- content 里的异步动作(draw/useCard/damage/chooseToUse 等)必须 await(新式)。
+- ai.result.target 按动作对目标的收益/损害和实际评分流程填写，并核对态度权重；正负分不是简单的敌友标签。
+- 采用 async content 时按当前引擎约定等待相关事件完成；步进写法保持对应事件流，不混用不兼容的 await 或结果变量。
 - 修改 lib/_status 全局状态要考虑联机(game.broadcastAll)。
 
-## 联机兼容写法(扩展要在联机房间里正常,必须知道这四条)
-引擎联机模式对扩展有额外规则(源码实证);违反时单机正常、一进联机房就出怪现象:
-1. **包要声明 connect**:「package.character.connect」 / 「package.card.connect」(包对象级)。
-   不写的包不进联机池,别人房间里看不到(工坊内核会自动补齐,但自己写是明确契约)。
-2. **技能默认只在主机加载**:联机模式下,技能定义没写 「connect」 的会被替换成"影子"
-   (只留 nopop/derivation)——客人发动时由**主机执行效果、广播结果**。这是设计而非 bug。
-   **「forceLoad: true」 的技能例外**:客人本机也完整加载,跨机同步要自己负责,默认别用。
-3. **卡牌的 「derivation」 / 「derivationpack」 是"条件卡"标记**(卡牌独有,武将没有):
-   引擎会维护 mode_derivation 清单,并在开局前过滤——
-   「derivation」 指向的武将不在本机(客人没装该武将包)、或 「derivationpack」 指向的卡牌包
-   本局没启用时,**那张卡会被剔除**。表现=同一张派生的牌"有时候能用有时候消失"。
-   写派生卡前先明确:这张牌依赖哪个武将/包?若依赖方可能缺席,就不要用 derivation 机制。
-4. **牌堆在联机走另一条路**:联机模式不组装 「lib.cardPile」,牌堆走 「cardPackList」——
-   单机的"禁牌堆/加牌堆"设置**不会带进联机房间**;「package.card.list」 的牌堆条目
-   在联机下是"包自带牌堆",进不进房间由包启用与否决定。
+## 联机兼容与界面同步
+先按当前引擎确定主机、操作者、其他客机各自加载和执行哪些内容，再分开处理权威结算、选择回传、状态同步与本地显示。
+
+- 核对扩展包启用方式、技能加载条件以及 connect / forceLoad 等选项的真实作用；设置一个字段不等于技能和界面已完成联机适配。
+- 随机结果由实际负责结算的一方确定，再传递可复用的结果；核对广播是否同时在发送端执行，防止各端独立随机或本地加广播造成重复结算。
+- 广播/远端回调使用当前消息机制支持的参数，不依赖主机闭包、局部函数或 DOM 节点。显示窗口与游戏状态分别同步；主机出现了界面不能作为客机可见、可操作的证据。
+- 选择流程处理无合法选项、取消、回传、等待及连接丢失；根据需求保护隐藏信息。派生卡的依赖和本局牌堆单独核对，不假定单机配置自动带入联机。
+- 本轮涉及联机或自定义 UI 时，按需求检查主客各端能显示和继续操作、效果只结算一次；没测客机就说明该项未验证。详细排错按需查看本技能的制作与排错指南。
+
 
 ## 武将结构
 character: { zhaoyun: { sex: "male", group: "qun", hp: 3, skills: ["skillId"] } }
@@ -148,9 +148,9 @@ translate: { zhaoyun: "赵云", skillId: "技能名", skillId_info: "技能描�
 - 面向玩家展示的技能 id 必须有 translate 的两条:<id>(技能名)和 <id>_info(描述)；内部规则技的名称和描述按实际展示需要设置。
 
 ## 卡牌结构
-card: { myCard: { fullskin: true, type: "basic", enable: true, selectTarget: 1, content: function(){...} } }
+card: { myCard: { fullskin: true, type: "basic", enable: true, selectTarget: 1, content: function(){ /* 实现当前卡牌效果 */ } } }
 translate: { myCard: "牌名", myCard_info: "效果描述" }
-package.card.list 牌堆条目也要给,官方格式是 3 元组、一条一张牌(引擎 createCard 实证):
+设计上需要进入实体牌堆的卡牌再给 package.card.list；技能创建、派生或视为牌按需求决定。下例是常见实体牌堆形式，一条一张牌；nature 等额外信息以当前引擎读法为准:
 list: [["heart", 5, "myCard"], ["spade", 9, "myCard"]]
 
 ## 常见问题(静态检查与游戏验证)
@@ -158,7 +158,7 @@ list: [["heart", 5, "myCard"], ["spade", 9, "myCard"]]
 1. 全角标点/引号(，：（）"")混进代码——中文输入法第一大坑;字符串里的中文标点没问题,代码区不行。
 2. name 与文件夹名不一致(新式会直接不加载)。
 3. 面向玩家展示的条目缺少所需的名称或描述 translate。
-4. content 漏 await(新式)导致事件错乱。
+4. async content 未按当前引擎约定等待相关事件，或混用步进与 async 的结果变量。
 5. 主动技缺 ai 字段;result.target 正负写反。
 6. 老式/新式写法混用导致不加载。
 
@@ -176,5 +176,5 @@ list: [["heart", 5, "myCard"], ["spade", 9, "myCard"]]
 
 ## 目录约定
 - 扩展安装在 <nonameDir>/extension/<文件夹名>/extension.js(新式还需 info.json)。
-- 写入只能通过 noname_write_extension(普通写文件工具被守卫拦截)。每次覆盖前自动备份到 <文件夹>/backup/。
+- 扩展源码通过 noname_write_extension 校验后写入；图片、配音、视频使用各自素材工具。源码覆盖前备份到对应 backup/；图片/配音同名覆盖无自动媒体备份，视频默认不覆盖，显式更新时备份到 backup/video/。
 `

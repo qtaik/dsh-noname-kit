@@ -12,18 +12,20 @@ export function stateSchema(validate, label) {
 export function createSessionState(ctx, definition) {
   const legacy = new WeakMap()
   let registered
+  let handle
 
-  const registry = () => {
-    if (registered !== undefined) return registered
+  const register = async () => {
     const service = typeof ctx?.get === 'function' ? ctx.get('sessionProjections') : undefined
     if (service === undefined) return undefined
-    if (typeof service.register !== 'function' || typeof service.stateOf !== 'function') throw new TypeError('session-state: unsupported host projection service')
-    service.register(definition)
+    if (typeof service.register !== 'function') throw new TypeError('session-state: unsupported host projection service')
     registered = service
-    return service
+    const registration = await service.register(definition)
+    if (typeof registration?.stateOf === 'function') handle = registration
+    else if (typeof service.stateOf === 'function') handle = { stateOf: (session) => service.stateOf(session, definition.key) }
+    else throw new TypeError('session-state: host projection registration has no reader')
   }
-  // Register while the plugin owns its lifecycle, before an Agent can append.
-  registry()
+  // Await this while the plugin owns its lifecycle, before publishing consumers.
+  const ready = register()
 
   const legacyEntry = (session) => {
     const events = session?.events
@@ -44,11 +46,12 @@ export function createSessionState(ctx, definition) {
   }
 
   return {
+    ready,
     state(session) {
       if (session === null || typeof session !== 'object') throw new TypeError('session-state: a readable session is required')
-      const service = registry()
-      if (service !== undefined) {
-        const value = service.stateOf(session, definition.key)
+      if (registered !== undefined) {
+        if (handle === undefined) throw new TypeError('session-state: projection registration is not ready')
+        const value = handle.stateOf(session)
         if (value === undefined) throw new TypeError(`session-state: projection ${definition.key} is unavailable`)
         return value
       }

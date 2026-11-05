@@ -72,9 +72,8 @@ export function isProtectedPath(candidate, protectRoot) {
 }
 
 /**
- * 相对路径的归属判定:分别在每个候选基准目录下解析,任一落进保护根即命中。
- * 候选 = 会话工作目录 / bash 的 workdir 参数 / 进程 cwd / 游戏目录。
- * 宁可多拦(误报)也不漏拦:守卫是安全边界,误报只需用户放行一次。
+ * 将相对路径分别按会话目录、Shell workdir、进程 cwd 和游戏目录解析。
+ * 任一结果位于扩展目录内时，按受保护路径处理。
  */
 export function pathHitsProtected(candidate, protectRoot, baseDirs) {
   const raw = String(candidate ?? '').trim()
@@ -154,10 +153,10 @@ export function bashGuardReason(command, protectRoot, baseDirs) {
     return out
   }
 
-  /* ── 0) 先处理子壳:`bash -c "…"` / `sh -c '…'` / `(cd … && …)` ──
-   * 引号里的命令整段再跑一遍本函数(相对路径按外层已知的 lastDir 解析不了时,
-   * 至少能抓住"引号里带绝对保护路径"的形态;`cd` 在引号里也能被 CD_CMD_RE 抓到,
-   * 因为它允许前导空白)。 */
+  /**
+   * 递归检查 bash -c、sh -c 和括号中的子命令。
+   * 即使无法推断相对路径，也能识别其中的绝对扩展路径及 cd 目标。
+   */
   {
     const subRe = /(?:^|[\s;&|()])(?:bash|sh|zsh|dash)[ \t]+-c[ \t]+("([^"]+)"|'([^']+)')/gi
     let m
@@ -313,5 +312,5 @@ export function powershellGuardReason(command, protectRoot, baseDirs) {
 
 /** 守卫提示的统一出路文案。 */
 export function guardMessage(detail) {
-  return `noname-kit:${detail}。扩展代码请用 noname_read_extension / noname_write_extension 读写(写入前自动校验、覆盖前自动备份、防丢护栏);确有必须用通用工具完成的特殊操作,请让用户确认后手动执行。`
+  return `noname-kit:${detail}。扩展代码请用 noname_read_extension / noname_write_extension 读写(写入前自动校验、覆盖前自动备份、防丢护栏);图片、配音、视频素材分别用 noname_copy_images / noname_copy_audio / noname_copy_videos 复制;确有必须用通用工具完成的特殊操作,请让用户确认后手动执行。`
 }

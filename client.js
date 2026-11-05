@@ -1,6 +1,6 @@
-// dsh-noname-kit 浏览器半:顶部「无名杀工坊」页签 + 表单 + 历史面板 + 工具结果卡片。
-// 形态参照 dsh-skin:纯 JS + React.createElement,零构建。
-// 页签注册的是 conversation.view 列表槽(与官方"轨迹"页签同一插槽,order 排在它后面)。
+// dsh-noname-kit 浏览器界面：工坊、任务列表、历史和工具结果。
+// 使用宿主模块加载器和 React.createElement，无需单独构建。
+// 工坊页签注册到 conversation.view，与官方轨迹页共用插槽。
 window.__ModuleLoader__.load({
   id: 'dsh-noname-kit',
   factory: (require) => {
@@ -8,6 +8,11 @@ window.__ModuleLoader__.load({
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
     var React = require('react');
+
+    function WorkshopIcon(props) {
+      var size = props && props.size || 20;
+      return React.createElement('img', { src: '/noname-kit-api/icon.png', width: size, height: size, className: 'nnk-brand-icon', alt: '', 'aria-hidden': true, draggable: false });
+    }
 
     // ── 样式(令牌取自 DSH 界面变量,自动适配亮/暗;间距/圆角/过渡走 --nnk-* 设计令牌) ──
     var CSS = [
@@ -59,6 +64,8 @@ window.__ModuleLoader__.load({
       '.nnk-panel{position:fixed;width:380px;max-height:560px;display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.25);z-index:60}',
       '.nnk-panel-head{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);cursor:move;user-select:none}',
       '.nnk-panel-title{font-weight:600;font-size:13px;color:var(--dsw-alias-label-primary)}',
+      '.nnk-brand-icon{display:block;flex-shrink:0;object-fit:contain}',
+      '.nnk-brand-label,.nnk-modern .nnk-identity.nnk-brand-label{display:inline-flex;align-items:center;gap:6px}',
       '.nnk-panel-close{border:none;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:16px;line-height:1;padding:2px 6px}',
       '.nnk-panel-close:hover{color:var(--dsw-alias-state-error-primary)}',
       '.nnk-panel-body{padding:10px 12px;overflow-y:auto;flex:1}',
@@ -838,8 +845,12 @@ window.__ModuleLoader__.load({
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ folder: form.folder }),
         }).then(function (r) { return r.json() }).then(function (b) {
+          var unindexed = b.skippedEntries || [];
+          var unindexedKeys = [];
+          unindexed.forEach(function (entry) { if (unindexedKeys.indexOf(entry.key) < 0) unindexedKeys.push(entry.key) });
+          var incomplete = b.partial || unindexed.length || b.failed && b.failed.length;
           patch({ busy: false, currentInfo: b.ok
-            ? '✅ 区块索引已建立:' + b.totalFiles + ' 个文件 / ' + b.totalBlocks + ' 个区块,插入 ' + b.totalInserted + ' 行锚点注释' + (b.totalCommas ? '(另补 ' + b.totalCommas + ' 个收尾逗号)' : '') + ';各文件原版已备份到同目录 backup/' + (b.filesSkipped ? '(跳过 ' + b.filesSkipped + ' 个无条目文件)' : '')
+            ? (incomplete ? '⚠️ 已建立可安全定位的区块索引:' : '✅ 区块索引已建立:') + b.totalFiles + ' 个文件 / ' + b.totalBlocks + ' 个区块,插入 ' + b.totalInserted + ' 行锚点注释' + (b.totalCommas ? '(另补 ' + b.totalCommas + ' 个收尾逗号)' : '') + ';各文件原版已备份到同目录 backup/' + (b.filesSkipped ? '(跳过 ' + b.filesSkipped + ' 个无条目文件)' : '') + (unindexed.length ? ';另有 ' + unindexed.length + ' 处重名或无法唯一定位的定义未索引，原内容保留（' + unindexedKeys.slice(0, 6).join('、') + (unindexedKeys.length > 6 ? '…' : '') + '），这些条目请用唯一原文精确修改。' : '') + (b.failed && b.failed.length ? ';另有 ' + b.failed.length + ' 个文件未能建立索引，原内容保留。' : '')
             : '❌ ' + (b.error || '建立失败') });
         }, function (e) { patch({ busy: false, currentInfo: '❌ 建立失败: ' + (e && e.message || e) }) });
       };
@@ -1911,9 +1922,7 @@ window.__ModuleLoader__.load({
           if (transferLimitDraft === null || transferLimitDraft === transferLimitCfg) setTransferLimitDraft(value);
         }
       });
-      /* 主机模式单选跟随内核(刷新页面后本机状态重置为「身份」,若不回同步,
-       * F5 一次就会把房间模式看错、点载入还会把模式切回去)。按「变化才同步」
-       * 键控:刚点的选项在命令回显前不会被旧事件弹回 */
+      /* 从内核同步房间模式；仅在变化时更新，避免刷新后显示旧模式或覆盖尚未回显的选择。 */
       React.useEffect(function () {
         var ev0 = onlinePickEvent((status && status.bridge && status.bridge.events) || [], 'room_members');
         var m = ev0 && ev0.data && (ev0.data.nextMode || ev0.data.mode);
@@ -2659,7 +2668,7 @@ window.__ModuleLoader__.load({
           e('div', 'nnk-hint', '把整段码发给朋友 → 他回发的「回执码」贴到对应那一行点「连接」。码放太久会失效(超 3 分钟会亮牌)。'));
       }
 
-      /* 房间速览(主卡按钮与大厅弹窗共用同一套容量口径):成员表 + 当前容量 */
+      /* 房间摘要：主卡和大厅共用成员列表与容量计算。 */
       function roomBrief() {
         var ev0 = onlinePickEvent(evs, 'room_members');
         var d = (ev0 && ev0.data) || {};
@@ -2994,7 +3003,7 @@ window.__ModuleLoader__.load({
       try {
         return h('div', { className: 'nnk-wrap' },
           h('div', { className: 'nnk-appearancebar' },
-            e('span', 'nnk-identity nnk-modern-only', 'NONAME-KIT'), h(AppearanceSwitch)),
+            h('span', { className: 'nnk-identity nnk-modern-only nnk-brand-label' }, h(WorkshopIcon, { size: 24 }), 'NONAME-KIT'), h(AppearanceSwitch)),
           h(WorkshopTabs, { active: active, setActive: setActive, id: viewId }),
           h(WorkshopPage, { active: active, id: viewId },
           phase === false && active === 'new' ? e('div', 'nnk-err', '⚠️ 还没配置游戏目录——到「⚙ 设置」页填一下就能自动写入;暂时不配也行,把写入方式设为「手动复制」。') : null,
@@ -3239,7 +3248,7 @@ window.__ModuleLoader__.load({
         var skills = Array.isArray(task.skills) ? task.skills : [];
         var confirmed = skills.filter(function (s) { return s.status === 'confirmed' }).length;
         var warn = [];
-        if (!task.image && task.type !== 'mode' && !task.target) warn.push('未登记图片');   /* 编辑任务不涉及图片(与浮窗展示逻辑同口径) */
+        if (!task.image && task.type !== 'mode' && !task.target) warn.push('未登记图片');   /* 编辑任务不强制补图，与任务浮窗保持一致。 */
         if (skills.length && confirmed < skills.length) warn.push('技能确认 ' + confirmed + '/' + skills.length);
         if (audioNeed(task)) warn.push('有已登记未交付的配音');
         if (warn.length && !window.confirm('「' + task.id + '」' + warn.join('、') + '。\n确定标记整个任务完成、同时确认全部子项并归档吗?')) return;
@@ -3533,11 +3542,11 @@ window.__ModuleLoader__.load({
       var attention = healthBus.attentionText();
       return h('button', {
         type: 'button',
-        className: 'nnk-smallbtn',
+        className: 'nnk-smallbtn nnk-brand-label',
         style: { margin: '0 6px', whiteSpace: 'nowrap' },
         title: '无名杀工坊:创建任务 / 任务列表 / 历史' + (attention ? '(⚠️ ' + attention + ')' : ''),
         onClick: function () { workshopBus.set(!workshopBus.open) },
-      }, isOpen ? '🛠 关闭工坊' : '🛠 工坊', attention ? h('span', { className: 'nnk-dot' }) : null);
+      }, h(WorkshopIcon), isOpen ? '关闭工坊' : '工坊', attention ? h('span', { className: 'nnk-dot' }) : null);
     }
 
     /** 工坊浮窗:初始屏/任意会话用浮层承载整个工坊页;任务发进当前会话。 */
@@ -3582,7 +3591,7 @@ window.__ModuleLoader__.load({
           setPos(d);
           try { localStorage.setItem('dsh-noname-kit.workshopPanelPos', JSON.stringify(d)) } catch (e) {}
         }, title: '拖动移动 · 双击复位' },
-        e('span', 'nnk-panel-title', '🛠 无名杀工坊'),
+        h('span', { className: 'nnk-panel-title nnk-brand-label' }, h(WorkshopIcon), '无名杀工坊'),
           h('button', { className: 'nnk-panel-close', onClick: function () { workshopBus.set(false) } }, '✕')
         ),
         h('div', { className: 'nnk-panel-body' },

@@ -321,7 +321,7 @@
 		if (!sendTo.length) {
 			return fail("没有可定向的客人通道(对方内核可能过旧,请双方都升级到最新内核)");
 		}
-		/* 本次会话的必答名单(冻结在此):中途新放行的客人不参与本次,不欠回执 */
+		/* 记录本次等待回执的客人名单；传输开始后新加入的客人不计入本次等待。 */
 		var ackTargets = only ? [only] : enteredBridges().map(bridgeId).filter(function(x) { return x !== null; });
 		var head = {
 			id: id,
@@ -463,8 +463,7 @@
 					}
 					var expected = rx.files[msg.rel];
 					if (!safeRel(msg.rel) || !expected || rx.received[msg.rel] || msg.size !== expected.size || msg.sha256 !== expected.sha256) {
-						/* 记一笔:被拒的文件收尾时必须让完整性收口报失败,
-						 * 不能"跳过一个文件还回 done"(假成功活路) */
+						/* 记录被拒文件，结束传输时据此返回失败，避免漏传仍报成功。 */
 						rx.rejectedFiles += 1;
 						return;
 					}
@@ -514,9 +513,7 @@
 					var rejected = rx.rejectedFiles;
 					var doneFiles = rx.doneFiles;
 					var expect = rx.expectCount;
-					/* 完整性收口:清单里每个文件都必须走到摘要验证与落盘。
-					 * 被拒条目(如文件名含 ..)照旧回 done,就是 1.9.0 修过的
-					 * "假成功"漏网活路——缺一个都不报成功 */
+					/* 仅在清单中的每个文件都完成摘要验证与落盘后返回成功。 */
 					if (rejected > 0 || doneFiles !== expect) {
 						var why = rejected > 0
 							? (rejected + " 个文件名不合法,无法接收")
@@ -635,7 +632,7 @@
 			abortRx();
 			return false;
 		}
-		rx.doneFiles += 1;   /* 完整性收口计数:tx_done 按它核对"清单里每个文件都到了" */
+		rx.doneFiles += 1;   /* 已接收文件数，由 tx_done 对照清单核验。 */
 		rx.received[rx.rel] = true;
 		rx.rel = null;
 		rx.skip = false;
@@ -774,7 +771,7 @@
 				total: filesTotal,
 				doneBytes: 0,
 				reported: 0,
-				expectCount: msg.files.length,   /* 完整性收口:清单里的文件数 */
+				expectCount: msg.files.length,   /* 清单中预期的文件总数。 */
 				doneFiles: 0,
 				rejectedFiles: 0
 			};

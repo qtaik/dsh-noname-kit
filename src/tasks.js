@@ -1,25 +1,9 @@
 /**
- * noname-kit 任务登记处:任务 = 一个武将(多技能)、一张卡牌(单技能),
- *   或一个自定义游戏模式(type:'mode',创建模式初始无技能节点;编辑模式把
- *   骨架/规则改动预置为节点;其余规则节点由 AI 在 skills_written 时动态登记,
- *   dynamicSkills=true;无立绘/卡图,isCompletable 豁免图片)。
- *   task = { id, folder, type: 'character'|'card'|'mode', title, charInfo, image,
- *            target: { kind: 'character'|'card', id } | null,
- *            pile: { join: boolean, entries: string(每行「花色 点数」) },
- *            skills: [{name, desc, audios[], audioFiles[], status, rounds, feedbacks[] }],
- *            dieAudios[], dieAudioFiles[],
- *            dynamicSkills?: boolean, modeBrief?/modeNum?/modeWin?/modeRules?: string(mode 留档),
- *            status: open|done, writeMode: auto|manual,
- *            rounds, feedbacks[], notes[] (skills_written/complete 后补), summary?, createdAt, updatedAt }
- * audios = 技能配音的本地源路径清单(用户表单登记);audioFiles = 已复制进包的
- *   目标文件,存 audio/ 下相对路径(形如 skill/<内部ID>1.mp3);dieAudios/dieAudioFiles
- *   同理(阵亡语音,任务级,die/<武将ID>.mp3)。登记了配音的任务,对应文件全部
- *   复制到位才算满足自动完成;未登记配音的任务不受影响。
- * target 非空 = 「编辑已有条目」任务:只改该条目对应区块,其他内容不动;
- * 这类任务豁免图片条件(立绘通常已有);配音登记通常也不出现在这类任务上。
- * 每个技能独立状态机:待实现(open)→ 待测试(written)→ 确认无误(confirmed);
- * 反馈把技能打回 open 并记录日志。全部技能 confirmed 且图片/配音就位 → 任务自动 done。
- * 删除任务 = 从登记处移除整树;不动扩展代码/备份/history 归档。
+ * 保存武将、卡牌和模式任务的需求、技能状态、素材及反馈。
+ * 技能状态按 open → written → confirmed 流转，反馈后回到 open。
+ * 全部技能确认且所需素材齐全后自动完成；新建武将和卡牌需要图片，编辑任务和模式不要求图片。
+ * 已登记的配音必须全部复制到位；模式规则可通过 skills_written 动态登记。
+ * 删除任务仅移除登记记录，保留扩展源码、备份和历史。
  */
 import { readJsonSafe, writeJsonAtomic } from './store.js'
 import { join } from 'node:path'
@@ -166,8 +150,10 @@ export async function getTask(dshHome, taskId) {
   return registry.tasks.find((t) => t.id === taskId) || null
 }
 
-/** 重开已完成任务:done → open。不动技能状态/轮次/反馈——
- * 供补图或重新确认后再次收口(自动归档由既有确认链路触发)。 */
+/**
+ * 重新打开已完成任务，保留技能状态、轮次和反馈。
+ * 后续确认或补图仍按原有条件自动完成和归档。
+ */
 export async function reopenTask(dshHome, { taskId }) {
   const registry = await readRegistry(dshHome)
   const task = registry.tasks.find((t) => t.id === taskId)
@@ -320,9 +306,10 @@ export async function skillFeedback(dshHome, { taskId, skill, issue }) {
   return { ok: true, unknownSkill, task }
 }
 
-/** 补图:设置任务图片路径(路径由用户在表单填写)。
- * 补图后若满足「全确认+有图」,自动置 done(归档由调用方完成)——
- * 否则全确认后补图的任务会永远停在 open,无人触发收口。 */
+/**
+ * 登记用户填写的任务图片路径，满足完成条件时将任务置为 done。
+ * 归档由调用方处理。
+ */
 export async function setTaskImage(dshHome, { taskId, image }) {
   const registry = await readRegistry(dshHome)
   const task = registry.tasks.find((t) => t.id === taskId)

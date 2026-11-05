@@ -42,9 +42,8 @@ async function updateHistory(nonameDir, folder, mutate) {
 }
 
 /**
- * 归档一条任务到扩展文件夹 history(幂等):同一 taskId 已存在时更新既有条目
- * (摘要/注意点合并,轮次取较大值),不再追加——防止"AI 收口 + 用户手动标记"
- * 各记一条导致的重复。
+ * 按 taskId 更新任务归档，合并摘要、注意事项和轮次。
+ * 自动归档和手动完成同一任务时，不重复添加记录。
  */
 export async function archiveTask(nonameDir, { folder, taskId, kind, summary, notes, rounds }) {
   const full = folderPath(nonameDir, folder)

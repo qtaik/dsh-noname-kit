@@ -1,17 +1,8 @@
 /**
- * 联机助手:内核安装管理 + 工坊↔游戏内核的心跳桥会话。
- *
- * 架构:跨网络联机的传输层(WebRTC)必须跑在游戏进程里,所以有一个以扩展
- * 形态存在的「内核」(online-kernel/,随插件打包)。它无头运行,由本模块:
- *  1. 安装/升级到游戏 extension/联机助手/(复制 + 盖章 + 哈希配对,同 preset
- *     哲学;备份放在游戏根目录 nnk-kernel-backups/ —— 不能放 extension/ 里,
- *     游戏会把那里每个含 extension.js 的子目录都当成扩展加载);
- *  2. 经 nnk-bridge.json(安装时写入桥地址与 token)与内核保持心跳:
- *     内核轮询 POST /online/bridge 上报状态与事件、取回工坊下发的命令
- *     (create_room / join_invite / accept_answer / invite_refresh / cancel)。
- *
- * 为什么不用 preset.js 的 hashDir:安装时会往内核目录多写一个 nnk-bridge.json
- * (哈希必须忽略它),所以这里自带一份带跳过清单的目录哈希。
+ * 管理联机内核安装及工坊与游戏之间的心跳桥。
+ * WebRTC 在游戏进程运行；随包内核安装到 extension/联机助手，通过 nnk-bridge.json 连接工坊。
+ * 备份放在游戏根目录的 nnk-kernel-backups/，避免被当作扩展加载。
+ * 目录哈希忽略每次安装生成的 nnk-bridge.json。
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -36,8 +27,7 @@ export function kernelDirOf(nonameDir) {
   return join(nonameDir, 'extension', KERNEL_FOLDER)
 }
 
-/** 内核版本号:从自带 extension.js 的 __nnk__ 初始化行里读。内核源随插件冻结,
- *  运行期只读一次盘(工坊状态每 1.5s 轮询,别让它反复打文件)。 */
+/** 内核版本从随包 extension.js 读取并缓存，避免状态轮询反复读盘。 */
 let cachedKernelVersion
 export function bundledKernelVersion() {
   if (cachedKernelVersion !== undefined) return cachedKernelVersion

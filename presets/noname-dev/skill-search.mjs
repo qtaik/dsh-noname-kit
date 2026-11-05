@@ -2,7 +2,7 @@
 
 import { ensureWorkingDirectory } from './working-directory.mjs'
 
-/** Cordis plugin name used by loader diagnostics. */
+
 export const name = 'skill-search'
 
 /** The agent, tools, and skills services must exist before these tools can register. */

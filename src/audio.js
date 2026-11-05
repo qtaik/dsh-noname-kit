@@ -1,9 +1,6 @@
 /**
- * noname-kit 配音复制:把用户提供的本地 mp3 复制进扩展包的 audio/ 子目录
- * (`extension/<folder>/audio/skill/` 与 `audio/die/`),替代把音频塞进游戏
- * 本体 audio/ 目录的老做法——扩展的音频只归扩展包。
- * 安全校验:源必须存在;目标只允许 skill/ 或 die/ 一层子目录 + 纯文件名(.mp3);
- * 目录不得逃逸。
+ * 将本地 MP3 复制到扩展包 audio/skill/ 或 audio/die/。
+ * 源文件必须存在；目标只接受配音子目录中的 MP3 文件名，并检查路径范围。
  */
 import { copyFile, mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -50,8 +47,10 @@ async function copyAudiosInner(nonameDir, { folder, audios }) {
   return { ok: errors.length === 0, copied, errors }
 }
 
-/** 目标路径的归属目录:'skill' | 'die' | null(非配音目标形态)。
- * 与 copyAudios 的复制正则同为大小写不敏感,两处口径必须一致。 */
+/**
+ * 识别目标所属的配音目录：skill、die 或 null。
+ * 大小写匹配规则须与 copyAudios 的复制校验一致。
+ */
 export function audioTargetKind(target) {
   const m = String(target || '').replace(/\\/g, '/').match(/^(skill|die)\//i)
   return m ? m[1].toLowerCase() : null

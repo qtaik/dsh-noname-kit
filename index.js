@@ -1,21 +1,11 @@
 /**
- * dsh-noname-kit — Host 半(Node 侧)
- *
- * 无名杀(Noname)扩展开发工坊:AI 写扩展代码的受限开发套件。
- * - 注入规范知识(systemPrompt 常驻),取代用户手动喂知识库
- * - 注册开发工具:搜官方参考 / 校验 / 读扩展 / 写扩展(校验门禁) / 复制图片 / 复制配音 / 任务收口
- * - 守卫:尽力拦截通用 write/edit/bash/pwsh 对游戏 extension 目录的可识别写入
- * - HTTP API:历史记录与备份回滚(浏览器工坊面板用)
- *
- * 配置:cordis.yml 行上配 nonameDir(无名杀游戏本体目录,含 extension/)。
- * 不配置时为"仅生成模式":工具可用,但不能写文件,守卫不激活。
- *
- * 浏览器半在 ./client.js(工坊页签 + 表单 + 结果卡片)。
+ * 无名杀工坊服务端：注册开发工具、扩展写入保护和工坊接口。
+ * nonameDir 配置游戏目录；浏览器界面见 client.js。
  */
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { join, resolve } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { normalizeSignalingUrl } from './online-kernel/keepalive/signaling-config.js'
 import { statSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -30,6 +20,7 @@ import { listCatalog, readCatalog } from './src/catalog.js'
 import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateExtension, prunePackageBackups, listEntries, listEntrySkills, listAvatars } from './src/write.js'
 import { readHistory, archiveTask, listExtensionHistories, recordBackup, deleteNote } from './src/history.js'
 import { copyImages } from './src/images.js'
+import { copyVideos } from './src/videos.js'
 import { listExtensionFolders } from './src/detect.js'
 import { copyAudios, audioTargetKind } from './src/audio.js'
 import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, setSkillAudioFiles, setDieAudioFiles, completeById, deleteTask, reopenTask, getTask } from './src/tasks.js'
@@ -78,6 +69,7 @@ function pathArgOf(exec) {
 
 /** /detect 的短缓存(60 秒),避免用户连续点击时反复扫盘。 */
 const detectCache = { at: 0, list: [] }
+let iconResource
 
 /** 目录是否像一个无名杀游戏本体根(extension/ + noname.js|noname/|game/)。 */
 function isValidGameDir(dir) {
@@ -91,7 +83,7 @@ function isValidGameDir(dir) {
 }
 
 export function apply(ctx, config) {
-  // ── 0) 配置解析与初始化向导后端 ──────────────────────────────
+  // 配置解析与初始化向导
   // 优先级:cordis.yml 行配置 > 工坊向导保存的设置文件 > 空(仅生成模式)。
   // 向导保存后立即热生效,不需要重启。
   // dshHomePath 是个解析函数,调用得到 Harness home(~/.dsh)
@@ -189,7 +181,7 @@ export function apply(ctx, config) {
     }
   }
 
-  // ── 0.6) 联机助手:心跳桥会话 ─────────────────────────────────
+  // 联机内核心跳桥
   // 游戏内核(online-kernel/,随插件打包)轮询本插件的 /online/bridge 上报
   // 状态并取回工坊命令。token 存进设置文件:DSH 重启后不变,内核不用重装
   // (baseUrl 里的端口或凭据变化时,可显式「绑定到此 DSH」刷新桥配置)。
@@ -216,14 +208,14 @@ export function apply(ctx, config) {
   // 目录扫出来的武将:选中保存被内核 hasCharacter 拒,新目录已有的又看不到)
   const avatarsCache = { at: 0, list: null, err: '', dir: '' }
 
-  // ── 1) 常驻规范知识(文本随配置状态动态生成) ─────────────────
+  // 随配置状态生成开发规范
   // POSIX 形式路径:模型在 bash 里习惯 /d/... 写法,直接给两种形式免得它自己转换/寻找
   const posixPath = (p) => String(p || '')
     .replace(/^([A-Za-z]):[\\/]/, (_m, d) => '/' + d.toLowerCase() + '/')
     .replace(/\\/g, '/')
   ctx.systemPrompt.section({
     name: 'noname-kit',
-    // 排在文件工具说明(1200-1300)之后、web 工具(2000)之前:模型先懂规矩再干活
+    // 规范说明排在文件工具之后、Web 工具之前。
     order: 1800,
     text: () => active
       ? KNOWLEDGE_TEXT + '\n## 当前环境(工坊已配置;路径就在下面,不需要寻找)\n'
@@ -235,7 +227,7 @@ export function apply(ctx, config) {
 
   registerPresetContext(ctx, () => ({ active, nonameDir }))
 
-  // ── 2) 工具定义 ──────────────────────────────────────────────
+  // 开发工具
   ctx.tools.register(defineTool({
     name: 'noname_search_reference',
     description: 'Find skill, character and card reference implementations by Chinese name, ID, effect keywords or description. Search for the mechanisms needed by the current task; different implementations you have actually read may be combined, and an exact combined match is not required. Stop once the references sufficiently support the current approach; do not exhaust candidates or continue solely because coverage.partial is true. This is not a complete engine API index; verify engine API contracts with general read/search tools against current game source. Files up to 5 GiB are supported: ordinary files use a bounded index; large files return the first bounded excerpt per file, requiring all query words within one 16 KiB source window. Large files use chunked search. Results are limited; coverage.partial means content remains unsearched or was skipped, not that it does not exist. If more reference evidence is needed and nextCursor is present, repeat the same query/type with cursor=nextCursor to continue. A full description can return similarity >=50% candidates; read the definition of any candidate you rely on, for example by searching its ID.',
@@ -562,6 +554,43 @@ export function apply(ctx, config) {
   }))
 
   ctx.tools.register(defineTool({
+    name: 'noname_copy_videos',
+    description: 'Copy user-selected local videos into extension/<folder>/video/ without shell commands. Supports mp4/webm/m4v/mov/ogv; this copies bytes, not transcoding or playback validation. Use returned video/ paths in code. Existing files require overwrite:true and are backed up before atomic replacement. Does not complete image/audio tasks.',
+    parameters: {
+      folder: { type: 'string', required: true, description: 'Existing extension folder name.' },
+      overwrite: { type: 'boolean', description: 'Default false. Set true to update an existing video; the old bytes are backed up first.' },
+      videos: {
+        type: 'array', required: true, description: 'Videos to copy into video/.',
+        items: { type: 'object', additionalProperties: false, properties: {
+          source: { type: 'string', required: true, description: 'Absolute local path to a video file.' },
+          target: { type: 'string', required: true, description: 'Plain file name only, e.g. huis_qiyue.mp4. Keep the source extension; no directories.' },
+        } },
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: false, properties: {
+        ok: { type: 'boolean', required: true },
+        copied: { type: 'array', items: { type: 'string' } },
+        backups: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { target: { type: 'string' }, path: { type: 'string' } } } },
+        errors: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { source: { type: 'string' }, target: { type: 'string' }, error: { type: 'string' } } } },
+        warnings: { type: 'array', items: { type: 'string' } },
+      } },
+      render: (_args, value) => [{ type: 'text', text: [
+        value.ok ? '视频复制完成。' : '视频复制未全部完成。',
+        ...(value.copied || []).map(file => '已复制：' + file),
+        ...(value.backups || []).map(item => '原视频备份：' + item.target + ' → ' + item.path),
+        ...(value.errors || []).map(item => '失败：' + (item.target || item.source || '视频复制') + '：' + item.error),
+        ...(value.warnings || []),
+        '按返回路径引用素材；复制成功不代表已验证游戏内播放。',
+      ].join('\n') }],
+    },
+    async execute(args) {
+      if (!active) return { ok: false, copied: [], backups: [], errors: [{ source: '', target: '', error: '未配置 nonameDir，无法复制视频。' }] }
+      return copyVideos(nonameDir, args)
+    },
+  }))
+
+  ctx.tools.register(defineTool({
     name: 'noname_copy_audio',
     description: 'Copy user-provided local voice mp3 files into the extension audio folder (audio/skill for skill voices, audio/die for death voices). NEVER copies into the game core audio directory. Pass taskId (plus skill for skill voices) to record delivery so the task can auto-complete.',
     parameters: {
@@ -700,7 +729,7 @@ export function apply(ctx, config) {
     },
   }))
 
-  // ── 3) 守卫:extension 目录的写操作必须走专用工具 ─────────────
+  // 扩展源码写入保护
   // 始终注册,内部动态判断 active:工坊向导热初始化后立即生效。
   // 判定逻辑在 src/guard.js(纯函数、有单测):路径归一化(反斜杠/正斜杠/
   // git-bash 盘符/.. 折叠)→ 归属判断;bash 另做"先 cd 进保护目录再相对写"
@@ -744,7 +773,7 @@ export function apply(ctx, config) {
     return undefined
   })
 
-  // ── 4) HTTP API:状态/初始化向导/历史/回滚(浏览器工坊用) ─────
+  // 工坊 HTTP 接口：状态、配置、历史和回滚
   // 可选注入:只有组合了 webServer 的部署(web UI)才挂路由;
   // headless 等无网页面部署里跳过,不阻塞启动。
   ctx.inject(['webServer'], (webCtx) => webCtx.webServer.register({
@@ -829,6 +858,19 @@ export function apply(ctx, config) {
         return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
       }
       try {
+        if (req.method === 'GET' && url.pathname === '/noname-kit-api/icon.png') {
+          if (!iconResource) {
+            const bytes = readFileSync(new URL('./docs/icon-small.png', import.meta.url))
+            iconResource = { bytes, etag: '"' + createHash('sha256').update(bytes).digest('hex') + '"' }
+          }
+          const headers = { 'content-type': 'image/png', 'cache-control': 'private, max-age=0, must-revalidate', etag: iconResource.etag, 'x-content-type-options': 'nosniff' }
+          if (req.headers['if-none-match'] === iconResource.etag) {
+            res.writeHead(304, headers)
+            return res.end()
+          }
+          res.writeHead(200, { ...headers, 'content-length': iconResource.bytes.length })
+          return res.end(iconResource.bytes)
+        }
         // 初始化三件套:任何状态下都可用(否则没配置时连向导都没法用)
         if (req.method === 'GET' && url.pathname === '/noname-kit-api/status') {
           return json(200, { active, nonameDir: active ? nonameDir : '', source: config.nonameDir && isValidGameDir(config.nonameDir) ? 'cordis.yml' : (readSettingsFile().nonameDir ? 'workshop' : 'none') })
@@ -986,7 +1028,7 @@ export function apply(ctx, config) {
           return json(result.ok ? 200 : 400, result)
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/tasks/reopen') {
-          // 重开已完成任务(补图/重新确认后再收口)
+          // 重新打开已完成任务，供补图或再次确认后归档。
           if (!active) return json(503, { error: 'noname-kit 未配置 nonameDir(或目录无效)' })
           const body = await readBody()
           const result = await reopenTask(dshHomeDir, body)

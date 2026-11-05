@@ -1,8 +1,4 @@
-/**
- * noname-kit 扩展文件读写:所有对 <nonameDir>/extension/** 的落盘都经过这里。
- * 路径安全:文件夹名只允许安全字符,解析后必须仍在 extension 目录内
- * (防路径逃逸)。覆盖前自动备份到 <文件夹>/backup/。
- */
+/** 扩展源码读写：检查路径与代码，在覆盖前备份到包内 backup/。 */
 import { copyFile as copyFileRaw, mkdir as mkdirRaw, readFile, readdir, writeFile as writeFileRaw, unlink as unlinkRaw, stat, rename as renameRaw } from 'node:fs/promises'
 import { lstatSync } from 'node:fs'
 import {withBatchWrite} from './batch.js'
@@ -15,12 +11,12 @@ import { loadPackageSources, packageBlocks, readCoverage, readGap, readBoundedUt
 
 const FOLDER_RE = /^[\w\u4e00-\u9fff-]{1,64}$/
 
-/** 多文件包扫描时跳过的目录(素材/备份/依赖,绝不会有条目)。 */
+/** 多文件包扫描时跳过素材、备份和依赖目录。 */
 const SKIP_DIRS = new Set(['backup', 'image', 'audio', 'node_modules', '.git'])
 
 /** Reject links in every existing component, including the selected root and leaf.
  * A lexical path inside extension/ may otherwise follow a Windows junction outside it. */
-function assertNoLinkPath(target) {
+export function assertNoLinkPath(target) {
   const full = resolve(target), root = parse(full).root
   let current = root
   for (const part of ['', ...full.slice(root.length).split(sep).filter(Boolean)]) {
@@ -152,15 +148,7 @@ async function pruneHistoryBackups(nonameDir, folder, removedFiles) {
   } catch { /* 登记清理失败不影响写入主流程 */ }
 }
 
-/**
- * 校验并写入扩展。两种模式:
- * - 全文模式(默认):提交 code 全文;存量包可带 editScope 做保真校验
- *   (范围外区块必须与旧文件逐字节一致,否则拒写)。
- * - 区块模式(提交 blocks/edits/deletes 之一即触发):AI 只提交改动的区块,
- *   其余文本由工具从旧文件逐字节保留——未提交区域物理上不可能被改。
- * @returns 校验失败 → {ok:false, wrote:false, errors, warnings};成功 → {ok:true, wrote:true, path, backup, infoWritten};
- *          manual 模式 → {ok:true, wrote:false, code};file 指向模块文件时语义门禁降级为纯语法检查
- */
+
 /** collect all backup/ dirs inside the package (subdir modules each keep their own). */
 async function collectBackupDirs(folderFull) {
   const dirs = []
@@ -196,6 +184,12 @@ async function prunePackageBackupsInner(nonameDir, folder) {
   return { ok: true, removedCount: allRemoved.length, dirs: touchedDirs }
 }
 
+/**
+ * 校验并写入扩展源码。
+ * code 提交全文，editScope 检查改动范围外的原文；blocks/edits/deletes 只替换指定部分。
+ * @returns 失败时返回 errors/warnings；写入成功时返回 path、backup 和 infoWritten。
+ * manual 模式返回代码而不写入源码；file 指向模块文件时只检查语法。
+ */
 export async function writeExtension(nonameDir, args) { assertNoLinkPath(nonameDir); return withBatchWrite(nonameDir,()=>writeExtensionInner(nonameDir,args)) }
 async function writeExtensionInner(nonameDir, { folder, file, code, blocks, edits, deletes, editScope, style, kind, infoJson, idPrefix, writeMode }) {
   const blockMode = Array.isArray(blocks) || Array.isArray(edits) || Array.isArray(deletes)
@@ -396,8 +390,8 @@ async function migrateAnchorsInner(nonameDir, folder, file) {
   const target = entryPath.full
   let oldCode
   try { oldCode = await readFile(target, 'utf8') } catch { return { ok: false, error: '该文件不存在。' } }
-  const r = migrateCode(oldCode, { file: entryPath.rel })
-  if (r.error) return { ok: false, error: r.error }
+  const r = migrateCode(oldCode, { file: entryPath.rel, allowPartial: true })
+  if (r.error) return { ok: false, error: r.error, ...(r.skipped?.length ? { skipped: r.skipped, totalEntries: r.totalEntries } : {}) }
   // 迁移只加注释行,自检用纯语法检查即可;模块文件没有 name 字段,
   // validateExtensionCode 的语义规则(name 必有等)对它不适用
   const verdict = syntaxCheck(r.code)
@@ -408,7 +402,7 @@ async function migrateAnchorsInner(nonameDir, folder, file) {
   await copyFile(target, join(backupDir, basename(backup)))
   await pruneHistoryBackups(nonameDir, folder, await pruneBackups(backupDir, relative(nonameDir, backupDir)))
   await writeFile(target, r.code, 'utf8')
-  return { ok: true, inserted: r.inserted, commas: r.commas, blocks: r.blocks, backup }
+  return { ok: true, inserted: r.inserted, commas: r.commas, blocks: r.blocks, backup, ...(r.partial ? { partial: true, skipped: r.skipped, totalEntries: r.totalEntries } : {}) }
 }
 
 /**
@@ -434,9 +428,12 @@ async function migrateExtensionInner(nonameDir, folder) {
     const firstErr = results.find((r) => r.error)
     return { ok: false, error: firstErr ? `迁移失败: ${firstErr.file} —— ${firstErr.error}` : '包内没有可锚定的条目(所有文件均为空或无法识别)。' }
   }
+  const skippedEntries = results.flatMap(r => (r.skipped || []).map(entry => ({ file: r.file, ...entry })))
   return {
     ok: true,
-    files: done.map((r) => ({ file: r.file, inserted: r.inserted, commas: r.commas, blocks: r.blocks, entries: r.entries, backup: r.backup })),
+    ...(skippedEntries.length || done.length !== results.length ? { partial: true } : {}),
+    ...(skippedEntries.length ? { skippedEntries } : {}),
+    files: done.map((r) => ({ file: r.file, inserted: r.inserted, commas: r.commas, blocks: r.blocks, entries: r.totalEntries ?? r.entries, backup: r.backup, ...(r.partial ? { partial: true, skipped: r.skipped } : {}) })),
     filesSkipped: files.length - results.filter((r) => r.ok || r.error).length,
     failed: results.filter((r) => r.error).map((r) => ({ file: r.file, error: r.error })),
     totalFiles: done.length,
@@ -501,8 +498,7 @@ async function rollbackExtensionInner(nonameDir, folder, backupName) {
   if (segs.length === 1) {
     if (!safeJsName(segs[0])) throw new Error('非法的备份文件名。')
     backupPath = join(full, 'backup', segs[0])
-    /* 备份名带源文件基名(extension.<ts>.js / index.<ts>.js):
-     * 按基名还原目标,别再一律往 extension.js 里灌(包根有非入口模块时写错文件) */
+    /* 备份名包含源文件名，恢复时据此确定目标，避免把模块备份写入 extension.js。 */
     const m = /^(.*?)\.(?:pre-rollback\.)?\d{8}-\d{6}(?:-\d{6})?\.js$/i.exec(segs[0])
     target = join(full, (m ? m[1] : 'extension') + '.js')
   } else {

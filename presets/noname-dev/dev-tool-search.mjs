@@ -1,24 +1,9 @@
 /**
- * dev-tool-search — on-demand tool discovery and unlock, the tool-search
- * pattern for the anchored preset.
- *
- * The promoted phase keeps only a minimal resident set (shell +
- * str_replace_editor + the discovery tools) instead of dumping the whole
- * Standard catalog at once. This plugin registers ONE small tool:
- *
- *  - `dev_tool_search` — search the FULL assembled catalog by keyword and
- *    return matching tool names with short descriptions; optionally unlock
- *    tools by exact name (array `toolNames`). Unlocked names are recorded as
- *    durable `tool/call` arguments, and tool-bootstrap.mjs's assemble filter
- *    exposes them from the next request on (resume-safe).
- *
- * The tool description is deliberately an INDEX of what the minimal resident
- * set cannot do: the model should reach for dev_tool_search the moment a task
- * needs internet, delegation, workflows, goals, images, background jobs, or
- * multi-agent coordination — not try to work around them with bash.
+ * Search the current callable tool catalog and unlock names for later requests.
+ * Unlocks are recorded in session events so they survive resume and compaction.
  */
 
-/** Cordis plugin name used by loader diagnostics. */
+
 export const name = 'dev-tool-search'
 
 /** The tools registry must exist before this tool can register. */
@@ -40,12 +25,7 @@ function toJsonSchema(spec) {
   return { type: 'object', properties, required, additionalProperties: false }
 }
 
-/**
- * The capability index: resident minimal tools (bash / str_replace_editor /
- * skill_search / skill_load) cannot cover these, so the model must search
- * and unlock them on demand. Kept in the description so the model KNOWS what
- * exists without a full catalog dump.
- */
+/** Describe capabilities outside the resident set so the model can discover tools on demand. */
 const UNLOCKABLE_INDEX = [
   'web_search — internet search and web retrieval',
   'subagent / subagent_fork — delegate work to sub-agents',
@@ -103,7 +83,10 @@ export function apply(ctx) {
       }
       try {
         // Read through the executing scope, retaining registry restrictions and presentation rules.
-        const schemas = ctx.tools.schemas(exec?.agent).filter((schema) => {
+        const schemas = ctx.tools.schemas(exec?.agent, exec?.toolSet).filter((schema) => {
+          if (typeof ctx.tools.executable === 'function') {
+            return ctx.tools.executable(schema.name, exec?.agent, exec?.toolSet) !== undefined
+          }
           if (typeof ctx.tools.resolveExecution === 'function') {
             return ctx.tools.resolveExecution(schema.name, exec?.agent, exec?.parent !== undefined) !== undefined
           }

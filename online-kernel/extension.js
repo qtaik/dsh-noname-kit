@@ -1,12 +1,6 @@
-/*
- * 联机助手·内核(无头运行时)—— 由 dsh-noname-kit 插件安装/升级到游戏 extension/ 目录。
- *
- * 职责:在游戏进程里提供跨网络联机的"插座"(WebRTC 传输 + 引擎联机接驳),
- * 不提供独立操作界面，选将设置沿用游戏房间菜单；建房/加入/发码收码由 DSH 工坊「🌐 联机」页签
- * 指挥,经本地 HTTP 心跳桥(src/bridge.js)轮询命令、上报状态。
- *
- * 形态说明:纯老式 game.import 模块副作用注册(零 import 语句),
- * 1.9.0(ESM 动态 import 加载)与 1.11.x(window.game shim)两版通吃。
+/**
+ * 联机助手游戏端入口，通过工坊的本地心跳桥接收命令并上报状态。
+ * 使用 game.import 注册扩展，在 precontent 中初始化内核。
  */
 (function() {
 	if (window.__nnkLoaded) {

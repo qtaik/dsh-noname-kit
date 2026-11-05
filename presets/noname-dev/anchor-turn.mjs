@@ -2,7 +2,7 @@
 
 import { createSessionState, stateSchema } from './session-state.mjs'
 
-/** Cordis plugin name used by loader diagnostics. */
+
 export const name = 'anchor-turn'
 
 /** Default anchor text shown to the model in the synthetic first user turn. */
@@ -13,7 +13,7 @@ const isAnchor = (message) => message?.source?.kind === name || message?.source?
   || (message?.source?.kind === 'plugin' && message.source.plugin === name)
 
 /** Register the first-message anchor injection. */
-export function apply(ctx, config) {
+export async function apply(ctx, config) {
   const text = typeof config?.text === 'string' && config.text.length > 0 ? config.text : ANCHOR_TEXT
   const includeSubagents = config?.includeSubagents === true
   const history = createSessionState(ctx, {
@@ -36,6 +36,7 @@ export function apply(ctx, config) {
       return { ...state, inFlight, pending: { ...state.pending, [splice.target]: next } }
     },
   })
+  await history.ready
   const inserting = new WeakSet()
   let warned = false
   ctx.on('session/event', (session, event) => history.observe(session, event))

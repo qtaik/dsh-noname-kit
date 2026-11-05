@@ -120,6 +120,37 @@ await test('host execution restrictions apply to discovery and unlock', async ()
   assert.equal(found.total, 10)
   assert.doesNotMatch(found.text, /- web_3:/)
 })
+await test('current host discovery uses the captured step admission for schemas and execution', async () => {
+  const env = harness({ tools: toolCatalog })
+  const toolSet = { marker: 'captured-step' }
+  env.ctx.tools.schemas = (agent, captured) => {
+    assert.equal(agent, env.agent)
+    assert.equal(captured, toolSet)
+    return toolCatalog
+  }
+  env.ctx.tools.executable = (name, agent, captured) => {
+    assert.equal(agent, env.agent)
+    assert.equal(captured, toolSet)
+    return name === 'web_3' ? undefined : { name }
+  }
+  env.ctx.tools.resolve = () => { throw new Error('conditions must not be re-evaluated during discovery') }
+  env.ctx.tools.resolveExecution = () => { throw new Error('deprecated API should not run on the current host') }
+  const found = await env.run('dev_tool_search', { query: 'web_3', toolNames: ['web_3', 'web_4'] }, { agent: env.agent, toolSet })
+  assert.deepEqual(found.unlocked, ['web_4'])
+  assert.deepEqual(found.unavailable, ['web_3'])
+  assert.doesNotMatch(found.text, /- web_3:/)
+})
+await test('current host calls outside a model step do not invent admission', async () => {
+  const env = harness({ tools: toolCatalog })
+  env.ctx.tools.executable = (name, _agent, toolSet) => {
+    assert.equal(toolSet, undefined)
+    return name === 'web_3' ? undefined : { name }
+  }
+  const found = await env.run('dev_tool_search', { toolNames: ['web_3'] })
+  assert.deepEqual(found.unlocked, [])
+  assert.deepEqual(found.unavailable, ['web_3'])
+})
+
 await test('tool registry failure cannot claim unlock success', async () => {
   const env = harness()
   env.ctx.tools.schemas = () => { throw new Error('registry offline') }
@@ -265,7 +296,7 @@ await test('post-compaction tool assembly immediately exposes discovery', async 
   const hooks = new Map()
   const ctx = { on(name, fn) { hooks.set(name, fn) }, logger: { warn() { throw new Error('unexpected bootstrap fallback') } } }
   const residents = compactionTools(composition)
-  applyBootstrap(ctx, { compactionTools: residents })
+  await applyBootstrap(ctx, { compactionTools: residents })
   const agent = { session: { id: 'test-session', header: {}, events: [{ type: 'compaction/end', seq: 1, data: {} }] } }
   const all = ['bash', ...residents, 'unrelated_heavy_tool'].map((name) => ({ name }))
   const assembled = await hooks.get('system-prompt/assemble')({}, { agent }, async () => ({ tools: all }))

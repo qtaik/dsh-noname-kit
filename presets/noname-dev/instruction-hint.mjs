@@ -3,7 +3,7 @@
 import { createEpochPromotion } from './compaction-epoch.mjs'
 import { ensureWorkingDirectory } from './working-directory.mjs'
 
-/** Cordis plugin name used by loader diagnostics. */
+
 export const name = 'instruction-hint'
 
 /** Durable session event types that count as a promotion signal per mode. */
@@ -73,9 +73,10 @@ function parentPath(path) {
 }
 
 /** Register the post-promotion instruction-hint injector. */
-export function apply(ctx, config) {
+export async function apply(ctx, config) {
   const promoteEvents = parsePromoteOn(config.promoteOn)
   const promotion = createEpochPromotion(promoteEvents, { ctx })
+  await promotion.ready
   ctx.on('session/event', (session, event) => promotion.observe(session, event))
 
   /** Session/directory pairs that already received the hint. */
