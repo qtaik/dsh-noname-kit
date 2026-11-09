@@ -499,7 +499,7 @@ export function apply(ctx, config) {
 
   ctx.tools.register(defineTool({
     name: 'noname_copy_images',
-    description: 'Copy user-selected local images into the extension image folder (image/). Pass taskId to mark the task image as delivered.',
+    description: 'Copy user-selected local images into the extension image folder (image/). Pass taskId only for the character portrait or card image; the first image is recorded as delivered. Copy faction icons separately without taskId.',
     parameters: {
       folder: { type: 'string', required: true, description: 'Extension folder name.' },
       taskId: { type: 'string', description: 'Task ID from the task message. Passing it records the images as delivered so the task can auto-complete.' },

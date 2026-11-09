@@ -81,7 +81,7 @@ function descriptionOf(skills) {
  * target 可选 { kind: 'character'|'card', id }:「编辑已有条目」任务,非法值归 null。
  * writeMode:'manual' 存手动,其余归 'auto'——写入工具以此为准(AI 传参不覆盖)。
  */
-export async function createTask(dshHome, { id, folder, type, title, charInfo, pile, skills, image, dieAudios, target, writeMode, modeBrief, modeNum, modeWin, modeRules }) {
+export async function createTask(dshHome, { id, folder, type, title, charInfo, newFaction, portraitVideo, pile, skills, image, dieAudios, target, writeMode, modeBrief, modeNum, modeWin, modeRules }) {
   if (typeof id !== 'string' || !ID_RE.test(id.trim())) {
     return { ok: false, error: `任务ID「${id}」不合法:只允许中文/字母/数字/下划线/连字符,长度 1-64。` }
   }
@@ -107,6 +107,23 @@ export async function createTask(dshHome, { id, folder, type, title, charInfo, p
     && typeof target.id === 'string' && ID_RE.test(target.id.trim())
     ? { kind: target.kind, id: target.id.trim() }
     : null
+  const creatingCharacter = taskType === 'character' && !target;
+  let faction = null;
+  let video = '';
+  if (creatingCharacter && newFaction != null) {
+    if (typeof newFaction.name !== 'string' || !newFaction.name.trim() || newFaction.name.trim().length > 60 ||
+        typeof newFaction.image !== 'string' || !newFaction.image.trim() || newFaction.image.trim().length > 500) {
+      return { ok: false, error: '新势力需要名称（不超过 60 字）和图片路径（不超过 500 字）。' }
+    }
+    faction = { name: newFaction.name.trim(), image: newFaction.image.trim() };
+  }
+  const characterVideoAllowed = taskType === 'character' && (!target || taskTarget?.kind === 'character');
+  if (characterVideoAllowed && portraitVideo != null && portraitVideo !== '') {
+    if (typeof portraitVideo !== 'string' || portraitVideo.trim().length > 500 || !/\.(mp4|webm|m4v|mov|ogv)$/i.test(portraitVideo.trim())) {
+      return { ok: false, error: '动态立绘需要 MP4、WebM、M4V、MOV 或 OGV 视频路径（不超过 500 字）。' }
+    }
+    video = portraitVideo.trim();
+  }
   const task = {
     id: cleanId,
     folder: folder.trim(),
@@ -114,6 +131,8 @@ export async function createTask(dshHome, { id, folder, type, title, charInfo, p
     target: taskTarget,
     title: String(title || '').slice(0, 60),
     charInfo: String(charInfo || '').slice(0, 500),
+    newFaction: faction,
+    portraitVideo: video,
     pile: pile && pile.join ? { join: true, entries: String(pile.entries || '').slice(0, 2000) } : { join: false, entries: '' },
     image: String(image || '').trim().slice(0, 500),
     dieAudios: cleanAudioPaths(dieAudios),
