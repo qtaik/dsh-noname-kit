@@ -661,7 +661,6 @@ window.__ModuleLoader__.load({
 
     // ── 任务表单:武将区 / 卡牌区 ──────────────────────────────────
     function NewTaskForm(props) {
-      var send = props.send;
       var state = React.useState({
         mode: 'new', type: 'character', folder: '我的扩展', taskId: '', title: '', idPrefix: '',
         charInfo: '', skills: [{ name: '', desc: '', audios: '' }], image: '', dieAudios: '', usedIds: [], notes: [],
@@ -931,6 +930,9 @@ window.__ModuleLoader__.load({
         }
         var dupUsed = isEdit && form.taskId.trim() && (form.usedIds || []).some(function (u) { return u.id === form.taskId.trim() });
         if (dupUsed) { errSet('任务ID「' + form.taskId.trim() + '」此包已用过,请换一个'); return }
+        var dispatch;
+        try { dispatch = props.prepareDispatch() } catch (error) { errSet(error.message); return }
+        var registeredTaskId = '';
         setForm(function (prev) { return Object.assign({}, prev, { busy: true, err: '' }) });
 
         var type = form.type;
@@ -973,11 +975,13 @@ window.__ModuleLoader__.load({
           var pile = type === 'card' && form.pileJoin
             ? { join: true, entries: form.pileRows.filter(function (r) { return r.point !== '' }).map(function (r) { return r.suit + ' ' + r.point }).join('\n') }
             : { join: false, entries: '' };
+          dispatch.check();
           return fetch('/noname-kit-api/tasks', {
             method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ id: taskId, folder: form.folder.trim(), type: type, title: form.title.trim(), charInfo: form.charInfo.trim(), newFaction: newFaction, portraitVideo: portraitVideo, pile: pile, skills: skills, image: form.image.trim(), dieAudios: dieAudioList, target: editingExisting ? { kind: type, id: form.entryId } : null, writeMode: form.writeMode, modeBrief: isMode ? form.brief.trim() : '', modeNum: isMode ? (form.numConfig === 'custom' ? (form.numCustom || 'custom') : form.numConfig) : '', modeWin: isMode ? form.winConfig.trim() : '', modeRules: isMode ? form.rules.trim() : '' }),
           }).then(function (r) { return r.json() }).then(function (reg) {
             if (!reg.ok) throw new Error(reg.error || '任务注册失败');
+            registeredTaskId = taskId;
             // gameDir/gameDirPosix 必须随 ctx 传给下一个 then(各自独立作用域,
             // 跨回调直接引用会 ReferenceError: gameDir is not defined)
             return { taskId: taskId, pile: pile, gameDir: gameDir, gameDirPosix: gameDirPosix };
@@ -997,27 +1001,27 @@ window.__ModuleLoader__.load({
               '实现完成后用 noname_copy_audio 把每句复制为 audio/skill/<技能内部ID><序号>.mp3(序号从 1 连号,句数与 audio 字段一致),调用时带上任务ID与归属技能名(任务里的技能显示名)。'
             : '';
           var dieAudioBlock = dieAudioList.length
-            ? '── 阵亡语音(零代码,引擎自动播放) ──\n文件: ' + dieAudioList.join('、') +
+            ? '── 阵亡语音 ──\n文件: ' + dieAudioList.join('、') +
               '\n实现完成后用 noname_copy_audio 复制为 audio/die/<武将内部ID>.mp3(多句:<ID>1.mp3、<ID>2.mp3…)。' +
-              '扩展武将的阵亡语音由引擎默认自动查找,武将代码无需写任何字段;调用时带任务ID,target 以 die/ 开头。'
+              '按当前引擎核对默认查找或已有音频引用，避免重复挂载；调用时带任务ID,target 以 die/ 开头。'
             : '';
           var factionBlock = newFaction
             ? '── 新势力 ──\n名称: ' + newFaction.name + '\n势力图片路径: ' + newFaction.image +
               '\n创建此势力并把本次新武将归入该势力；先核对当前引擎和启用的 UI 中势力注册、翻译及标识图的实际用法，内部 ID 遵守任务前缀并避免重名。' +
               '势力图单独用 noname_copy_images 复制到扩展包 image/，使用独立的势力图文件名并保留真实后缀；此次复制不带 taskId，不与武将立绘合批登记，避免把势力图当成立绘。素材和注册代码均放在本扩展内。' +
-              '参考做法：先核对现有扩展的有效实现；原生注册适用时，在合适的初始化阶段（常见为 precontent）使用 game.addGroup(内部ID,显示简称,完整名称,配置对象)。配置对象中的 image 引用已复制的扩展内势力图，color 按显示需要设置；武将的 group（旧数组格式的第二项）使用同一个内部 ID。核对 lib.group、名称翻译及 lib.card["group_"+内部ID] 的图片是否生效。当前已读引擎中，普通新势力使用默认注册类型，不要为了显示在选项里就加入 lib.selectGroup；该列表可能让武将开局重新选择势力，具体语义以目标环境为准。先沿现有扩展和实际启用环境，核对势力注册、候选生成、确认结果和最终武将归属。game.addGroup 存在不代表旧扩展、模式或 UI 已接入；保留已有有效兼容方案，不仅因存在原生接口就删除或替换。链路有缺口时，可以使用必要的全局注册、全局技能或界面钩子，结合用户反馈和实际实现限定改动范围。核对本地玩家、AI 与联机结果，以及重复触发和监听生命周期；不要把单机 game.me 的处理直接套给所有玩家。额外玩法只按用户需求实现。详细参考用 skill_load 加载 noname-extension-dev 后，按返回的技能资源目录读取 references/custom-faction.md；无法读取时按上述方法结合当前源码继续。'
+              '实现参考：加载 noname-extension-dev 后按技能资源目录读取 references/custom-faction.md，核对当前引擎和已有兼容方案。'
             : '';
           var portraitVideoBlock = portraitVideo
             ? '── 视频动态立绘 ──\n视频路径: ' + portraitVideo +
               (editingExisting ? '\n目标武将内部 ID: ' + form.entryId + '。只为此武将添加或更换动态立绘，沿用现有静态立绘作为回退；先读取现有播放逻辑，保留无关技能和其他武将，不创建新武将。' : '') +
               '\n此视频用于本次武将的动态立绘。用 noname_copy_videos，参数 folder 为目标扩展文件夹，videos:[{source:上述绝对路径,target:武将内部ID加原视频后缀}]，按返回的 video/ 路径引用；不要交给 noname_copy_images，不改后缀伪装图片。' +
               '先核对当前引擎和启用 UI 的立绘挂载方式，再实现静音循环播放、正确缩放与点击透传、切换武将或离开界面时清理；不能只把视频路径填进静态 img 字段。' +
-              '参考做法：保留静态底图，在实际头像节点内叠加 video（常见为 player.node.avatar；副将需核对 avatar2 并独立绑定），用 lib.assetURL 拼接扩展内相对路径，设置 muted/loop/autoplay/playsInline、object-fit:cover 和 pointer-events:none，先透明，确认播放后再显示；失败则撤掉视频露出底图。按武将 ID、头像槽位和路径比对，换将、禁用或离场时暂停、释放视频并清理监听与定时器；不要照搬无期限轮询或永久失败缓存。头像循环不调用全屏技能视频的暂停/恢复逻辑。详细参考用 skill_load 加载 noname-extension-dev 后，按返回的技能资源目录读取 references/video-portrait.md；无法读取时按上述方法结合当前源码继续。' +
+              '实现参考：加载 noname-extension-dev 后按技能资源目录读取 references/video-portrait.md，核对当前头像节点与已有播放管理器。' +
               (editingExisting ? '静态立绘独立处理，先核对目标武将原有图片并沿用作为回退；本次未填图片路径不代表缺图，仅实际缺少静态图时说明。' : '静态立绘独立处理，已提供时用于加载或播放失败的回退；未提供时说明缺图。') +
               '不把视频或势力图登记为静态立绘图片。复制成功不等于已验证播放，交付时分别说明复制、播放实现和实际验证结果。'
             : '';
           var characterOptionsBlock = [factionBlock, portraitVideoBlock,
-            (factionBlock || portraitVideoBlock) ? '以上勾选项属于本任务需求，需求确认与交付检查一并覆盖。手动模式只生成源码成品；素材复制遵守用户已授权范围，用户要求全部手动时提供资源清单与放置位置。' : ''
+            (factionBlock || portraitVideoBlock) ? '以上勾选项属于本任务需求，交付检查一并覆盖。手动模式只生成源码成品；素材复制遵守用户已授权范围，用户要求全部手动时提供资源清单与放置位置。' : ''
           ].filter(Boolean).join('\n');
           var pileText;
           if (type === 'card' && pile.join && pile.entries) pileText = '加入牌堆,条目(每行「花色 点数」;花色只允许 spade/heart/club/diamond/none,none=无花色):\n' + pile.entries;
@@ -1031,7 +1035,7 @@ window.__ModuleLoader__.load({
               '任务性质: 创建全新扩展包(含一个自定义游戏模式;目标文件夹当前不存在,需要从零创建 extension.js 与 info.json)',
               '类型: 🎲 新玩法(自定义游戏模式,用 game.addMode 注册为独立模式)',
               (form.title.trim() ? '模式名称(显示名,注册为模式翻译): ' + form.title.trim() : ''),
-              '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成代码,不要写文件)' : '自动写入'),
+              '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成源码，不写入扩展源码)' : '自动写入'),
               '目标扩展文件夹: ' + form.folder.trim(),
               (gameDir ? '游戏目录(所有读写的根;bash 里写作 ' + gameDirPosix + '): ' + gameDir : ''),
               '一句话核心玩法: ' + form.brief.trim(),
@@ -1040,11 +1044,7 @@ window.__ModuleLoader__.load({
               '── 玩法细节(用户原话,逐条理解,不得增删主规则) ──',
               form.rules.trim(),
               form.reference.trim() ? '── 用户提供的参考代码 ──\n' + form.reference.trim() : '',
-              '── 执行要求(确认协议,逐步执行)──',
-              '第 0 步【引擎版本探测 + 需求理解确认·硬门禁】:先探测用户游戏引擎版本(读游戏目录 version 文件或 noname 源码特征)并报告给用户;版本相关的 API 写法(模式注册/选将原语/距离与摸牌修正/技能显示过滤等)必须先查「版本差异对照表」或读引擎源码核实,禁止凭记忆或固定版本经验猜测。然后把玩法细节逐条拆成规则模块,输出【需求理解确认】(每条规则:触发时机/数值/边界;另含:玩法一句话复述/人数与先手规则/胜利条件/明确不做什么/实现骨架自查——模式注册时机/选将方式/技能挂载方式/距离与摸牌修正写法均按对照表选定)。输出后停下等待用户明确回复确认。',
-              '有任何歧义必须先用 ask_user_question 提问;禁止猜测。ask_user_question 的回答只消除歧义、不算确认——澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」后才能动笔。',
-              '未获用户确认前,禁止生成代码、禁止调用 noname_write_extension。',
-              '用户确认后按骨架清单实现(规范见 knowledge 的「自定义模式生成规范」与版本对照表;面向玩家展示的技能提供名称与描述；内部规则技按实际展示需要设置 translate，目标十周年UI 竖排误显示时可省略内部规则技名称),校验通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + ' 与规则节点名(每个规则模块一个节点名,用户逐条确认后自动收口)。',
+              '执行请求: 请完成上述需求；开发流程按 noname-extension-dev 执行，有未确定的玩法或范围问题再澄清。',
               form.idPrefix.trim() ? '内部 ID 命名规则:模式名/新增技能的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,面向玩家展示的名称与描述写入 translate，内部规则技按实际展示需要设置。' : '',
             ].filter(Boolean).join('\n');
           } else if (editingExisting) {
@@ -1057,16 +1057,16 @@ window.__ModuleLoader__.load({
               '【无名杀工坊·编辑任务】',
               '任务ID: ' + taskId,
               '任务性质: 编辑已有扩展包(已存在)',
-              (type === 'mode' ? '包性质: 这是一个自定义模式扩展包(game.addMode 注册)。版本相关写法先查「1.9.0 实测对照表」或读引擎源码核实;新增或调整的内部规则技按实际展示需要设置 translate，目标十周年UI 竖排误显示时可省略其名称；面向玩家展示的技能提供名称与描述;新增内部 ID 沿用该包现有的前缀惯例(读现有代码时留意)。' : ''),
+              (type === 'mode' ? '包性质: 自定义模式扩展包；沿用现有内部 ID 前缀，按当前引擎核对注册、选将与规则实现。' : ''),
               '类型: ' + (type === 'mode' ? '🎲 新玩法(自定义游戏模式)' : type === 'card' ? '卡牌' : '武将'),
-              (type === 'mode' ? '编辑目标: 整个模式扩展包(骨架与规则技,按需求描述与版本对照表改动,其他任务无关的包不动)' : '编辑目标条目: ' + type + ':' + form.entryId + '(所在文件 ' + entryFile + (entryFile !== 'extension.js' ? ',read/write 都要传 file 参数' : '') + ';只改这个条目' + (portraitVideo ? '及其动态立绘必需的播放挂载' : '') + (pickedSkillRows.length ? '及其勾选技能' : '') + (newSkillRows.length ? ';新增技能作为新区块加到该条目上' : '') + ',其他武将/卡牌/技能/翻译一律不动)'),
+              (type === 'mode' ? '编辑目标: 本次需求涉及的模式骨架与规则，保留无关玩法。' : '编辑目标条目: ' + type + ':' + form.entryId + '(所在文件 ' + entryFile + ';read/write/validate 使用对应 file 参数)' + (pickedSkillRows.length ? '；包括下方勾选技能' : '') + (newSkillRows.length ? '；新增技能加入目标条目' : '') + '。范围包含完成需求必需的直接关联代码，先核对归属与必要性，保留无关条目。'),
               (form.title.trim() ? '新名称(显示名,写入 translate;留空即不改名): ' + form.title.trim() : ''),
-              '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成代码,不要写文件)' : '自动写入'),
+              '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成源码，不写入扩展源码)' : '自动写入'),
               '目标扩展文件夹: ' + form.folder.trim() + '(已有扩展,老式/新式写法跟随现有代码)',
               (gameDir ? '游戏目录(所有读写的根;bash 里写作 ' + gameDirPosix + '): ' + gameDir : ''),
               (form.notes && form.notes.length ? '该包有历史注意点 ' + form.notes.length + ' 条(过往任务实测结论):与本任务相关时才用 noname_read_extension 传 notes:true 拉取,无关条目忽略,与需求冲突时以需求为准。' : ''),
               (form.editNotes.trim() ? '── ' + (type === 'mode' ? '模式骨架与规则改动' : (type === 'card' ? '卡牌' : '武将') + '改动(条目本身:体力/护甲/名称等)') + ' ──\n' + form.editNotes.trim() : ''),
-              (type === 'mode' && form.rules.trim() ? '── 新增或调整的规则(用户逐条写的改动要求,确认单按改动前后逐项列) ──\n' + form.rules.trim() : ''),
+              (type === 'mode' && form.rules.trim() ? '── 新增或调整的规则(用户逐条写的改动要求) ──\n' + form.rules.trim() : ''),
               (pickedSkillRows.length ? '── 修改技能(用户逐技能写明的改动要求) ──\n' + pickedSkillRows.map(function (p, i) { return (i + 1) + '. ' + p.name + '(内部ID ' + p.id + '):' + p.note.trim() }).join('\n') : ''),
               (newSkillRows.length ? '── 新增技能(加到目标' + (type === 'card' ? '卡牌' : '武将') + '上,按顺序实现) ──\n' + newSkillRows.map(function (s, i) { return (i + 1) + '. ' + s.name + (s.desc ? ':' + s.desc : '') }).join('\n') : ''),
               '── 任务技能节点(收口时 noname_skills_written 的 skills 参数必须逐字使用这些名称) ──\n' + skills.map(function (s) { return '- ' + s.name }).join('\n'),
@@ -1074,11 +1074,7 @@ window.__ModuleLoader__.load({
               form.image.trim() ? '── 图片 ──\n用户已提供图片路径: ' + form.image.trim() + '\n实现完成后用 noname_copy_images 复制进扩展包 image/ 目录,按目标条目ID(' + form.entryId + ')命名文件,调用时带上任务ID。' : '',
               (audioBlock || ''),
               characterOptionsBlock,
-              '── 执行要求(确认协议,逐步执行)──',
-              type === 'mode' ? '第 0 步【需求理解确认·硬门禁】:先探测引擎版本并报告;noname_read_extension 读整个扩展包现状(必要时 listBlocks 看区块目录),把现状与用户需求逐条对照,输出【需求理解确认】(逐条规则:改动前→改动后/触发时机/数值/边界/影响面;另含:明确不做什么)。输出后停下等待用户明确回复确认。' : '第 0 步【需求理解确认·硬门禁】:先 noname_read_extension 按块只读目标条目原文(' + (entryFile !== 'extension.js' ? 'file:\'' + entryFile + '\', ' : '') + 'block:\'' + type + ':' + form.entryId + '\')' + (pickedSkillRows.length ? '与各勾选技能原文(block:\'skill:<技能ID>\'' + (entryFile !== 'extension.js' ? ';技能可能在其他文件,用 listBlocks 定位后带对应 file' : '') + ')' : '') + '(定位不准时先传 listBlocks 看区块目录,多文件包的目录每项带 file 归属),把原文与需求对照,逐项输出【需求理解确认】(' + (form.editNotes.trim() ? '条目项:改什么 / 改动前→改动后 / 影响面' : '') + (form.editNotes.trim() && pickedSkillRows.length ? ';' : '') + (pickedSkillRows.length ? '修改技能项:改动前→改动后' : '') + ((pickedSkillRows.length || form.editNotes.trim()) && newSkillRows.length ? ';' : '') + (newSkillRows.length ? '新增技能按新技能模板逐条:触发/频率/目标/数值/边界' : '') + (portraitVideo ? (form.editNotes.trim() || pickedSkillRows.length || newSkillRows.length ? ';' : '') + '动态立绘项:现有呈现→视频呈现/回退方式/必要挂载影响面' : '') + ')。输出后停下等待用户明确回复确认。',
-              '有任何歧义必须先用 ask_user_question 提问;禁止猜测。ask_user_question 的回答只消除歧义、不算确认——澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」后才能动笔。',
-              '未获用户确认前,禁止生成代码、禁止调用 noname_write_extension。',
-              (type === 'mode' ? '用户确认后动手:已有内容的改动只落在与本次需求相关的模式骨架/规则技区块' : '用户确认后动手:已有内容的改动只落在目标条目' + (pickedSkillRows.length ? '与其勾选技能' : '') + '对应区块') + '(noname_write_extension' + (entryFile !== 'extension.js' ? ' 带 file:\'' + entryFile + '\'' : '') + ',用 blocks 组装或 edits 精确补丁,严禁全文重写)' + (newSkillRows.length ? ';新增技能作为新区块插入(锚点包裹,内部 ID 用下方前缀规则)' : '') + (portraitVideo ? ';动态立绘确需初始化挂载时，目标条目和播放挂载可能位于不同文件：先读取并定位挂载的实际归属文件，每次写入传对应的 file 参数，仅用唯一原文 edits 修改该武将播放所必需的位置，保留其他武将和无关逻辑。' : ',除上述区块与新增区块外严禁改动任何其他区块。') + 'noname_validate 通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + '。',
+              '执行请求: 请完成上述需求；开发流程按 noname-extension-dev 执行，有未确定的玩法或范围问题再澄清。',
               (newSkillRows.length && form.idPrefix.trim() ? '内部 ID 命名规则:新增技能的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,中文显示名写入 translate。' : ''),
             ].filter(Boolean).join('\n');
           } else if (isEdit) {
@@ -1088,7 +1084,7 @@ window.__ModuleLoader__.load({
               '任务性质: 编辑已有扩展包(已存在)',
               '类型: ' + (type === 'mode' ? '🎲 新玩法(自定义游戏模式)' : type === 'card' ? '卡牌' : '武将(含 ' + skills.length + ' 个技能)'),
               (form.title.trim() ? '名称(显示名,写入 translate): ' + form.title.trim() : ''),
-              '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成代码,不要写文件)' : '自动写入'),
+              '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成源码，不写入扩展源码)' : '自动写入'),
               '目标扩展文件夹: ' + form.folder.trim() + '(已有扩展,老式/新式写法跟随现有代码)',
               (gameDir ? '游戏目录(所有读写的根;bash 里写作 ' + gameDirPosix + '): ' + gameDir : ''),
               (form.charInfo.trim() ? '── 武将/卡牌基本信息(势力/体力/性别等)──\n' + form.charInfo.trim() : ''),
@@ -1102,11 +1098,7 @@ window.__ModuleLoader__.load({
               (audioBlock || ''),
               (dieAudioBlock || ''),
               characterOptionsBlock,
-              '── 执行要求(确认协议,逐步执行)──',
-              '第 0 步【需求理解确认·硬门禁】:先 noname_read_extension 读取当前代码(大文件先传 listBlocks 看区块目录,再按 block:\'skill:ID\' 只读涉及的块),然后逐技能输出【需求理解确认】(每个技能一条:触发/频率/目标/数值/边界)。输出后停下等待用户明确回复确认。',
-              '有任何歧义必须先用 ask_user_question 提问;禁止猜测。ask_user_question 的回答只消除歧义、不算确认——澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」后才能动笔。',
-              '未获用户确认前,禁止生成代码、禁止调用 noname_write_extension。',
-              '用户确认后按顺序逐技能实现(每技能:noname_search_reference 搜参考→写→noname_validate),校验通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + '。',
+              '执行请求: 请完成上述需求；开发流程按 noname-extension-dev 执行，有未确定的玩法或范围问题再澄清。',
               form.idPrefix.trim() ? '内部 ID 命名规则:新增技能/武将/卡牌的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,中文显示名写入 translate。' : '',
             ].filter(Boolean).join('\n');
           } else {
@@ -1117,7 +1109,7 @@ window.__ModuleLoader__.load({
               '类型: ' + (type === 'card' ? '卡牌' : '武将(含 ' + skills.length + ' 个技能)'),
               (form.title.trim() ? '名称(显示名,写入 translate): ' + form.title.trim() : ''),
               '写法: ' + (form.style === 'module' ? '新版 ES Module' : '老版 game.import'),
-              '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成代码,不要写文件)' : '自动写入'),
+              '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成源码，不写入扩展源码)' : '自动写入'),
               '目标扩展文件夹: ' + form.folder.trim(),
               (gameDir ? '游戏目录(所有读写的根;bash 里写作 ' + gameDirPosix + '): ' + gameDir : ''),
               form.charInfo.trim() ? '── 基本信息 ──\n' + form.charInfo.trim() : '',
@@ -1130,19 +1122,17 @@ window.__ModuleLoader__.load({
               (audioBlock || ''),
               (dieAudioBlock || ''),
               characterOptionsBlock,
-              '── 执行要求(确认协议,逐步执行)──',
-              '第 0 步【需求理解确认·硬门禁】:逐技能输出【需求理解确认】(每个技能一条:触发/频率/目标/数值/边界)。输出后停下等待用户明确回复确认。',
-              '有任何歧义必须先用 ask_user_question 提问;禁止猜测。ask_user_question 的回答只消除歧义、不算确认——澄清后把最终确认单呈现给用户,仍须等待用户明确回复「确认」后才能动笔。',
-              '未获用户确认前,禁止生成代码、禁止调用 noname_write_extension。',
-              '用户确认后按顺序逐技能实现(每技能:noname_search_reference 搜参考→写→noname_validate),校验通过后一次写入,调用 noname_skills_written 原样带回任务ID ' + taskId + '。',
+              '执行请求: 请完成上述需求；开发流程按 noname-extension-dev 执行，有未确定的玩法或范围问题再澄清。',
               form.idPrefix.trim() ? '内部 ID 命名规则:所有新增技能/武将/卡牌的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文(如 ' + form.idPrefix.trim() + 'tianfa),中文显示名写入 translate——防止跨扩展包命名冲突。' : '',
             ].filter(Boolean).join('\n');
           }
-          return Promise.resolve(send(text)).then(function () {
+          return dispatch.send(text).then(function () {
             setForm(function (prev) { return Object.assign({}, prev, { busy: false, reference: '', taskId: '' }) });
           });
         }).catch(function (error) {
-          setForm(function (prev) { return Object.assign({}, prev, { busy: false, err: error && error.message || String(error) }) });
+          var detail = error && error.message || String(error);
+          var message = registeredTaskId ? '任务「' + registeredTaskId + '」已登记，但未能发给 AI。' + detail : detail;
+          setForm(function (prev) { return Object.assign({}, prev, { busy: false, err: message }) });
         });
       };
 
@@ -1223,9 +1213,9 @@ window.__ModuleLoader__.load({
             h('input', { className: 'nnk-input', type: 'number', min: 2, max: 20, value: (form.numCustom === '' || form.numCustom === undefined) ? '' : form.numCustom, placeholder: '例: 12', onChange: function (ev) { set('numCustom')(ev.target.value) } })
           ) : null,
                     textField('胜利条件(可选;不填则以玩法细节为准)', form.winConfig, set('winConfig'), { placeholder: '例: 场上只剩 1 人时结算,幸存者获胜' }),
-          h(FormField, { fieldKey: 'rules-create', label: '玩法细节描述(自由描述所有规则:特殊机制/阶段效果/阵营/限制…越具体,AI 的确认单越准)', value: form.rules, foldable: true },
+          h(FormField, { fieldKey: 'rules-create', label: '玩法细节描述(自由描述所有规则:特殊机制/阶段效果/阵营/限制…越具体,AI 越容易准确理解)', value: form.rules, foldable: true },
           h('textarea', { className: 'nnk-textarea', style: { minHeight: '120px' }, value: form.rules, placeholder: '例: 全场按 冬→春→夏→秋 每 3 轮轮换季节;准备阶段强制执行当季效果——冬:少摸一张牌或流失1点体力;春:多摸一张牌或回复1点体力…', onChange: function (ev) { set('rules')(ev.target.value) } })),
-          e('div', 'nnk-hint', '提交后 AI 会先探测你的游戏引擎版本、把描述逐条拆成规则并给出【需求理解确认】;回复「确认」后生成完整模式。生成后进游戏实测,逐条规则点「确认无误」自动收口。')
+          e('div', 'nnk-hint', '提交后 AI 会核对当前引擎和规则实现；需求完整时简述理解后制作，有未确定的玩法再询问。生成后进游戏实测，逐条规则点「确认无误」完成任务。')
         ] : null,
         editingExisting ? [
           form.type !== 'mode' ? e('label', 'nnk-label', '编辑目标(选择要修改的' + (form.type === 'card' ? '卡牌' : '武将') + ')' + (form.entryLoading ? '(加载中…)' : '')) : null,
@@ -1259,7 +1249,7 @@ window.__ModuleLoader__.load({
               ? '卡牌改动描述(条目本身的变化:类别/花色点数/名称等;可选)'
               : '武将改动描述(条目本身的变化:体力/护甲/名称等;可选)', value: form.editNotes, foldable: true },
           h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.editNotes, placeholder: form.type === 'mode' ? '例: 人数上限改成 12;胜利条件改为计分制,先到 100 分获胜' : form.type === 'card' ? '例: 类别改为锦囊牌,花色点数改为黑桃 5;卡面描述同步修改' : '例: 初始体力信息改为 3/4/1(3 点体力、4 点上限、1 点护甲);显示名保持不变', onChange: function (ev) { set('editNotes')(ev.target.value) } })),
-          form.type === 'mode' ? [h(FormField, { fieldKey: 'rules-edit', label: '新增或调整的规则(可选;AI 会先读现有代码,确认单按改动前后逐项列)', value: form.rules, foldable: true }, h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.rules, placeholder: '例: 新增一条规则——雪天全场武力-1;秋季距离修正改为无视坐骑只对玩家生效', onChange: function (ev) { set('rules')(ev.target.value) } }))] : null,
+          form.type === 'mode' ? [h(FormField, { fieldKey: 'rules-edit', label: '新增或调整的规则(可选;AI 会先读现有代码,说明改动前后及影响范围)', value: form.rules, foldable: true }, h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.rules, placeholder: '例: 新增一条规则——雪天全场武力-1;秋季距离修正改为无视坐骑只对玩家生效', onChange: function (ev) { set('rules')(ev.target.value) } }))] : null,
                     form.type === 'character' ? radioGroup('是否新增技能', form.addSkills ? 'yes' : 'no', [{ value: 'no', text: '不新增' }, { value: 'yes', text: '新增技能(填下面的技能列表)' }], function (v) { patch({ addSkills: v === 'yes' }) }) : null,
           form.addSkills && form.type === 'character' ? skillRows() : null
         ] : null,
@@ -1333,7 +1323,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'nnk-submit-area' },
         form.err ? e('div', 'nnk-err', form.err) : null,
         h('button', { className: 'nnk-submit', disabled: form.busy, onClick: submit }, form.busy ? '已发送…' : (isEdit ? '发给 AI 修改' : '发给 AI 开工')),
-        e('div', 'nnk-hint', '提交后 AI 会逐技能给出【需求理解确认】并停下等待——回复「确认」后才会动笔写代码;有歧义它会先问你。')
+        e('div', 'nnk-hint', '提交即请求 AI 执行所填需求；信息完整时简述理解后开始，有玩法歧义或需要扩大范围时再询问。')
         )
       );
       } catch (renderError) {
@@ -3051,17 +3041,9 @@ window.__ModuleLoader__.load({
           if (preset && preset.state === 'missing') setActive('settings')
         })
       }, [presetFlipDone]);
-      var send = function (text) {
-        var session = props.followCurrentSession ? readCurrentSessionId(props.sessions, props.uiSession) : sessionId;
-        return Promise.resolve(session).then(function (id) {
-          // sessions 服务由插件 inject 提供;绑定当前会话并发送结构化消息。
-          // 新版对未打开的会话 binding() 返回 undefined——判空让调用方走报错,而不是 TypeError
-          if (!id) throw new Error('当前没有打开的会话——请先打开会话后再提交任务');
-          var sessions = props.sessions;
-          var binding = sessions.binding(id);
-          if (!binding || !binding.session) throw new Error('目标会话未打开或已关闭');
-          return binding.session.prompt([{ type: 'text', text: text }], 'queue');
-        });
+      var prepareDispatch = function () {
+        var id = props.followCurrentSession ? readCurrentSessionId(props.sessions, props.uiSession) : sessionId;
+        return prepareTaskDispatch(props.sessions, id);
       };
       if (phase === null) return e('div', 'nnk-hint', '正在检查插件配置…');
 
@@ -3073,8 +3055,8 @@ window.__ModuleLoader__.load({
           h(WorkshopTabs, { active: active, setActive: setActive, id: viewId }),
           h(WorkshopPage, { active: active, id: viewId },
           phase === false && active === 'new' ? e('div', 'nnk-err', '⚠️ 还没配置游戏目录——到「⚙ 设置」页填一下就能自动写入;暂时不配也行,把写入方式设为「手动复制」。') : null,
-          active === 'new' ? h(NewTaskForm, { send: send }) : null,
-          active === 'tasklist' ? h(TaskListContent, { sessions: props.sessions, uiSession: props.uiSession }) : null,
+          active === 'new' ? h(NewTaskForm, { prepareDispatch: prepareDispatch }) : null,
+          active === 'tasklist' ? h(TaskListContent, { prepareDispatch: prepareDispatch }) : null,
           active === 'history' ? h(HistoryPanel) : null,
           active === 'online' ? h(OnlinePanel) : null,
           active === 'settings' ? h(SettingsPanel) : null
@@ -3103,12 +3085,12 @@ window.__ModuleLoader__.load({
 
     function ValidateCard(props) {
       var parsed = parseBlock(props.block);
-      if (!parsed.settled) return e('div', 'nnk-hint', '⏳ 正在校验扩展代码…');
+      if (!parsed.settled) return e('div', 'nnk-hint', '⏳ 正在校验文件…');
       if (parsed.isError) return e('div', 'nnk-err', '❌ 校验返回异常,详见文本结果。');
       // render 文本是工具结果的唯一载体(无结构化值通道),按文本前缀判定,正文全量展示
       var ok = (parsed.text || '').indexOf('校验通过') === 0;
       return h('div', { className: 'nnk-tool-result' },
-        e('div', {}, h('b', null, '扩展代码校验')),
+        e('div', {}, h('b', null, '文件校验')),
         ok ? e('div', 'nnk-ok', '✅ 校验通过') : e('div', 'nnk-err', '❌ 校验未通过(未写入)'),
         h('pre', { className: 'nnk-note', style: { whiteSpace: 'pre-wrap', maxHeight: '260px', overflow: 'auto' } }, parsed.text || '(无返回)')
       );
@@ -3178,6 +3160,38 @@ window.__ModuleLoader__.load({
         }
       } catch (e) {}
       return null;
+    }
+
+    /** Capture the receiving session before writing a workshop task or feedback. */
+    function prepareTaskDispatch(sessions, sessionId) {
+      if (!sessionId) throw new Error('当前没有打开的会话，请先打开「无名杀开发模式」会话。');
+      var binding;
+      function check() {
+        var current = sessions.binding(sessionId);
+        if (!current || !current.session || (binding && current !== binding)) {
+          throw new Error('目标会话未打开或已关闭，请重新提交。');
+        }
+        var projections = current.session.projections;
+        var face = projections && typeof projections.faceOf === 'function' ? projections.faceOf('agentPreset') : null;
+        var preset = face && typeof face.getSnapshot === 'function'
+          ? face.getSnapshot()
+          : sessions.list?.getSnapshot()?.byId?.[sessionId]?.projectionValues?.agentPreset;
+        if (preset !== 'noname-dev') throw new Error('请先将目标会话切换为「无名杀开发模式」，再提交。');
+        binding = current;
+      }
+      check();
+      return {
+        check: check,
+        send: async function (text) {
+          check();
+          var result = await binding.session.prompt([{ type: 'text', text: text }], 'queue');
+          if (result && result.ok === false) {
+            var error = result.error;
+            throw new Error(typeof error === 'string' ? error : error?.message || '会话拒绝接收任务');
+          }
+          return result;
+        },
+      };
     }
 
     /** 任务列表内容(浮窗与工坊子页共用):进行中/已完成分区、反馈、删除。 */
@@ -3268,42 +3282,35 @@ window.__ModuleLoader__.load({
         }, function (error) { setD({ err: error && error.message || String(error) }) });
       };
       var feedbackSubmit = function (task, skill) {
-        if (!box.issue.trim()) { setD({ err: '问题描述不能为空' }); return }
+        var issue = box.issue.trim();
+        if (!issue) { setD({ err: '问题描述不能为空' }); return }
+        var dispatch;
+        try {
+          dispatch = props.prepareDispatch ? props.prepareDispatch() : prepareTaskDispatch(sessions, readCurrentSessionId(sessions, uiSession));
+        } catch (error) { setD({ err: error.message }); return }
         setD({ busy: true, err: '' });
         fetch('/noname-kit-api/tasks/feedback', {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ taskId: task.id, skill: skill || '', issue: box.issue.trim() }),
+          body: JSON.stringify({ taskId: task.id, skill: skill || '', issue: issue }),
         }).then(function (r) { return r.json() }).then(function (fb) {
           if (!fb.ok) throw new Error(fb.error || '记录失败');
-          var sendErr = null;
-          try {
-            var sid = readCurrentSessionId(sessions, uiSession);
-            if (sid) {
-              var text = [
-                '【无名杀工坊·问题反馈】',
-                '任务ID: ' + task.id,
-                '目标扩展文件夹: ' + task.folder,
-                skill ? '问题技能: ' + skill : '',
-                '当前轮次: 第 ' + fb.task.rounds + ' 轮',
-                '── 问题描述/游戏内表现/报错 ──',
-                box.issue.trim(),
-                '── 执行要求 ──',
-                '先 noname_read_extension 读取当前代码,定位问题并说明原因,修复后 noname_validate,校验通过后写入。修复后调用 noname_skills_written,原样带回任务ID ' + task.id + '。',
-                'skills 只填本轮实际修复的任务技能名称,不要照抄整个任务清单;其他技能的确认状态保持不变。' + (skill ? '本次反馈技能名: ' + JSON.stringify(skill) + '。' : ''),
-                '如果本轮确实修改了其他已确认技能,将这些技能名称同时列入 skills 和 retestSkills,使其重新待测试;未修改的已确认技能不得列入 retestSkills。',
-              ].filter(Boolean).join('\n');
-              var binding = sessions.binding(sid);
-              if (!binding || !binding.session) {
-                sendErr = '反馈已记录,但目标会话已关闭——请打开会话后重试';
-              } else {
-                Promise.resolve(binding.session.prompt([{ type: 'text', text: text }], 'queue')).catch(function (e) {
-                  setD(function (prev) { return Object.assign({}, prev, { err: '反馈已记录,但发送失败: ' + (e && e.message || e) }) });
-                });
-              }
-            } else {
-              sendErr = '已记录反馈,但当前没有打开的会话——请打开会话后重试,或把反馈粘贴到对话里';
-            }
-          } catch (e) { sendErr = '反馈已记录,但发送失败: ' + (e && e.message || e) }
+          var text = [
+            '【无名杀工坊·问题反馈】',
+            '任务ID: ' + task.id,
+            '目标扩展文件夹: ' + task.folder,
+            skill ? '问题技能: ' + skill : '',
+            '当前轮次: 第 ' + fb.task.rounds + ' 轮',
+            '── 问题描述/游戏内表现/报错 ──',
+            issue,
+            '── 执行要求 ──',
+            '执行请求: 请读取当前代码并修复上述问题；开发流程与按文件校验按 noname-extension-dev 执行。完成后调用 noname_skills_written，原样带回任务ID ' + task.id + '。',
+            'skills 只填本轮实际修复的任务技能名称,不要照抄整个任务清单;其他技能的确认状态保持不变。' + (skill ? '本次反馈技能名: ' + JSON.stringify(skill) + '。' : ''),
+            '如果本轮确实修改了其他已确认技能,将这些技能名称同时列入 skills 和 retestSkills,使其重新待测试;未修改的已确认技能不得列入 retestSkills。',
+          ].filter(Boolean).join('\n');
+          return dispatch.send(text).then(function () { return null }, function (error) {
+            return '反馈已记录，但未能发给 AI。' + (error && error.message || String(error));
+          });
+        }).then(function (sendErr) {
           setD({ busy: false, issue: '', fbFor: null, err: sendErr || '' });
           load();
         }).catch(function (error) { setD({ busy: false, err: error && error.message || String(error) }) });

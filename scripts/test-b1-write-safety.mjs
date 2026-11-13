@@ -116,7 +116,7 @@ try {
   })
   let guard
   const guardBegin = index.indexOf('ctx.tools.guard((exec)')
-  runInNewContext(index.match(/const GUARDED_TOOLS =[^\n]+/)[0] + '\n' + index.slice(index.indexOf('function pathArgOf'), index.indexOf('/** /detect')) + '\n' + index.slice(guardBegin, index.indexOf('// ── 4) HTTP API', guardBegin)), {
+  runInNewContext(index.match(/const GUARDED_TOOLS =[^\n]+/)[0] + '\n' + index.slice(index.indexOf('function pathArgOf'), index.indexOf('/** /detect')) + '\n' + index.slice(guardBegin, index.indexOf("ctx.inject(['webServer']", guardBegin)), {
     ctx: { tools: { guard(fn) { guard = fn } } }, active: true, nonameDir: 'D:/audit-game', process, resolve,
     extRootOf: (d) => join(d, 'extension'), readWorkingDirectory, ...guardModule,
   })

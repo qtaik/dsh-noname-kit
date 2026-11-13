@@ -18,6 +18,9 @@ import assert from 'node:assert/strict'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const src = readFileSync(join(here, '..', 'client.js'), 'utf8')
+const skillRoot = join(here, '..', 'presets', 'noname-dev', 'skills', 'noname-extension-dev')
+const factionReference = readFileSync(join(skillRoot, 'references', 'custom-faction.md'), 'utf8')
+const videoReference = readFileSync(join(skillRoot, 'references', 'video-portrait.md'), 'utf8')
 
 let passed = 0
 function ok(cond, label) {
@@ -38,14 +41,14 @@ function extractFunction(source, name) {
   }
   throw new Error('括号不配平: ' + name)
 }
-const parts = ['h', 'e', 'fieldLabelParts', 'FormField', 'textField', 'renderRadioGroup', 'formGroup', 'NewTaskForm'].map((n) => extractFunction(src, n)).join('\n')
+const parts = ['h', 'e', 'fieldLabelParts', 'FormField', 'textField', 'renderRadioGroup', 'formGroup', 'prepareTaskDispatch', 'NewTaskForm'].map((n) => extractFunction(src, n)).join('\n')
 const presentationDependencies = [
   "var appearanceBus = { value: 'classic', focusTarget: null, sub: function () { return function () {} } };",
   'var skillMotion = new Map(); var skillScopeSerial = 0;',
   'var document = { getElementById: function () { return null } };',
   "function useAppearance() { return 'classic' }",
 ].join('\n')
-const makeFactory = new Function('return function (React, fetch, console) {\n' + presentationDependencies + '\n' + parts + '\n return NewTaskForm;\n}')
+const makeFactory = new Function('return function (React, fetch, console) {\n' + presentationDependencies + '\n' + parts + '\n return { NewTaskForm, prepareTaskDispatch };\n}')
 const quiet = { error() {}, warn() {}, log() {} }
 
 // ── 迷你 React:业务状态与展示组件的基础 hooks ─────────────
@@ -97,14 +100,22 @@ const req = (pred) => requests.filter((r) => !r.answered && pred(r))[0]
 
 // ── 渲染循环 ────────────────────────────────────────────────
 let inst = null, tree = null, sent = []
-const NewTaskForm = makeFactory()(React, fetchStub, quiet)
+const { NewTaskForm, prepareTaskDispatch } = makeFactory()(React, fetchStub, quiet)
+let preset = 'noname-dev'
+const binding = {
+  session: {
+    projections: { faceOf: key => ({ getSnapshot: () => key === 'agentPreset' ? preset : undefined }) },
+    async prompt(content) { sent.push(content[0].text) },
+  },
+}
+const sessions = { binding: id => id === 'form-session' ? binding : undefined }
 function render() {
   cur = inst; inst.cursor = 0; inst.scheduled = false
-  tree = NewTaskForm({ send: (text) => { sent.push(text); return Promise.resolve() } })
+  tree = NewTaskForm({ prepareDispatch: () => prepareTaskDispatch(sessions, 'form-session') })
   pendingEffects.splice(0).forEach((e) => e.fn())
   return tree
 }
-function mount() { requests.length = 0; sent = []; inst = { hooks: [], cursor: 0, scheduled: false }; render() }
+function mount() { requests.length = 0; sent = []; preset = 'noname-dev'; inst = { hooks: [], cursor: 0, scheduled: false }; render() }
 function form() { return inst.hooks[0].value }
 async function flush() { await settle(); for (let i = 0; i < 20 && inst.scheduled; i++) { render(); await settle() } await settle() }
 function walk(node, out) {
@@ -390,7 +401,10 @@ try {
     post.reply({ ok: true })
     await flush()
     assert.equal(sent.length, sentBefore + 1, '任务消息只发送一次')
-    return { body, message: sent[sent.length - 1] }
+    const message = sent[sent.length - 1]
+    assert.ok(message.includes('执行请求:') && message.includes('noname-extension-dev'), '表单提交保留执行授权与开发流程来源')
+    assert.ok(!/硬门禁|回答只消除歧义|仍须等待|每技能:|版本差异对照表/.test(message), '各类任务不再注入第二套确认和校验流程')
+    return { body, message }
   }
   const expectBlocked = async (expected) => {
     const requestCount = requests.length, sentCount = sent.length
@@ -431,11 +445,11 @@ try {
   ok(createdOptions.body.image === 'D:\\素材 文件\\静态立绘.png', '势力图与视频不覆盖静态立绘字段')
   ok(createdOptions.message.includes('星海势力') && createdOptions.message.includes('星海 图.png') && createdOptions.message.includes('动态 立绘.MP4'), 'AI 消息同时包含势力名称、势力图与视频路径')
   ok(createdOptions.message.includes('noname_copy_videos') && createdOptions.message.includes('video/'), '视频需求说明专用复制工具与包内视频目录')
-  ok(['game.addGroup(', '配置对象中的 image', 'lib.selectGroup', 'references/custom-faction.md'].every(part => createdOptions.message.includes(part)), '新势力任务下发注册、图片与选择语义参考')
+  ok(createdOptions.message.includes('references/custom-faction.md') && ['game.addGroup(', 'image', 'lib.selectGroup'].every(part => factionReference.includes(part)), '新势力任务能定位包含注册、图片与选择语义的参考')
   ok(createdOptions.message.includes('势力图单独用 noname_copy_images') && createdOptions.message.includes('不带 taskId'), '势力图独立复制且不会登记为武将立绘')
   ok(createdOptions.message.includes('静态立绘独立处理') && createdOptions.message.includes('复制成功不等于已验证播放'), '视频消息保留静态回退和播放验证要求')
 
-  ok(['player.node.avatar', 'avatar2', 'lib.assetURL', 'pointer-events:none', 'references/video-portrait.md'].every(part => createdOptions.message.includes(part)), '新建视频任务直接提供头像叠加方法与可定位参考')
+  ok(createdOptions.message.includes('references/video-portrait.md') && ['player.node.avatar', 'avatar2', 'lib.assetURL', 'pointer-events:none'].every(part => videoReference.includes(part)), '新建视频任务能定位头像叠加参考且保留实现细节')
 
   console.log('场景 10:取消勾选不提交隐藏值，重新勾选保留输入')
   await toggle('创建新势力', false)
@@ -474,8 +488,8 @@ try {
   const existingCreate = await submitTask('options-existing-new')
   ok(existingCreate.body.newFaction.name === '星海势力' && existingCreate.body.portraitVideo.endsWith('.MP4'), '已有包新增武将同样登记势力和视频')
   ok(existingCreate.message.includes('编辑已有扩展包') && existingCreate.message.includes('── 新势力 ──') && existingCreate.message.includes('── 视频动态立绘 ──'), '已有包新增武将的消息包含两项新需求')
-  ok(['game.addGroup(', '武将的 group', '保留已有有效兼容方案', '可以使用必要的全局注册、全局技能或界面钩子', 'references/custom-faction.md'].every(part => existingCreate.message.includes(part)), '已有包新增武将也包含自建势力方法及兼容边界')
-  ok(existingCreate.body.writeMode === 'manual' && existingCreate.message.includes('手动复制(只生成代码,不要写文件)') && existingCreate.message.includes('素材复制遵守用户已授权范围'), '手动模式保留源码手动与素材授权语义')
+  ok(existingCreate.message.includes('references/custom-faction.md') && existingCreate.message.includes('已有兼容方案') && factionReference.includes('全局注册'), '已有包新增武将使用同一份自建势力参考并保留兼容边界')
+  ok(existingCreate.body.writeMode === 'manual' && existingCreate.message.includes('手动复制(只生成源码，不写入扩展源码)') && existingCreate.message.includes('素材复制遵守用户已授权范围'), '手动模式保留源码手动与素材授权语义')
 
   console.log('场景 13:编辑已有武将显示视频选项，不显示新势力')
   clickRadio('目标edit')
@@ -499,11 +513,11 @@ try {
   const videoOnly = await submitTask('options-video-only')
   ok(videoOnly.body.target.id === 'e-existing' && videoOnly.body.skills.length === 1 && videoOnly.body.skills[0].name === '视频动态立绘', '仅勾选视频即可提交单节点编辑任务')
   ok(videoOnly.body.skills[0].desc.includes('e-existing') && videoOnly.body.skills[0].desc.includes('动态 立绘.MP4'), '视频节点记录现有目标和源路径')
-  ok(videoOnly.message.includes('noname_copy_videos') && videoOnly.message.includes('动态立绘项:') && videoOnly.message.includes('必要挂载'), '视频单独编辑的确认说明和实现范围完整')
+  ok(videoOnly.message.includes('noname_copy_videos') && videoOnly.message.includes('编辑目标条目: character:e-existing') && videoOnly.message.includes('必需的直接关联代码'), '视频单独编辑保留指定目标及必要关联范围')
   ok(videoOnly.body.image === '' && videoOnly.message.includes('沿用现有静态立绘'), '未提供新静态图时保留已有回退')
-  ok(['参考做法', '头像槽位', '换将、禁用或离场', '全屏技能视频', 'references/video-portrait.md'].every(part => videoOnly.message.includes(part)), '仅编辑视频也下发绑定、清理与非全屏参考')
+  ok(videoOnly.message.includes('references/video-portrait.md') && ['头像槽位', '换将', 'game.pause()'].every(part => videoReference.includes(part)), '仅编辑视频也能定位绑定、清理与非全屏参考')
   ok(videoOnly.message.includes('本次未填图片路径不代表缺图'), '编辑视频不因表单图片留空误报已有武将缺图')
-  ok(videoOnly.message.includes('目标条目和播放挂载可能位于不同文件') && videoOnly.message.includes('每次写入传对应的 file 参数'), '编辑视频提示多文件挂载按所属文件读写')
+  ok(videoOnly.message.includes('read/write/validate 使用对应 file 参数') && readFileSync(join(skillRoot, 'SKILL.md'), 'utf8').includes('不得把目标条目的文件沿用到其他文件的辅助技能或挂载'), '编辑视频按任务归属文件定位，跨文件挂载使用 Skill 的同一规则')
   await toggle('使用视频作为动态立绘', false)
   ok(!findAll(n => n.props['data-nnk-field'] === 'portraitVideo').length && form().portraitVideo.includes('动态 立绘.MP4'), '关闭编辑视频选项时隐藏字段并保留草稿')
   await expectBlocked('至少填一项')
@@ -548,6 +562,43 @@ try {
   ok(!checkbox('创建新势力') && !checkbox('使用视频作为动态立绘'), '卡牌编辑不显示武将视频与势力选项')
   const cardEdit = await submitTask('options-card-edit')
   ok(cardEdit.body.target.kind === 'card' && noCharacterOptions(cardEdit) && !cardEdit.body.skills.some(s => s.name.startsWith('视频动态立绘')), '卡牌编辑不提交视频路径或附加节点')
+
+
+  console.log('场景 16:按目标会话预设检查派单')
+  mount()
+  const dispatchSkill = findAll(n => n.type === 'input' && String(n.props.placeholder).startsWith('技能名'))[0]
+  dispatchSkill.props.onChange({ target: { value: '派单测试' } })
+  await flush()
+  await change('任务ID', 'dispatch-probe')
+  preset = 'standard'
+  submitBtn().props.onClick()
+  await flush()
+  ok(form().err.includes('切换为「无名杀开发模式」') && !form().busy, '普通预设显示切换提示')
+  ok(requests.every(r => r.opts?.method !== 'POST') && sent.length === 0 && form().skills[0].name === '派单测试', '普通预设不登记、不派单并保留表单')
+
+  preset = 'noname-dev'
+  submitBtn().props.onClick()
+  await flush()
+  const pendingSettings = req(r => r.url.endsWith('/settings'))
+  preset = 'standard'
+  pendingSettings.reply({})
+  await flush()
+  ok(form().err.includes('切换为「无名杀开发模式」') && requests.every(r => r.opts?.method !== 'POST'), '准备期间切出时登记前再次检查')
+
+  preset = 'noname-dev'
+  submitBtn().props.onClick()
+  await flush()
+  req(r => r.url.endsWith('/settings')).reply({})
+  await flush()
+  const pendingRegistration = req(r => r.url.endsWith('/tasks') && r.opts?.method === 'POST')
+  preset = 'standard'
+  pendingRegistration.reply({ ok: true })
+  await flush()
+  ok(sent.length === 0 && form().err.includes('任务「dispatch-probe」已登记，但未能发给 AI'), '登记期间切出时拦住发送并说明任务已登记')
+
+  preset = 'noname-dev'
+  const dispatched = await submitTask('dispatch-retry')
+  ok(dispatched.body.skills[0].name === '派单测试' && dispatched.message.includes('任务ID: dispatch-retry'), '切回无名杀预设后正常登记和派单')
 
   console.log('\n全部通过:' + passed + ' 项')
 } catch (err) {

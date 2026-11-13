@@ -9,11 +9,10 @@ import { createHash, randomUUID } from 'node:crypto'
 import { normalizeSignalingUrl } from './online-kernel/keepalive/signaling-config.js'
 import { statSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { KNOWLEDGE_TEXT } from './src/knowledge.js'
-import { registerPresetContext } from './src/preset-context.js'
 import { createGeneratedOutputStore, generatedOutputOwner } from './src/generated-output.js'
+import { createPresetToolRegistrar } from './src/tool-scope.js'
 import { renderExtensionRead, renderExtensionWrite, renderImageCopy } from './src/tool-output.js'
-import { validateExtensionCode } from './src/validate.js'
+import { validateFileCode } from './src/validate.js'
 import { searchReference } from './src/reference.js'
 import { detectCandidates } from './src/detect.js'
 import { listCatalog, readCatalog } from './src/catalog.js'
@@ -48,7 +47,7 @@ function clampBashMaxOutput(v) {
 
 export const name = 'noname-kit'
 
-export const inject = ['tools', 'systemPrompt', 'dshHomePath']
+export const inject = ['tools', 'dshHomePath']
 
 /** 部署配置。nonameDir 为空 = 仅生成模式。 */
 export const Config = z.object({
@@ -208,26 +207,11 @@ export function apply(ctx, config) {
   // 目录扫出来的武将:选中保存被内核 hasCharacter 拒,新目录已有的又看不到)
   const avatarsCache = { at: 0, list: null, err: '', dir: '' }
 
-  // 随配置状态生成开发规范
-  // POSIX 形式路径:模型在 bash 里习惯 /d/... 写法,直接给两种形式免得它自己转换/寻找
-  const posixPath = (p) => String(p || '')
-    .replace(/^([A-Za-z]):[\\/]/, (_m, d) => '/' + d.toLowerCase() + '/')
-    .replace(/\\/g, '/')
-  ctx.systemPrompt.section({
-    name: 'noname-kit',
-    // 规范说明排在文件工具之后、Web 工具之前。
-    order: 1800,
-    text: () => active
-      ? KNOWLEDGE_TEXT + '\n## 当前环境(工坊已配置;路径就在下面,不需要寻找)\n'
-        + '- 游戏本体目录: ' + nonameDir + '(bash 里写作 ' + posixPath(nonameDir) + ')\n'
-        + '- 扩展写入根: ' + extRootOf(nonameDir) + '(bash 里写作 ' + posixPath(extRootOf(nonameDir)) + ')\n'
-        + '- 需要核对引擎 API/源码时,直接在上述目录下对 noname/ 子目录做窄窗口 grep——禁止用 ls/find 列盘符根、用户目录来寻找引擎或扩展路径(路径已在上面,找了也白找)。\n'
-      : KNOWLEDGE_TEXT + '\n注意:当前部署未配置 nonameDir,noname_write_extension 与 noname_read_extension 不可写/不可读,生成代码后让用户自行保存。',
-  })
+  // The preset reads current settings without adding context to other modes.
+  ctx.provide('nonameKitEnvironment', () => ({ active, nonameDir }))
 
-  registerPresetContext(ctx, () => ({ active, nonameDir }))
-
-  // 开发工具
+  // 工具在无名杀预设内注册，继续共享工坊的动态配置和任务状态。
+  const registerDeveloperTools = (ctx) => {
   ctx.tools.register(defineTool({
     name: 'noname_search_reference',
     description: 'Find skill, character and card reference implementations by Chinese name, ID, effect keywords or description. Search for the mechanisms needed by the current task; different implementations you have actually read may be combined, and an exact combined match is not required. Stop once the references sufficiently support the current approach; do not exhaust candidates or continue solely because coverage.partial is true. This is not a complete engine API index; verify engine API contracts with general read/search tools against current game source. Files up to 5 GiB are supported: ordinary files use a bounded index; large files return the first bounded excerpt per file, requiring all query words within one 16 KiB source window. Large files use chunked search. Results are limited; coverage.partial means content remains unsearched or was skipped, not that it does not exist. If more reference evidence is needed and nextCursor is present, repeat the same query/type with cursor=nextCursor to continue. A full description can return similarity >=50% candidates; read the definition of any candidate you rely on, for example by searching its ID.',
@@ -275,9 +259,10 @@ export function apply(ctx, config) {
 
   ctx.tools.register(defineTool({
     name: 'noname_validate',
-    description: 'Validate a noname extension file. Run before any write.',
+    description: 'Validate complete file content without writing. file defaults to extension.js (entry syntax and extension structure); other .js files use module syntax checks; .json files use JSON parsing. Pass the actual package-relative file path. noname_write_extension uses the same checks after assembling blocks/edits, so do not reconstruct a whole file or repeatedly validate individual skill fragments just for preflight.',
     parameters: {
-      code: { type: 'string', required: true, description: 'Full extension.js content.' },
+      code: { type: 'string', required: true, description: 'Complete content of the file being checked, not an isolated skill property.' },
+      file: { type: 'string', description: 'Package-relative .js or .json path. Defaults to extension.js; e.g. skill.js, character/character.js or info.json.' },
       style: { type: 'string', enum: ['classic', 'module'], description: 'Authoring style hint — the tool detects the actual style and only warns on mismatch. Sub-directory module files of multi-file packs are always checked as ESM.' },
       kind: { type: 'string', enum: ['character', 'card'], description: 'Structure hints to apply (character/card). Omit to skip.' },
       folder: { type: 'string', description: 'Target folder, for name-consistency check.' },
@@ -286,7 +271,9 @@ export function apply(ctx, config) {
     output: {
       schema: { type: 'object', additionalProperties: false, properties: {
         ok: { type: 'boolean', required: true },
-        style: { type: 'string', required: true },
+        style: { type: 'string' },
+        file: { type: 'string' },
+        fileType: { type: 'string', enum: ['entry', 'module', 'json'] },
         errors: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: { line: { type: 'integer' }, message: { type: 'string', required: true } } } },
         warnings: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: { message: { type: 'string', required: true } } } },
       } },
@@ -299,7 +286,7 @@ export function apply(ctx, config) {
     },
     isConcurrencySafe: () => true,
     async execute(args) {
-      return validateExtensionCode(args)
+      return validateFileCode(args)
     },
   }))
 
@@ -426,14 +413,14 @@ export function apply(ctx, config) {
 
   ctx.tools.register(defineTool({
     name: 'noname_write_extension',
-    description: 'Write a noname extension (validates first; the only write channel). Two modes: full-text (code) for first write or unindexed legacy files (editScope is required when overwriting an existing file so all bytes outside that scope remain identical); block-assembly (blocks/edits/deletes) for anchored files — the tool keeps everything you do not submit, so transcription errors are structurally impossible.',
+    description: 'Assemble and validate a package-relative JavaScript file, then back up and write it, or return the assembled code in manual mode. Entry files receive extension checks; other .js files receive module syntax checks. Submit only the target and its necessary, previously read dependencies using blocks or unique edits; unchanged regions are retained. Full-text overwrites of existing files require editScope and preserve bytes outside it. Validation and backups reduce write errors; check the returned result and test the affected game behavior.',
     parameters: {
       folder: { type: 'string', required: true, description: 'Extension folder name.' },
       file: { type: 'string', description: 'Relative .js path inside the extension package for multi-file packs (e.g. character/character.js). Defaults to extension.js. Block-mode requires that file to be anchored (workshop migrate button first).' },
-      code: { type: 'string', description: 'Full extension.js content. Required in full-text mode; omit in block mode.' },
+      code: { type: 'string', description: 'Complete content of the selected file. Required in full-text mode; omit in block mode.' },
       style: { type: 'string', enum: ['classic', 'module'], description: 'Authoring style hint — the tool detects the actual style and only warns on mismatch. Sub-directory module files of multi-file packs are always checked as ESM.' },
       kind: { type: 'string', enum: ['character', 'card'], description: 'Structure hints to apply (character/card). Omit to skip.' },
-      infoJson: { type: 'string', description: 'info.json content (JSON string).' },
+      infoJson: { type: 'string', description: 'Companion info.json content, parsed before any source write. This does not enable arbitrary JSON file writes.' },
       idPrefix: { type: 'string', description: 'ID prefix (e.g. cs_) for the prefix-convention check.' },
       writeMode: { type: 'string', enum: ['auto', 'manual'], description: 'auto=write; manual=return code only. Ignored when taskId is given — the workshop-registered mode (user form choice) wins.' },
       taskId: { type: 'string', description: 'Task ID from the task message. When given, the task-registered writeMode (user form choice) overrides the writeMode parameter.' },
@@ -454,6 +441,8 @@ export function apply(ctx, config) {
         ok: { type: 'boolean', required: true },
         wrote: { type: 'boolean', required: true },
         style: { type: 'string'},
+        file: { type: 'string' },
+        fileType: { type: 'string', enum: ['entry', 'module'] },
         path: { type: 'string'},
         backup: { type: 'string'},
         errors: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { message: { type: 'string', required: true }, line: { type: 'integer' } } } },
@@ -728,6 +717,9 @@ export function apply(ctx, config) {
       return { ok: true, marked: result.marked, preservedConfirmed: result.preservedConfirmed, missing: result.missing, reopened: Boolean(result.reopened), notesStored: result.notesStored || 0, confirmed: result.task.skills.filter((s) => s.status === 'confirmed').length, total: result.task.skills.length, autoCompleted: false }
     },
   }))
+
+  }
+  ctx.provide('nonameKitTools', createPresetToolRegistrar(registerDeveloperTools))
 
   // 扩展源码写入保护
   // 始终注册,内部动态判断 active:工坊向导热初始化后立即生效。

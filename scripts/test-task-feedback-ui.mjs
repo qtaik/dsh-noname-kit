@@ -92,7 +92,7 @@ try {
   const source = (await readFile(new URL('../index.js', import.meta.url), 'utf8')).replaceAll('\r\n', '\n')
   const nameAt = source.indexOf("name: 'noname_skills_written'")
   const from = source.lastIndexOf('ctx.tools.register(defineTool({', nameAt)
-  const to = source.indexOf('  // ── 3) 守卫', nameAt)
+  const to = source.indexOf("\n  }\n  ctx.provide('nonameKitTools'", nameAt)
   assert.ok(from >= 0 && to > from, 'bounded final tool registration')
   let tool
   runInNewContext(source.slice(from, to), {
@@ -138,8 +138,9 @@ try {
   }
 
   const client = await readFile(new URL('../client.js', import.meta.url), 'utf8')
-  const parts = ['h', 'e', 'parseBlock', 'CompleteCard', 'readCurrentSessionId', 'TaskListContent'].map(name => extractFunction(client, name)).join('\n')
+  const parts = ['h', 'e', 'parseBlock', 'CompleteCard', 'readCurrentSessionId', 'prepareTaskDispatch', 'TaskListContent'].map(name => extractFunction(client, name)).join('\n')
   const requests = [], prompts = [], boundIds = []
+  let currentId = '当前会话', currentPreset = 'standard', afterFeedback
   let pendingRequests = 0
   const uiId = '反馈界面-06'
   await createTask(home, { id: uiId, folder: '当前包', image: 'test.png', skills: [{ name: '其他已确认' }, { name: '问题技能' }, { name: '另一个已确认' }] })
@@ -152,7 +153,10 @@ try {
     try {
       let value
       if (url === '/noname-kit-api/tasks') value = { tasks: (await listTasks(home)).filter(task => task.id === uiId) }
-      else if (url === '/noname-kit-api/tasks/feedback') value = await skillFeedback(home, body)
+      else if (url === '/noname-kit-api/tasks/feedback') {
+        value = await skillFeedback(home, body)
+        afterFeedback?.()
+      }
       else throw new Error('Unexpected request: ' + url)
       return { json: async () => plain(value) }
     } finally { pendingRequests-- }
@@ -175,14 +179,21 @@ try {
   check(textOf(components.CompleteCard({ block: {} })).includes('正在标记技能'), '运行中的工具卡片保持等待状态')
   check(nodes(card('', { isError: true }), node => classHas(node, 'nnk-err')).length === 1, '工具传输异常卡片仍呈现错误状态')
 
+  const binding = { session: {
+    projections: { faceOf(key) {
+      assert.equal(key, 'agentPreset')
+      return { getSnapshot: () => currentPreset }
+    } },
+    prompt(content, mode) { prompts.push({ content, mode }); return Promise.resolve({ ok: true }) },
+  } }
   const sessions = {
     list: { getSnapshot: () => ({ current: '旧会话' }) },
     binding(id) {
       boundIds.push(id)
-      return { session: { prompt(content, mode) { prompts.push({ content, mode }); return Promise.resolve() } } }
+      return id === '当前会话' ? binding : undefined
     },
   }
-  const uiSession = { adapter: { current: { getSnapshot: () => ({ key: '当前会话' }) } } }
+  const uiSession = { adapter: { current: { getSnapshot: () => ({ key: currentId }) } } }
   const instance = { hooks: [], cursor: 0, scheduled: false }
   let tree
   function render() {
@@ -219,10 +230,20 @@ try {
   assert.ok(textarea)
   const issue = '触发后伤害计算错误；game.log: feedback-probe-06'
   textarea.props.onChange({ target: { value: '  ' + issue + '  ' } }); await flush()
+  const beforeFeedback = await readFile(registryPath, 'utf8')
+  button(tree, '提交反馈').props.onClick(); await flush()
+  check(!requests.some(request => request.url.endsWith('/tasks/feedback')) && prompts.length === 0
+    && (await readFile(registryPath, 'utf8')) === beforeFeedback, '普通预设拒绝反馈派单，既未写入记录也未提交提示词')
+  check(textOf(tree).includes('无名杀开发模式') && nodes(tree, node => node.type === 'textarea')[0]?.props.value === '  ' + issue + '  ',
+    '提示切换预设并保留未提交的反馈草稿')
+
+  currentPreset = 'noname-dev'
+  afterFeedback = () => { currentId = '另一个会话' }
   button(tree, '提交反馈').props.onClick(); await flush()
   const feedbackRequest = requests.find(request => request.url.endsWith('/tasks/feedback'))
   check(feedbackRequest && JSON.stringify(feedbackRequest.body) === JSON.stringify({ taskId: uiId, skill: '问题技能', issue }), '真实点击提交反馈保留任务ID、技能名与完整问题正文')
-  check(prompts.length === 1 && boundIds.join() === '当前会话' && prompts[0].mode === 'queue', '反馈只向当前打开会话排队发送一次')
+  check(prompts.length === 1 && boundIds.length > 0 && boundIds.every(id => id === '当前会话') && prompts[0].mode === 'queue',
+    '切换到开发预设后草稿可提交，反馈登记期间切换前台会话仍只发送给原会话')
   const prompt = prompts[0].content.map(item => item.text || '').join('\n')
   check(prompt.includes('任务ID: ' + uiId) && prompt.includes('目标扩展文件夹: 当前包') && prompt.includes('问题技能: 问题技能') && prompt.includes(issue), '当前会话实际收到的 prompt 保留反馈上下文')
   check(prompt.includes('skills 只填本轮实际修复的任务技能名称') && prompt.includes('不要照抄整个任务清单')
@@ -232,6 +253,17 @@ try {
     '反馈真实落盘仅打开问题技能，其余确认状态保留')
   check(confirmed('其他已确认') && confirmed('另一个已确认') && nodes(skillRow('问题技能'), node => classHas(node, 'nnk-status-open')).length === 1,
     '反馈后重新加载的 UI 仍保留其他技能确认徽标，并显示问题技能待实现')
+
+  currentId = '当前会话'
+  afterFeedback = () => { currentPreset = 'standard' }
+  button(skillRow('问题技能'), '🔁 反馈').props.onClick(); await flush()
+  const lateIssue = '反馈登记期间更换预设'
+  nodes(tree, node => node.type === 'textarea')[0].props.onChange({ target: { value: lateIssue } }); await flush()
+  button(tree, '提交反馈').props.onClick(); await flush()
+  const updated = await getTask(home, uiId)
+  check(updated.feedbacks.some(feedback => feedback.issue === lateIssue) && prompts.length === 1
+    && textOf(tree).includes('反馈已记录') && textOf(tree).includes('无名杀开发模式'),
+    '登记期间预设变更时保留已存反馈，拒绝派单并告知发送失败')
   console.log('全部通过:' + passed + ' 项')
 } finally {
   await rm(home, { recursive: true, force: true })

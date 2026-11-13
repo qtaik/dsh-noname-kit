@@ -42,13 +42,14 @@ function mount(service, panel = false, extra = {}) {
       }
     },
   }
-  const parts = ['h', 'e', 'readCurrentSessionId', 'WorkshopView', 'WorkshopPanelWindow'].map(extractFunction).join('\n')
+  const parts = ['h', 'e', 'readCurrentSessionId', 'prepareTaskDispatch', 'WorkshopView', 'WorkshopPanelWindow'].map(extractFunction).join('\n')
   const components = new Function('React', 'fetch', 'console', `
     var healthBus = { refresh: function () { return Promise.resolve({ preset: { state: 'ok' } }) } };
     var workshopBus = { open: true, sub: function () { return function () {} }, set: function () {} };
     var localStorage = { getItem: function () { return null } };
     function usePanelViewport() {}
     function clampPanelPos(pos) { return pos }
+    function WorkshopIcon() {}
     function AppearanceSwitch() {}
     function WorkshopTabs() {}
     function WorkshopPage() {}
@@ -89,19 +90,26 @@ function nodes(tree) {
 function service(initial = 'A') {
   let currentId = initial
   const bindings = [], prompts = []
+  const presets = { A: 'noname-dev', B: 'noname-dev' }
+  const sessionBindings = new Map(['A', 'B'].map(id => [id, { session: {
+    projections: { faceOf(key) {
+      assert.equal(key, 'agentPreset')
+      return { getSnapshot: () => presets[id] }
+    } },
+    prompt(content, mode) {
+      prompts.push({ id, content, mode })
+      return value.error ? Promise.reject(value.error) : Promise.resolve(value.result)
+    },
+  } }]))
   const value = {
-    bindings, prompts, open: new Set(['A', 'B']), error: null,
+    bindings, prompts, presets, sessionBindings, open: new Set(['A', 'B']), error: null, result: 'queued',
     current(id) { currentId = id },
     uiSession: { adapter: { current: { getSnapshot: () => currentId ? { key: currentId } : null } } },
     sessions: {
       list: { getSnapshot: () => ({ byId: {} }) },
       binding(id) {
         bindings.push(id)
-        if (!value.open.has(id)) return undefined
-        return { session: { prompt(content, mode) {
-          prompts.push({ id, content, mode })
-          return value.error ? Promise.reject(value.error) : Promise.resolve('queued')
-        } } }
+        return value.open.has(id) ? sessionBindings.get(id) : undefined
       },
     },
   }
@@ -112,8 +120,8 @@ async function sender(value, extra = {}) {
   const tree = await view.settle()
   const forms = nodes(tree).filter(node => node.type === view.components.NewTaskForm)
   assert.equal(forms.length, 1, 'real WorkshopView renders one NewTaskForm')
-  assert.equal(typeof forms[0].props.send, 'function')
-  return forms[0].props.send
+  assert.equal(typeof forms[0].props.prepareDispatch, 'function')
+  return forms[0].props.prepareDispatch
 }
 
 let passed = 0
@@ -124,11 +132,11 @@ async function test(name, body) {
 }
 
 await test('浮窗保持打开且不重渲染，A 切换到 B 后旧回调将完整任务排队到 B', async () => {
-  const value = service(), send = await sender(value, { followCurrentSession: true })
+  const value = service(), prepare = await sender(value, { followCurrentSession: true })
   value.current('B')
   const text = '任务ID: workshop-session-01\n技能: 火攻\n说明: 保留 Unicode 与多行正文。'
-  assert.equal(await send(text), 'queued')
-  assert.deepEqual(value.bindings, ['B'])
+  await prepare().send(text)
+  assert.deepEqual(new Set(value.bindings), new Set(['B']))
   assert.deepEqual(value.prompts, [{ id: 'B', content: [{ type: 'text', text }], mode: 'queue' }])
 })
 
@@ -141,71 +149,122 @@ await test('真实浮窗渲染将跟随当前会话的标记传入 WorkshopView'
   assert.equal(views[0].props.sessionId, 'A')
   assert.equal(views[0].props.sessions, value.sessions)
   assert.equal(views[0].props.uiSession, value.uiSession)
-  const send = await sender(value, views[0].props)
+  const prepare = await sender(value, views[0].props)
   value.current('B')
-  await send('浮窗实际传参后的任务')
-  assert.deepEqual(value.bindings, ['B'])
+  await prepare().send('浮窗实际传参后的任务')
+  assert.deepEqual(new Set(value.bindings), new Set(['B']))
 })
 
 await test('普通会话页继续绑定自己的 A，会话当前值 B 不改变发送目标', async () => {
-  const value = service(), send = await sender(value)
+  const value = service(), prepare = await sender(value)
   value.current('B')
-  await send('属于 A 的任务')
-  assert.deepEqual(value.bindings, ['A'])
+  await prepare().send('属于 A 的任务')
+  assert.deepEqual(new Set(value.bindings), new Set(['A']))
   assert.deepEqual(value.prompts, [{ id: 'A', content: [{ type: 'text', text: '属于 A 的任务' }], mode: 'queue' }])
 })
 
 await test('浮窗当前会话消失时拒绝提交，不回退至渲染时的 A', async () => {
-  const value = service(), send = await sender(value, { followCurrentSession: true })
+  const value = service(), prepare = await sender(value, { followCurrentSession: true })
   value.current(null)
-  await assert.rejects(send('不可发送的任务'), /当前没有打开的会话/)
+  assert.throws(prepare, /当前没有打开的会话/)
   assert.deepEqual(value.bindings, [])
   assert.deepEqual(value.prompts, [])
 })
 
 await test('当前 B 已关闭时明确拒绝，不发送给仍然打开的 A', async () => {
-  const value = service(), send = await sender(value, { followCurrentSession: true })
+  const value = service(), prepare = await sender(value, { followCurrentSession: true })
   value.current('B'); value.open.delete('B')
-  await assert.rejects(send('不可发送的任务'), /目标会话未打开或已关闭/)
+  assert.throws(prepare, /目标会话未打开或已关闭/)
   assert.deepEqual(value.bindings, ['B'])
   assert.deepEqual(value.prompts, [])
 })
 
 await test('绑定缺少 session 时返回关闭提示，避免出现 TypeError', async () => {
-  const value = service(), send = await sender(value, { followCurrentSession: true })
+  const value = service(), prepare = await sender(value, { followCurrentSession: true })
   value.current('B')
   value.sessions.binding = id => { value.bindings.push(id); return {} }
-  await assert.rejects(send('不可发送的任务'), /目标会话未打开或已关闭/)
+  assert.throws(prepare, /目标会话未打开或已关闭/)
   assert.deepEqual(value.bindings, ['B'])
   assert.deepEqual(value.prompts, [])
 })
 
 await test('prompt 拒绝原样传回表单，仍只尝试向当前 B 排队一次', async () => {
-  const value = service(), send = await sender(value, { followCurrentSession: true })
+  const value = service(), prepare = await sender(value, { followCurrentSession: true })
   const failure = new Error('controlled prompt rejection'), text = '失败时保留完整任务\n技能: 观星'
   value.current('B'); value.error = failure
-  await assert.rejects(send(text), error => error === failure)
-  assert.deepEqual(value.bindings, ['B'])
+  await assert.rejects(prepare().send(text), error => error === failure)
+  assert.deepEqual(new Set(value.bindings), new Set(['B']))
   assert.deepEqual(value.prompts, [{ id: 'B', content: [{ type: 'text', text }], mode: 'queue' }])
 })
 
 await test('普通会话页的 A 已关闭时拒绝，即使当前 B 仍然可用', async () => {
-  const value = service(), send = await sender(value)
+  const value = service(), prepare = await sender(value)
   value.current('B'); value.open.delete('A')
-  await assert.rejects(send('属于 A 的任务'), /目标会话未打开或已关闭/)
+  assert.throws(prepare, /目标会话未打开或已关闭/)
   assert.deepEqual(value.bindings, ['A'])
   assert.deepEqual(value.prompts, [])
 })
 
 await test('uiSession 不可读时使用旧版 current 或新版 mainView 快照', async () => {
   for (const snapshot of [{ current: 'B' }, { byId: { B: { id: 'B', retainedBy: { mainView: 1 } } } }]) {
-    const value = service(), send = await sender(value, { followCurrentSession: true })
+    const value = service(), prepare = await sender(value, { followCurrentSession: true })
     value.uiSession.adapter.current.getSnapshot = () => { throw new Error('current unavailable') }
     value.sessions.list.getSnapshot = () => snapshot
-    await send('兼容快照的任务')
-    assert.deepEqual(value.bindings, ['B'])
+    await prepare().send('兼容快照的任务')
+    assert.deepEqual(new Set(value.bindings), new Set(['B']))
     assert.equal(value.prompts[0].mode, 'queue')
   }
+})
+
+await test('派单准备后切换前台会话，仍只向原开发会话提交', async () => {
+  const value = service(), prepare = await sender(value, { followCurrentSession: true })
+  const dispatch = prepare()
+  value.current('B')
+  dispatch.check()
+  await dispatch.send('原会话的任务')
+  assert.deepEqual(new Set(value.bindings), new Set(['A']))
+  assert.deepEqual(value.prompts.map(prompt => prompt.id), ['A'])
+})
+
+await test('会话真实预设优先，普通或尚未同步的预设不回退到旧摘要', async () => {
+  const value = service(), prepare = await sender(value)
+  value.sessions.list.getSnapshot = () => ({ byId: { A: { projectionValues: { agentPreset: 'noname-dev' } } } })
+  for (const preset of ['standard', undefined, null]) {
+    value.presets.A = preset
+    assert.throws(prepare, /无名杀开发模式/)
+  }
+  assert.deepEqual(value.prompts, [])
+})
+
+await test('旧宿主缺少绑定投影时按目标 ID 读取列表投影', async () => {
+  const value = service(), prepare = await sender(value)
+  delete value.sessionBindings.get('A').session.projections
+  value.sessions.list.getSnapshot = () => ({ byId: { A: { projectionValues: { agentPreset: value.presets.A } }, B: { projectionValues: { agentPreset: 'noname-dev' } } } })
+  value.presets.A = 'standard'
+  assert.throws(prepare, /无名杀开发模式/)
+  value.presets.A = 'noname-dev'
+  await prepare().send('旧宿主的任务')
+  assert.deepEqual(value.prompts.map(prompt => prompt.id), ['A'])
+})
+
+await test('派单准备后预设变化或同 ID 重新绑定均拒绝发送', async () => {
+  const value = service(), prepare = await sender(value)
+  const dispatch = prepare()
+  value.presets.A = 'standard'
+  assert.throws(dispatch.check, /无名杀开发模式/)
+  await assert.rejects(dispatch.send('旧预设的任务'), /无名杀开发模式/)
+  value.presets.A = 'noname-dev'
+  value.sessionBindings.set('A', { session: value.sessionBindings.get('A').session })
+  assert.throws(dispatch.check, /目标会话未打开或已关闭/)
+  await assert.rejects(dispatch.send('旧绑定的任务'), /目标会话未打开或已关闭/)
+  assert.deepEqual(value.prompts, [])
+})
+
+await test('宿主返回结构化拒绝时将原因传回表单', async () => {
+  const value = service(), prepare = await sender(value)
+  value.result = { ok: false, error: { message: 'controlled host refusal' } }
+  await assert.rejects(prepare().send('宿主拒绝的任务'), /controlled host refusal/)
+  assert.equal(value.prompts.length, 1)
 })
 
 console.log('全部通过: ' + passed + ' 项')

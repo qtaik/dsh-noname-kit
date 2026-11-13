@@ -38,7 +38,7 @@ const guardContext = {
 }
 runInNewContext(index.match(/const GUARDED_TOOLS =[^\n]+/)[0] + '\n' +
   sliceBetween(index, 'function pathArgOf', '/** /detect') + '\n' +
-  sliceBetween(index, 'ctx.tools.guard((exec)', '// ── 4) HTTP API'), guardContext)
+  sliceBetween(index, 'ctx.tools.guard((exec)', "ctx.inject(['webServer']"), guardContext)
 for (const name of ['pwsh', 'tool:pwsh']) {
   const hit = (command, extra = {}, cwd = 'E:/agent') => guard({
     name, arguments: { command, ...extra }, agent: { session: { header: { cwd } } },

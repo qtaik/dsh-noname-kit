@@ -1,5 +1,5 @@
 /**
- * Keep the initial top-level request tool-free, then expose resident and discovered tools.
+ * Expose resident and discovered tools from the first real request.
  * Restore phase state from session events; compaction uses the configured recovery tool set.
  * Adapted from xiaobright/dsh-anchored-standard (MIT).
  */
@@ -21,7 +21,7 @@ const DEFAULT_SUPPRESSED_SOURCES = ['skill-catalog', 'agent-instructions']
 /** Shell tool candidates: custom-bash registers bash; pwsh is available on Windows. */
 const SHELLS = ['bash', 'pwsh']
 
-/** Discovery tools always resident after promotion (the tool-search pattern). */
+/** Discovery tools always resident during normal requests (the tool-search pattern). */
 const RESIDENT_DISCOVERY_TOOLS = ['dev_tool_search', 'skill_search', 'skill_load']
 
 function stringListOrEmpty(value, field) {
@@ -44,7 +44,7 @@ function sourceList(value, field, fallback) {
 export async function apply(ctx, config) {
   // Core work set exposed after a compaction, before re-promotion.
   const compactionTools = stringListOrEmpty(config?.compactionTools, 'compactionTools')
-  // Keep the configured development tools resident after promotion.
+  // Keep the configured development tools resident from the first request.
   
   const residentTools = stringListOrEmpty(config?.residentTools, 'residentTools')
   const suppressedSources = sourceList(config?.suppressedContextSources, 'suppressedContextSources', DEFAULT_SUPPRESSED_SOURCES)
@@ -94,7 +94,7 @@ export async function apply(ctx, config) {
     }
     try {
       const status = promotion.status(agent)
-      if (status.promoted) {
+      if (status.promoted || status.boundary < 0 || compactionTools.length === 0) {
         const available = new Set(tools.map((tool) => tool.name))
         const keep = new Set([
           ...SHELLS.filter((name) => available.has(name)),
@@ -103,7 +103,6 @@ export async function apply(ctx, config) {
         ])
         return select(tools.filter((tool) => keep.has(tool.name)))
       }
-      if (status.boundary < 0 || compactionTools.length === 0) return select([])
       const available = new Set(tools.map((tool) => tool.name))
       const selectedShells = SHELLS.filter((toolName) => available.has(toolName))
       const missing = compactionTools.filter((toolName) => !available.has(toolName))
@@ -171,15 +170,15 @@ export async function apply(ctx, config) {
     try {
       const status = promotion.status(agent)
       let selected = decision
-      // A zero-tool anchor has no inline declaration baseline. Start the resident
-      // series once so the host does not defer every newly exposed tool.
+      // Older sessions may still have an empty declaration baseline. Start the
+      // resident series once so newly available tools are not all deferred.
       const session = agent?.session
-      if (status.promoted && selectedCounts.get(agent) > 0 && typeof session?.requestHeader === 'function'
+      if ((status.promoted || status.boundary < 0) && selectedCounts.get(agent) > 0 && typeof session?.requestHeader === 'function'
         && session.requestHeader() !== undefined) {
         const baseline = typeof session.toolHistory === 'function' ? session.toolHistory()?.tools : session.requestHeader().tools
         if (!Array.isArray(baseline) || baseline.length === 0) selected = { ...decision, startsRequestSeries: true }
       }
-      if (status.promoted || suppressedSources.size === 0) return selected
+      if (status.promoted || status.boundary < 0 || suppressedSources.size === 0) return selected
       if (!Array.isArray(selected.messages)) return selected
       const kept = selected.messages.filter((message) => {
         const kind = message?.source?.kind

@@ -1,4 +1,4 @@
-/** After durable bootstrap promotion, inject one instruction-file hint per session. Probe user-global AGENTS.md and project AGENTS.md, CLAUDE.md and local variants through ctx.fs; list paths without embedding their contents. Register after tool-bootstrap with prepend so the promoted hint is retained. Unavailable or unreadable files produce no hint. */
+/** From the first real request, inject one instruction-file hint per session/directory. Probe user-global AGENTS.md and project AGENTS.md, CLAUDE.md and local variants through ctx.fs; list paths without embedding their contents. Use prepend so the hint is retained when the request is assembled. Unavailable or unreadable files produce no hint. */
 
 import { createEpochPromotion } from './compaction-epoch.mjs'
 import { ensureWorkingDirectory } from './working-directory.mjs'
@@ -72,7 +72,7 @@ function parentPath(path) {
   return parent.length === 0 ? path : parent
 }
 
-/** Register the post-promotion instruction-hint injector. */
+/** Register the instruction-hint injector. */
 export async function apply(ctx, config) {
   const promoteEvents = parsePromoteOn(config.promoteOn)
   const promotion = createEpochPromotion(promoteEvents, { ctx })
@@ -95,7 +95,8 @@ export async function apply(ctx, config) {
   ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
     const decision = await next()
     try {
-      if (promotion.status(agent).promoted !== true) return decision
+      const status = promotion.status(agent)
+      if (!status.promoted && status.boundary >= 0) return decision
       const session = agent.session
       if (session === undefined) return decision
       const fs = ctx.get('fs')

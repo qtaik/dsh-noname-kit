@@ -9,6 +9,7 @@
 import { STRUCTURAL_NAMES, findAllSections, sectionProperties } from './blocks.js'
 import { isEntryId } from './entry-id.js'
 import { sourceStructure } from './module-parser.js'
+import { entryFileType } from './entry-file.js'
 
 /** 代码区(字符串/注释之外)不允许出现的全角标点。 */
 const FULLWIDTH = /[，。；：？！“”‘’【】（）〈〉《》、※]/
@@ -257,4 +258,25 @@ export function validateExtensionCode({ code, style, kind, folder, idPrefix }) {
   }
 
   return { ok: errors.length === 0, style: effective, errors, warnings }
+}
+
+/** Validate the actual file type; never require entry-only fields in a module. */
+export function validateFileCode(input) {
+  let target
+  try { target = entryFileType(input.file) } catch (error) {
+    return { ok: false, errors: [{ message: error.message }], warnings: [] }
+  }
+  if (target.fileType === 'entry') return { ...validateExtensionCode(input), ...target }
+  const style = target.fileType === 'json' ? 'json' : 'module'
+  const verdict = { ok: true, style, errors: [], warnings: [], ...target }
+  if (typeof input.code !== 'string') {
+    verdict.errors.push({ message: '待校验内容必须是字符串' })
+  } else if (style === 'json') {
+    try { JSON.parse(input.code) } catch (error) { verdict.errors.push({ message: 'JSON 格式错误: ' + error.message }) }
+  } else {
+    const syntax = syntaxCheck(input.code, 'module')
+    if (!syntax.ok) verdict.errors.push({ message: syntax.message })
+  }
+  verdict.ok = verdict.errors.length === 0
+  return verdict
 }

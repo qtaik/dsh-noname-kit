@@ -218,7 +218,7 @@ try {
     ok(patchYml.includes("resolve('@deepseek-ai/dsh-agent-preset/package.json')"), '声明式:disabled 探测表达式守卫 0.1.6')
 
     // 自有脚本必须用包名子路径(可移植,禁止相对/绝对路径写死)
-    const localScripts = ['instruction-hint.mjs', 'dev-tool-search.mjs', 'zero-tool-bootstrap.mjs', 'anchor-turn.mjs', 'custom-bash.mjs', 'skill-search.mjs']
+    const localScripts = ['tools.mjs', 'environment-context.mjs', 'instruction-hint.mjs', 'dev-tool-search.mjs', 'zero-tool-bootstrap.mjs', 'custom-bash.mjs', 'skill-search.mjs']
     for (const name of localScripts) {
       ok(patchYml.includes(`dsh-noname-kit/presets/noname-dev/${name}`), `声明式:${name} 用包名子路径引用`)
       ok(existsSync(new URL(`presets/noname-dev/${name}`, repoRoot)), `声明式:${name} 文件真实存在`)
@@ -231,6 +231,9 @@ try {
 
     // exports 必须导出子路径,否则包名引用在 node 解析层被拒
     ok(pkgJson.exports && pkgJson.exports['./presets/noname-dev/*'] === './presets/noname-dev/*', '声明式:package.json exports 导出 presets 子路径')
+
+    ok(!/id: anchor-turn\b/.test(patchYml), '声明式:首条真实任务前不再插入初始化轮')
+    ok(!/id: anchor-turn\b/.test(compositionYml), '目录式:首条真实任务前不再插入初始化轮')
 
     // persona 正文两处同步:提取两份的 prefix 折叠块,归一空白后必须完全一致
     const extractPrefix = (text) => {
@@ -252,6 +255,8 @@ try {
     const fromPatch = extractPrefix(patchYml)
     ok(fromComposition && fromPatch, '声明式:两份 persona prefix 均可提取')
     eq(fromPatch, fromComposition, '声明式:persona 正文与目录式 preset 完全同步')
+    const { KNOWLEDGE_TEXT } = await import('../src/knowledge.js')
+    eq(KNOWLEDGE_TEXT, readRepo('presets/noname-dev/skills/noname-extension-dev/SKILL.md').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, ''), '兼容知识入口直接读取 Skill，避免维护两份开发规范')
 
     // 机制探测:开发目录下(无宿主 peer)应为 false,但任何环境都不得抛异常
     const declarative = await preset.hostHasDeclarativePreset()

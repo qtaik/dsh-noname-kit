@@ -4,7 +4,8 @@ import { lstatSync } from 'node:fs'
 import {withBatchWrite} from './batch.js'
 import { ENTRY_ID_SOURCE, isEntryId } from './entry-id.js'
 import { join, resolve, basename, relative, sep, dirname, parse } from 'node:path'
-import { validateExtensionCode, syntaxCheck, collectDefinedIds } from './validate.js'
+import { validateFileCode, syntaxCheck, collectDefinedIds } from './validate.js'
+import { normalizeEntryFile } from './entry-file.js'
 import { scanEffectiveAnchored, scanBlocks, extractBlock, assembleBlocks, checkFidelity, migrateCode, stripAnchors, findAllSections, sectionProperties, virtualCharacterBlocks, virtualCardBlocks, virtualBlocks, virtualTranslateBlocks, CONTENT_KINDS } from './blocks.js'
 
 import { loadPackageSources, packageBlocks, readCoverage, readGap, readBoundedUtf8, pageRead } from './package-read.js'
@@ -59,10 +60,7 @@ export function safeFolderPath(nonameDir, folder) {
  */
 export function safeEntryFilePath(nonameDir, folder, file) {
   const { full: folderFull } = safeFolderPath(nonameDir, folder)
-  const rel = file == null || file === '' ? 'extension.js' : String(file).split('\\').join('/')
-  if (!/\.js$/i.test(rel) || rel.includes('..') || rel.startsWith('/')) {
-    throw new Error(`非法的条目文件路径「${file}」:必须是扩展包内的相对 .js 路径。`)
-  }
+  const rel = normalizeEntryFile(file)
   const full = resolve(folderFull, rel)
   if (!full.startsWith(folderFull + sep)) {
     throw new Error('路径越界:目标文件不在扩展包目录内。')
@@ -195,7 +193,6 @@ async function writeExtensionInner(nonameDir, { folder, file, code, blocks, edit
   const blockMode = Array.isArray(blocks) || Array.isArray(edits) || Array.isArray(deletes)
   const full = safeFolderPath(nonameDir, folder).full
   assertNoLinkPath(join(full, 'info.json'))
-  await mkdir(full, { recursive: true })
   const entryPath = safeEntryFilePath(nonameDir, folder, file)
   const sourceOptions = { file: entryPath.rel }
   const target = entryPath.full
@@ -211,7 +208,6 @@ async function writeExtensionInner(nonameDir, { folder, file, code, blocks, edit
   } catch (error) {
     if (error.code !== 'ENOENT') throw error
   }
-  await mkdir(dirname(target), { recursive: true })
 
   let finalCode = code
   const preErrors = []
@@ -239,17 +235,16 @@ async function writeExtensionInner(nonameDir, { folder, file, code, blocks, edit
     }
   }
 
-  // 模块文件(多文件包的子目录 .js,如 character/character.js)不是完整扩展,
-  // 没有 name/translate,扩展语义规则对它不适用——只做纯语法检查(且强制按
-  // module 静态语法解析,子目录模块按定义就是 ESM,不信任调用方 style)。
-  // 判定用归一化后的 rel:AI 显式传 'extension.js' 时仍是入口文件,门禁不降级。
-  const isModuleFile = (process.platform === 'win32' ? entryPath.rel.toLowerCase() : entryPath.rel) !== 'extension.js'
-  const verdict = isModuleFile
-    ? syntaxCheck(finalCode, 'module')
-    : validateExtensionCode({ code: finalCode, style, kind, folder, idPrefix })
-  if (!verdict.ok) {
-    if (isModuleFile) return { ok: false, wrote: false, errors: [{ message: verdict.message || '语法错误' }], warnings: [] }
-    return { ...verdict, wrote: false }
+  const verdict = validateFileCode({ code: finalCode, file: entryPath.rel, style, kind, folder, idPrefix })
+  if (!verdict.ok) return { ...verdict, wrote: false }
+
+  // Reject malformed metadata before creating directories, backups or source files.
+  const hasInfoJson = infoJson != null && (typeof infoJson !== 'string' || infoJson.trim() !== '')
+  let parsedInfo
+  if (hasInfoJson) {
+    const infoVerdict = validateFileCode({ code: infoJson, file: 'info.json' })
+    if (!infoVerdict.ok) return { ...verdict, ok: false, wrote: false, errors: infoVerdict.errors.map(item => ({ ...item, message: 'info.json: ' + item.message })) }
+    parsedInfo = JSON.parse(infoJson)
   }
 
   // 防丢技能护栏:旧代码里定义、新代码里消失的内部 ID → 拒写。
@@ -272,6 +267,8 @@ async function writeExtensionInner(nonameDir, { folder, file, code, blocks, edit
   // 手动复制模式:所有门禁过了之后,返回组装/校验后的代码,不落盘
   if (writeMode === 'manual') return { ...verdict, wrote: false, code: finalCode }
 
+  await mkdir(dirname(target), { recursive: true })
+
   // 覆盖前创建备份，并记录相对 nonameDir 的完整路径，供界面直接定位。
   let backup = ''
   if (oldCode !== null) {
@@ -287,17 +284,10 @@ async function writeExtensionInner(nonameDir, { folder, file, code, blocks, edit
   // 初值必须是 boolean 而非 null/null 省略:info.json 已存在且本次未提交时,
   // infoWritten 会一直保持初值——null 过不了 output schema
   let infoWritten = false
-  if (infoJson && String(infoJson).trim()) {
+  if (hasInfoJson) {
     const infoPath = join(full, 'info.json')
-    // 分别报告 JSON 解析错误与文件落盘错误，保留磁盘和权限故障的真实原因。
-    let parsed
     try {
-      parsed = JSON.parse(infoJson)
-    } catch (error) {
-      return { ...verdict, wrote: true, path: relative(nonameDir, target).split(sep).join('/'), backup, infoError: `info.json 不是合法 JSON,未写入: ${error.message}` }
-    }
-    try {
-      await writeFileAtomic(infoPath, JSON.stringify(parsed, null, 2))
+      await writeFileAtomic(infoPath, JSON.stringify(parsedInfo, null, 2))
       infoWritten = true
     } catch (error) {
       return { ...verdict, wrote: true, path: relative(nonameDir, target).split(sep).join('/'), backup, infoError: `info.json 写入失败(磁盘空间/权限?): ${error.message}` }

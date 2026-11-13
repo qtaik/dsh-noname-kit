@@ -312,5 +312,5 @@ export function powershellGuardReason(command, protectRoot, baseDirs) {
 
 /** 守卫提示的统一出路文案。 */
 export function guardMessage(detail) {
-  return `noname-kit:${detail}。扩展代码请用 noname_read_extension / noname_write_extension 读写(写入前自动校验、覆盖前自动备份、防丢护栏);图片、配音、视频素材分别用 noname_copy_images / noname_copy_audio / noname_copy_videos 复制;确有必须用通用工具完成的特殊操作,请让用户确认后手动执行。`
+  return `noname-kit:${detail}。请在无名杀开发模式中使用工坊工具；扩展代码用 noname_read_extension / noname_write_extension 读写(写入前自动校验、覆盖前自动备份、防丢护栏);图片、配音、视频素材分别用 noname_copy_images / noname_copy_audio / noname_copy_videos 复制;确有必须用通用工具完成的特殊操作,请让用户确认后手动执行。`
 }
