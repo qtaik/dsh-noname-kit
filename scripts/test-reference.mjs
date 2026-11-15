@@ -4,9 +4,7 @@
  * 运行:node scripts/test-reference.mjs
  * 游戏目录用系统临时目录伪造,跑完即删。
  *
- * 覆盖相似度检索按 limit 截断的路径:≥4 字的关键词查询不应因重新赋值
- * 常量而抛出 `TypeError: Assignment to constant variable`。
- * 结果应正常返回,不应迫使模型退回通用搜索工具。
+ * 覆盖长查询的相似度匹配、精确命中、结果上限与无匹配时的返回结构。
  *
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'

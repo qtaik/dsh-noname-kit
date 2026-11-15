@@ -350,9 +350,8 @@ export class TransportOwner {
     return frame.seq;
   }
 
-  // Control messages carry JSON data, use the same existing ordered nnk-link,
-  // and have an independent monotonic sequence. Round transitions belong to
-  // the future coordinator, not to this RTC owner.
+  // 控制消息复用有序 nnk-link，使用独立的单调序号。
+  // 回合切换由协调器处理。
   sendControl(type, data = {}) {
     this._assertLive();
     if (!this.ready) throw new Error("Keepalive capability is not ready");

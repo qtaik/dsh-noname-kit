@@ -11,8 +11,7 @@
  * 区块化写入仍需真实锚点(由骨架模板在首写时产生,或走迁移)。
  */
 
-// 行尾允许 \r:CRLF 文件里锚点行可能带回车(编辑器/git autocrlf 会把整个文件转 CRLF),
-// 行尾锚漏了 \r 就会认不出锚点、以为文件没锚过
+// CRLF 文件的锚点行允许以回车结尾。
 import { sourceSections, sourceProperties, sourceStructure, commentTrivia } from './module-parser.js'
 import { ENTRY_ID_SOURCE, isEntryId } from './entry-id.js'
 
@@ -24,10 +23,8 @@ function anchorBegin(kind, id) { return `//#noname-kit-begin ${kind}:${id}` }
 function anchorEnd(kind, id) { return `//#noname-kit-end ${kind}:${id}` }
 
 /**
- * 字符串感知的花括号配对:跳过单引号/双引号/模板字符串(含 ${} 插值,
- * 递归按代码层处理)与 //、/* 注释,返回与 text[openIndex] 配对的 '}' 下标。
- * 找不到返回 -1。正则字面量里的引号/花括号是已知盲区(实践中罕见,
- * 失败表现为提取失败并回退全文模式,不会写坏文件)。
+ * 查找与 text[openIndex] 配对的右花括号，跳过字符串和注释。
+ * 模板插值递归解析，正则字面量可能干扰匹配。找不到配对时返回 -1。
  */
 export function matchBrace(text, openIndex) {
   if (text[openIndex] !== '{') return -1
@@ -288,12 +285,10 @@ export function assembleBlocks(oldCode, blocks = [], edits = [], deletes = [], o
     }
   }
 
-  // 1) 删除声明必须存在
   const presentKeys = new Set(scanEffectiveAnchored(code, options).map((b) => b.key))
   for (const key of deletes) {
     if (!presentKeys.has(key)) errors.push(`要删除的区块「${key}」不存在(现存区块可用 listBlocks 查看)`)
   }
-  // 2) 提交块查重
   const seen = new Set()
   for (const item of blocks) {
     const key = item.kind + ':' + item.id
@@ -302,14 +297,14 @@ export function assembleBlocks(oldCode, blocks = [], edits = [], deletes = [], o
   }
   if (errors.length) return { code: oldCode, applied, deleted, errors }
 
-  // 3) 删除区块(从后往前,偏移不失效)
+  // 从文件末尾向前删除，保留尚未处理的源码偏移。
   const delRegions = scanEffectiveAnchored(code, options).filter((b) => deletes.includes(b.key)).sort((a, b) => b.start - a.start)
   for (const r of delRegions) {
     code = code.slice(0, r.start) + code.slice(r.end)
     deleted.push(r.key)
   }
 
-  // 4) 替换已有块(从后往前)
+  // 删除后重新扫描，再从后向前替换已有区块。
   const cur = new Map(scanEffectiveAnchored(code, options).map((b) => [b.key, b]))
   const replacing = []
   const inserting = []
@@ -326,7 +321,6 @@ export function assembleBlocks(oldCode, blocks = [], edits = [], deletes = [], o
     applied.push(r.key)
   }
 
-  // 5) 插入新块:插到同类最后一个块之后(区段缺失则报错)
   for (const kind of [...CONTENT_KINDS, 'translate']) {
     const list = inserting.filter((x) => x.kind === kind)
     if (!list.length) continue
@@ -336,7 +330,7 @@ export function assembleBlocks(oldCode, blocks = [], edits = [], deletes = [], o
     for (const x of list) applied.push(x.key)
   }
 
-  // 6) 按提交顺序校验并应用精确补丁;任一失败整单返回原文。
+  // 依次对已组装的内容应用精确补丁。任一补丁失败即返回原文。
   for (const e of edits) {
     if (typeof e?.find !== 'string' || !e.find || typeof e.replace !== 'string') {
       errors.push('edits:find 必须是非空原文,replace 必须是字符串')
@@ -447,20 +441,18 @@ function normalizeForCompare(code) {
 }
 
 /**
- * 锚点化迁移:对无锚老文件插入锚点注释行,一个代码字符不动。
- * 自检:剥掉锚点行后必须与原文逐行一致,否则放弃。
+ * 为可定位条目插入锚点，并在需要时补齐行尾逗号。
+ * 自检剥离锚点并归一行尾逗号后，须恢复原文。
  */
 export function migrateCode(oldCode, options = {}) {
-  // 幂等:已锚点文件先剥旧锚再重扫(锚点规范升级后直接重新建立索引即可)
+  // 重建索引时先移除旧锚点。
   const base = scanAnchored(oldCode).length ? stripAnchors(oldCode, options) : oldCode
   const items = []
   for (const kind of [...CONTENT_KINDS, 'translate']) items.push(...virtualCandidates(base, kind, options))
   /* 按源码位置排序区块，使共享插入偏移处的 begin/end 锚保持原文顺序，避免不同 kind 的相邻区块交叉。 */
   items.sort((a, b) => (a.start - b.start) || (a.end - b.end))
   if (!items.length) {
-    // 新式 ES Module 多文件包(如懒人包预装的英雄杀):extension.js 只是入口壳,
-    // 条目在子目录模块(const character = {...} + export)。锚点化与全文写入的
-    // 目标都是 extension.js,对壳文件动手毫无意义——必须给专属文案,不能引导"走全文模式"。
+    // ES Module 入口可能只引用其他文件，索引应建立在实际声明条目的模块里。
     if (/(^|\n)\s*import\s+[\w{*\s"']/.test(base) || /(^|\n)\s*export\s+(default|let|const|var|\{)/.test(base)) {
       return { error: '该文件未发现可锚定的内容条目;ES Module 多文件结构请指定实际定义武将、技能或翻译的模块文件,也可在工坊建立全包索引。' }
     }

@@ -76,7 +76,7 @@
 			}
 		}
 		nnk.state.bootStage = "modules-loaded";
-		/* 各安装步骤独立兜底:一步炸了不能带走其余安装与心跳上报 */
+		// 各安装步骤独立运行，单项失败不阻断其余安装或心跳上报。
 		/* Keepalive owns online entry. Legacy reload/autoRejoin hooks stay absent. */
 		nnk.state.bootStage = "inits-done";
 		/* 兼容补丁仅用于独立联机对局窗口；普通游戏保留原生扩展、出牌和技能流程。

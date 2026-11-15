@@ -1,4 +1,4 @@
-/** From the first real request, inject one instruction-file hint per session/directory. Probe user-global AGENTS.md and project AGENTS.md, CLAUDE.md and local variants through ctx.fs; list paths without embedding their contents. Use prepend so the hint is retained when the request is assembled. Unavailable or unreadable files produce no hint. */
+/** List instruction files once per session and working directory. The agent reads their contents when relevant. */
 
 import { createEpochPromotion } from './compaction-epoch.mjs'
 import { ensureWorkingDirectory } from './working-directory.mjs'
@@ -6,14 +6,12 @@ import { ensureWorkingDirectory } from './working-directory.mjs'
 
 export const name = 'instruction-hint'
 
-/** Durable session event types that count as a promotion signal per mode. */
 const PROMOTE_EVENTS = {
   'tool-call': ['tool/call'],
   'assistant-message': ['assistant/message'],
   either: ['tool/call', 'assistant/message'],
 }
 
-/** Candidate file names, in probe order, for the project chain and user-global. */
 const PROJECT_CANDIDATES = ['AGENTS.md', 'CLAUDE.md', 'AGENTS.local.md', 'CLAUDE.local.md']
 const USER_GLOBAL_CANDIDATE = 'AGENTS.md'
 
@@ -23,7 +21,7 @@ function parsePromoteOn(value) {
   throw new TypeError(`${name}: promoteOn must be one of "tool-call", "assistant-message", "either"; got ${JSON.stringify(value)}`)
 }
 
-/** Find the project root: first ancestor containing any root marker (e.g. .git). */
+/** Find the closest ancestor with a repository marker, falling back to the working directory. */
 async function findProjectRoot(fs, cwd, signal) {
   let current = cwd
   for (;;) {
@@ -33,7 +31,6 @@ async function findProjectRoot(fs, cwd, signal) {
         const info = await fs.stat(target, signal)
         if (info !== undefined) return current
       } catch {
-        // Probe failure = marker absent; continue.
       }
     }
     const parent = parentPath(current)
@@ -42,7 +39,6 @@ async function findProjectRoot(fs, cwd, signal) {
   }
 }
 
-/** List instruction files present in one directory (project candidates). */
 async function presentInDir(fs, dir, candidates, signal) {
   const found = []
   for (const candidate of candidates) {
@@ -51,20 +47,17 @@ async function presentInDir(fs, dir, candidates, signal) {
       const info = await fs.stat(target, signal)
       if (info !== undefined && info.type === 'file') found.push(candidate)
     } catch {
-      // Absent or unreadable — skip.
     }
   }
   return found
 }
 
-/** Join one path segment onto a directory (platform-agnostic string join). */
 function joinPath(dir, segment) {
   if (dir.endsWith('/') || dir.endsWith('\\')) return dir + segment
   const sep = dir.includes('\\') ? '\\' : '/'
   return dir + sep + segment
 }
 
-/** Parent of an absolute Windows or POSIX path. */
 function parentPath(path) {
   const idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
   if (idx <= 0) return path
@@ -72,14 +65,12 @@ function parentPath(path) {
   return parent.length === 0 ? path : parent
 }
 
-/** Register the instruction-hint injector. */
 export async function apply(ctx, config) {
   const promoteEvents = parsePromoteOn(config.promoteOn)
   const promotion = createEpochPromotion(promoteEvents, { ctx })
   await promotion.ready
   ctx.on('session/event', (session, event) => promotion.observe(session, event))
 
-  /** Session/directory pairs that already received the hint. */
   const hinted = new Set()
   let warned = false
   const warnOnce = (message) => {
@@ -88,7 +79,6 @@ export async function apply(ctx, config) {
     try {
       ctx.logger.warn(message)
     } catch {
-      // Logger unavailable — the guard exists only to avoid spamming.
     }
   }
 
@@ -117,7 +107,6 @@ export async function apply(ctx, config) {
           userGlobalFiles.push(...await presentInDir(fs, dshHome, [USER_GLOBAL_CANDIDATE], signal))
         }
       } catch {
-        // Unreadable home probe — ignore.
       }
 
       const sections = []
@@ -144,7 +133,6 @@ export async function apply(ctx, config) {
         }],
       }
     } catch (error) {
-      // A hint bug must never hurt the session: skip the hint.
       warnOnce(`${name}: hint injection failed, skipping: ${String((error && error.message) || error)}`)
       return decision
     }

@@ -19,9 +19,7 @@ export const source=name=>readFileSync(new URL('../../online-kernel/src/'+name+'
 export function deferred(){let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});promise.catch(()=>{});return {promise,resolve,reject};}
 export async function drain(count=12){for(let i=0;i<count;i++)await new Promise(r=>setImmediate(r));}
 export async function until(condition,label='fixture asynchronous boundary'){for(let i=0;i<300;i++){if(condition())return;await drain(1);}throw Error(label+' not reached');}
-// Node EventTarget exercises the endpoint's actual owned capture listeners.
-// Native UI bubble callbacks are modeled explicitly after the capture dispatch;
-// this fixture is not a browser DOM or a proof of actual native input delivery.
+// Dispatch through the real capture listeners before modeling the native UI's bubble callback.
 export class FixtureStartButton extends EventTarget {
  constructor(nativeCallback){super();this.nativeCallback=nativeCallback;this.nativeCalls=0;this.ownedListeners=[];this.parentNode={};this.isConnected=true;this.style={};}
  addEventListener(type,callback,options){super.addEventListener(type,callback,options);this.ownedListeners.push({type,callback,capture:typeof options==='boolean'?options:options?.capture===true,passive:typeof options==='object'?options.passive:undefined});}

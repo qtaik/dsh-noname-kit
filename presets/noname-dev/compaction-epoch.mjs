@@ -1,8 +1,7 @@
-/** Track tool-bootstrap promotion per session and compaction boundary through durable host projections. Subagents start promoted unless includeSubagents is enabled. */
+/** Track when a session can resume normal tools after compaction. Subagents skip recovery filtering unless includeSubagents is enabled. */
 
 import { createSessionState, stateSchema } from './session-state.mjs'
 
-/** Build one epoch-aware promotion tracker. */
 export function createEpochPromotion(promoteEvents, options = {}) {
   const includeSubagents = options.includeSubagents === true
   const types = [...new Set(promoteEvents)].sort()

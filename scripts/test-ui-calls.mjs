@@ -2,9 +2,7 @@
 /*
  * test-ui-calls.mjs —— 静态扫描 client.js 的 e()/h() 调用形态(零依赖)。
  *
- * e() 接收 (tag, className, ...子节点),props 对象应传给 h()。
- * 扫描将 props 当子节点或 className 的调用,防止 React 渲染错误,
- * 以及样式、事件参数被忽略。
+ * 扫描属性对象出现在类名或子节点位置的调用。样式和事件属性统一用 h() 表达。
  *
  * 运行: node scripts/test-ui-calls.mjs
  */
@@ -192,7 +190,7 @@ check('client.js:h() 第1参都是标签名或组件', !problems.some((p) => p.m
 check('client.js:全库零命中', problems.length === 0, problems.map((p) => 'L' + p.line + ':' + p.msg).join(' | '))
 check('扫描量合理(e>100, h>100)', eCount > 100 && hCount > 100, 'e=' + eCount + ' h=' + hCount)
 
-/* 自证:构造手滑样本,扫描器必须抓到(防扫描器本身失效) */
+/* 用已知合法和错误的调用验证扫描器。 */
 {
   const sample = [
     "var a = e('div', 'nnk-hint', { style: { color: 'red' } }, 'x');",

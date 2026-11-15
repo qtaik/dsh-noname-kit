@@ -1,18 +1,16 @@
-/** Queue one anchor before a fresh session's first user message. Durable pending input and consumed user history prevent duplicate anchors; cancelling unconsumed input permits a fresh anchor. */
+/** Legacy first-turn anchor plugin. Current packaged presets omit it. Pending and consumed input prevent duplicate anchors, and cancellation before consumption permits a retry. */
 
 import { createSessionState, stateSchema } from './session-state.mjs'
 
 
 export const name = 'anchor-turn'
 
-/** Default anchor text shown to the model in the synthetic first user turn. */
 export const ANCHOR_TEXT = '这是无名杀开发模式的初始化轮。本轮没有需要执行的业务任务，也没有可调用工具；无需检查环境、查询状态或执行操作。请用普通文字确认已就绪，然后结束本轮。下一轮再处理用户的实际需求，并使用届时提供的工具。'
 
 /** Current attribution plus the historical attribution accepted when reading older sessions. */
 const isAnchor = (message) => message?.source?.kind === name || message?.source?.kind === 'plugin:' + name
   || (message?.source?.kind === 'plugin' && message.source.plugin === name)
 
-/** Register the first-message anchor injection. */
 export async function apply(ctx, config) {
   const text = typeof config?.text === 'string' && config.text.length > 0 ? config.text : ANCHOR_TEXT
   const includeSubagents = config?.includeSubagents === true

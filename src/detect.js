@@ -19,8 +19,7 @@ function looksLikeGameRoot(dir) {
 }
 
 async function scan(dir, depth, matched, out) {
-  // 沿"名字像无名杀"的链路放宽到 8 层(decade 整合包的目标在第 6 层),
-  // 非匹配路径 4 层——剪枝靠名字继承,不会全盘乱扫。
+  // 命名匹配可沿子目录继承，用于识别嵌套较深的整合包。
   if (depth > (matched ? 8 : 4) || out.length >= MAX_CANDIDATES) return
   let entries
   try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }

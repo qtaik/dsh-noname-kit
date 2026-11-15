@@ -5,7 +5,7 @@ function bashPath(value) { return String(value).replace(/^([A-Za-z]):[\\/]/, (_,
 export const name = 'noname-environment-context'
 export const inject = ['systemPrompt', 'nonameKitEnvironment']
 
-/** Register only in the active Noname preset's scope; never in the deployment scope. */
+/** Register this context in the active Noname preset's scope. */
 export function apply(ctx) {
   if (typeof ctx.nonameKitEnvironment !== 'function') return false
   return registerPresetContext(ctx, () => ctx.nonameKitEnvironment())

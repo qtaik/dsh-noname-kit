@@ -130,7 +130,7 @@ async function bootstrapHarness(events = [], header = {}) {
     on(name, action) { hooks.set(name, action) },
     logger: { warn(message) { warnings.push(message) } },
   }
-  const residentTools = ['noname_read_extension', 'noname_search_reference']
+  const residentTools = ['ask_user_question', 'noname_read_extension', 'noname_search_reference']
   const compactionTools = ['read', 'grep', 'dev_tool_search', 'skill_search', 'skill_load', ...residentTools]
   await applyBootstrap(ctx, { residentTools, compactionTools })
   const agent = { session: { id: 'bootstrap-state', header, events } }
@@ -182,6 +182,14 @@ await test('compaction recovery stays immediate and returns to the resident unlo
   assert.ok(resumed.includes('web_search'))
   for (const name of env.residentTools) assert.ok(resumed.includes(name), name)
   assert.ok(!resumed.includes('unrelated_tool'))
+  assert.deepEqual(env.warnings, [])
+})
+await test('an unavailable question card keeps the normal tool filter after compaction', async () => {
+  const env = await bootstrapHarness([{ seq: 0, type: 'compaction/end' }])
+  const projected = await env.assemble(env.tools.filter(tool => tool.name !== 'ask_user_question'))
+  assert.ok(projected.includes('noname_read_extension'))
+  assert.ok(!projected.includes('ask_user_question'))
+  assert.ok(!projected.includes('unrelated_tool'))
   assert.deepEqual(env.warnings, [])
 })
 await test('child agents receive tools immediately without a bootstrap reply', async () => {

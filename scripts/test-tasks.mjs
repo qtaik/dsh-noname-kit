@@ -387,6 +387,22 @@ try {
     ok(Array.isArray(after.tasks) && after.tasks.some((t) => t.taskId === 't2'), '归档照常写入新历史')
   }
 
+  {
+    const newFaction = { name: '星海', image: 'D:/pic/faction.png' }
+    const input = { folder: '颜色测试包', type: 'character', title: '自建势力武将' }
+    const custom = await tasks.createTask(home, { ...input, id: '颜色-自定义', newFaction: { ...newFaction, color: ' #7a12Bc ' } })
+    assert.deepEqual(custom.task.newFaction, { ...newFaction, color: '#7A12BC' })
+    const noColor = await tasks.createTask(home, { ...input, id: '颜色-默认', newFaction })
+    assert.deepEqual(noColor.task.newFaction, newFaction)
+    const black = await tasks.createTask(home, { ...input, id: '颜色-黑', newFaction: { ...newFaction, color: '#000000' } })
+    assert.equal(black.task.newFaction.color, '#000000')
+    const invalid = await tasks.createTask(home, { ...input, id: '颜色-错误', newFaction: { ...newFaction, color: '#7ab' } })
+    ok(!invalid.ok && invalid.error.includes('十六进制 RGB'), '拒绝非六位 RGB 颜色')
+    const saved = await tasks.listTasks(home)
+    assert.deepEqual(saved.find(task => task.id === '颜色-自定义').newFaction, custom.task.newFaction)
+    ok(!saved.some(task => task.id === '颜色-错误'), '规范化颜色随任务保存，兼容无颜色及纯黑，非法颜色不登记')
+  }
+
   console.log('\n全部通过:' + passed + ' 项')
 } finally {
   rmSync(home, { recursive: true, force: true })

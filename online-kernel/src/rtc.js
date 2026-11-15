@@ -45,18 +45,16 @@
 			hosts: hosts && hosts.length ? hosts : undefined
 		}));
 	}
-	/* 移除粘贴内容中的空白，再提取第一段 NNK1.<base64url> 邀请码，允许聊天附文、引号及换行。 */
+	/* 允许带聊天附文和换行的输入，整段内容只能有一个 NNK1 码。 */
 	function decodeCode(str) {
 		var clean = String(str || "").replace(/\s+/g, "");
 		var all = clean.match(/NNK1\./g);
 		if (all && all.length > 1) {
-			/* 粘了多个码(常见:聊天记录里旧码与新码一起复制)。静默取第一个可能是
-			 * **过期的那张**,用户只会看到"连不上"——宁可让他删掉多余的再粘 */
+			/* 同时粘贴多张码时无法确定要使用哪一张。 */
 			throw new Error("粘贴内容里有 " + all.length + " 个码——请只保留要用的那一个(删掉多余的再粘)");
 		}
 		var m = /NNK1\.([A-Za-z0-9\-_]+)/.exec(clean);
 		if (!m) {
-			/* 常见手滑分个类,给具体出路,而不是一句"不是有效的码" */
 			if (/^[A-HJ-NP-Z2-9]{6}$/.test(clean)) {
 				throw new Error("这看起来是 6 位房号——请用「🚪 加入房间」入口;邀请码是 NNK1. 开头的一长串");
 			}
@@ -445,15 +443,13 @@
 		}
 		return out;
 	}
-	/* 发出用:["虚拟IP:端口", …] 全交叉(无虚拟网卡=空数组,载荷照旧)。
-	 * 上限 8:网卡/虚拟 IP 再多也不至于把信令撑爆,多余组合本来也没意义 */
+	/* 将本机地址与 SDP 的主机候选端口配对，最多发送 12 条。 */
 	function directHosts(pc) {
 		try {
 			var ports = hostPortsFromSdp(pc.localDescription && pc.localDescription.sdp);
 			var ips = virtualIps();
 			var out = [];
-			/* 端口在外层、地址在内层交错:多地址(虚拟网卡 v4 + 公网 v6)时每个地址
-			 * 都先轮到一次,不会被"第一个地址吃满额度"挤掉;总量上限 12 条 */
+			/* 先遍历端口，使每个地址都有机会进入候选上限。 */
 			ports.forEach(function(port) {
 				ips.forEach(function(ip) {
 					out.push(ip + ":" + port);
@@ -464,8 +460,7 @@
 			return [];
 		}
 	}
-	/* 接收用:把对方给的直连地址加进 ICE(必须在 setRemoteDescription 之后)。
-	 * 返回成功加进去的条数;坏地址/被拒单条均不影响主流程;上限 8 条防载荷刷爆 */
+	/* 设置远端 SDP 后，至多尝试注入 12 条直连候选。单条无效时继续处理其余条目。 */
 	function addInjected(pc, hosts) {
 		var n = 0;
 		(hosts || []).slice(0, 12).forEach(function(h) {
@@ -491,11 +486,7 @@
 				return;
 			}
 			try {
-				/* 优先级给最低(1):候选类型是 host(type 偏好 126),只要给正常数值就
-				 * **天然压过**对端真实的 srflx 公网候选(type 100)——于是同网/公网直连
-				 * 明明更快,ICE 却优先去连虚拟网卡那条(可能正是 Radmin 的海外中继)。
-				 * 置 1 = 排在所有候选之后:同网走局域网、能打洞走公网直连,
-				 * 都打不通才落到虚拟网卡兜底(它存在的意义本来就是兜底) */
+				/* 注入候选使用优先级 1，让 ICE 优先尝试原生局域网和公网候选。 */
 				var p = pc.addIceCandidate({
 					/* SDP candidate 行里的 IPv6 不带方括号(裸地址,冒号分隔) */
 					candidate: "candidate:1 1 udp 1 " + ip.replace(/^\[|\]$/g, "") + " " + port + " typ host",
@@ -573,7 +564,7 @@
 						protocol: remote.protocol || local.protocol || ""
 					};
 				}).catch(function() { /* stats 拿不到不影响对局 */ });
-			} catch (eS) { /* 同上 */ }
+			} catch (eS) {  }
 		}, 5000);
 	}
 	function stopTracking(pc) {

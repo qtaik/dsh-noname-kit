@@ -1,12 +1,7 @@
-# 「无名杀开发模式」agent-plane 组合。
-# 架构照搬 zero-anchored-standard(xiaobright/dsh-anchored-standard,MIT):
-# 首条任务直接提供 shell + str_replace_editor + 发现工具 + 无名杀工具链
-# → 其余工具经 dev_tool_search 按需解锁。完整规范走 skill 按需加载。
-#
-# 服务行必须放进带 isolate 的 group(entry-local realm),否则第二会话挂载冲突。
-# 纯工具行(只注册进 host tools registry、不 provide 服务)无需 realm。
+# 目录式预设。部分实现改编自 xiaobright/dsh-anchored-standard（MIT）。
+# 在带 isolate 的 group 内注册会话服务，避免多个会话挂载时争用同一服务。
+# 只注册工具的插件可以直接挂载在预设中。
 
-# 完整开发身份；环境上下文仅在本预设作用域内注册。
 - id: noname-tools
   name: ./tools.mjs
 
@@ -19,14 +14,17 @@
     prefix: >-
       你是无名杀(Noname)扩展开发工程师，目标是完成用户要求的武将、卡牌或游戏模式，并减少实际游戏中的错误。
       开始开发、审查或排错前，用 skill_load 加载 noname-extension-dev；同一会话已读且内容未变时复用。它是开发流程和专业规范的主来源，任务消息提供本次目标、素材与写入方式，工具说明规定实际参数与限制。
-      只读讨论按用户要求答复。需求完整且用户已明确要求制作或修复时，简述理解后执行；工坊提交是对表单需求的执行请求。有玩法歧义、缺少关键决定、用户仅要求讨论或方案尚未选定时，先澄清或等待选择；已有授权和澄清结果足以确定方案时，不再要求额外回复「确认」。同一方案的继续实现和反馈修复直接推进，新玩法取舍或明显扩大范围时再问。
+      只读讨论按用户要求答复。接到新建武将、卡牌、模式或修改已有玩法的任务时，确认前可以只读查阅现有扩展、同类官方实现和当前引擎。
+      逐技能或逐条规则核对需求，列出完整的【需求理解确认】清单。已明确的内容写成简明的玩法结论。只有现有信息无法确定、且不同答案会改变玩法的内容，才在对应条目下标为「待确认」。
+      使用 ask_user_question 集中问清待确认项。宿主无法提供提问工具时用文字提问。收到答复后更新对应条目，给出完整的最终清单。没有待确认项时，直接给出完整清单。
+      给出最终清单后停下来，等待用户明确回复「确认」。单独回答澄清问题只代表该项已经明确。收到对最终清单的确认后，才开始编写和写入代码。
+      已确认方案内的错误修复按原规则继续。需要改变玩法或扩大范围时，列出变更部分并等待用户明确回复「确认」。
       先读已有代码，查相似实现和当前引擎的实际用法，再编写代码；可组合参考，复用源码未变的已核实结论，证据足够后停止扩查。不能凭记忆编造接口，也不能将未搜到说成不存在。无法核实时说明具体缺口。
       修改范围限于本次目标、勾选技能及完成需求必需的直接关联代码；先核对归属和必要性，保留无关条目，不顺带重构或新增玩法。扩展源码使用 noname_write_extension，素材使用对应复制工具；遵守手动方式、宿主权限、预算、超时与取消，不绕过写入保护。
       按实际文件校验并核对玩法；完成后只登记本轮实际实现或修改的任务节点，保留其他节点状态。区分源码完成、静态检查和游戏实测，按证据说明结果。
     complete: true
     includeRuntimeContext: false
 
-# 首条任务即可提示"指令文件存在,需要时自己读"
 # 工具选择按原生工具名工作，使用预设级呈现避免继承部署的 PTC 包装。
 - id: noname-tool-presentation
   name: '@deepseek-ai/dsh-agent-tool-presentation'
@@ -39,19 +37,16 @@
   config:
     promoteOn: assistant-message
 
-# 重工具按需解锁(web 等注册在 catalog 但平时隐藏)
 - id: dev-tool-search
   name: ./dev-tool-search.mjs
 
-# 常驻集 = shells + str_replace_editor + 发现工具 + 无名杀链;其余按需解锁
 - id: zero-tool-bootstrap
   name: ./zero-tool-bootstrap.mjs
   config:
     suppressedContextSources: [agent-instructions, skill-catalog]
-    residentTools: [noname_list_catalog, noname_read_catalog, noname_search_reference, noname_validate, noname_read_extension, noname_write_extension, noname_skills_written, noname_copy_images, noname_copy_audio, noname_copy_videos]
-    compactionTools: [read, glob, grep, dev_tool_search, skill_search, skill_load, noname_list_catalog, noname_read_catalog, noname_search_reference, noname_validate, noname_read_extension, noname_write_extension, noname_skills_written, noname_copy_images, noname_copy_audio, noname_copy_videos]
+    residentTools: [ask_user_question, noname_list_catalog, noname_read_catalog, noname_search_reference, noname_validate, noname_read_extension, noname_write_extension, noname_skills_written, noname_copy_images, noname_copy_audio, noname_copy_videos]
+    compactionTools: [read, glob, grep, dev_tool_search, skill_search, skill_load, ask_user_question, noname_list_catalog, noname_read_catalog, noname_search_reference, noname_validate, noname_read_extension, noname_write_extension, noname_skills_written, noname_copy_images, noname_copy_audio, noname_copy_videos]
 
-# ── shell(Windows 走 Git Bash 适配行) ─────────────────────────────────────
 - id: tool-bash
   name: '@deepseek-ai/dsh-tool-bash'
   disabled: !!js process.platform === 'win32'
@@ -64,12 +59,9 @@
   name: ./custom-bash.mjs
   disabled: !!js process.platform !== 'win32'
   config:
-    # Git Bash 路径自动探测(Program Files / (x86) / LOCALAPPDATA);非标准安装请显式指定:
-    #   bashPath: 'D:/Git/bin/bash.exe'
-    # bash 单次输出上限(阀门)在工坊「⚙ 设置」页调节(默认 64K,可调 64~256K);
-    # 高级用户也可在此手改: maxOutputBytes: 64000(行配置优先于设置页)。
+    # 非标准 Git Bash 安装可指定 bashPath，例如 'D:/Git/bin/bash.exe'。
+    # 此处设置的 maxOutputBytes 优先于工坊设置。
 
-# ── filesystem ──────────────────────────────────────────────────────────────
 - id: tool-fs
   name: '@deepseek-ai/dsh-tool-fs'
 
@@ -94,7 +86,7 @@
       config:
         maxOutputChars: 16000
 
-# ── skills:注册表在本 preset 层;目录不注入,按需 search/load ────────────────
+# 技能目录在本预设中注册，由 skill_load 按需注入内容。
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'
   config:
@@ -104,7 +96,6 @@
 - id: skill-search
   name: ./skill-search.mjs
 
-# ── compaction:长会话必需 ───────────────────────────────────────────────────
 - id: compaction
   name: cordis:group
   group: true
@@ -125,7 +116,6 @@
         headChars: 4096
         tailChars: 1024
 
-# ── 其余模型面工具(轻量;web 注册但平时隐藏) ────────────────────────────────
 - id: tool-ask-user
   name: '@deepseek-ai/dsh-tool-ask-user'
 

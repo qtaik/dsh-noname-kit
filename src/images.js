@@ -1,8 +1,4 @@
-/**
- * noname-kit 图片复制:把用户选好的本地图片复制进扩展包的专用图片文件夹
- * (`extension/<folder>/image/`),替代老包"根目录散放"的混乱方式。
- * 安全校验:源必须存在;目标名只允许安全字符 + 图片扩展名;目录不得逃逸。
- */
+/** 将用户选定的图片复制到扩展包的 image/，并检查源文件、目标名和路径边界。 */
 import { copyFile, mkdir, stat } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { safeFolderPath } from './write.js'

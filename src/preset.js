@@ -7,8 +7,7 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 export const PRESET_ID = 'noname-dev'
-/** 盖章文件:记下"这份 preset 是什么时候装的、装进去的内容哈希是多少"。
- *  刻意不存版本号 —— 判定依据是内容不是版本(preset 不按版本管理)。 */
+/** 安装记录保存写入时的内容哈希和时间。运行时按目录内容重新核验。 */
 export const PRESET_MANIFEST = '.noname-kit-install.json'
 
 const COMPOSITION_FILE = 'agent.cordis.yml'
@@ -61,8 +60,7 @@ function collectFiles(dir, prefix, out) {
     return out
   }
   for (const entry of entries) {
-    // 跳过点开头的条目:既排除 OS 垃圾(.DS_Store),也排除本模块自己写的盖章文件
-    // —— 否则"写入盖章"这个动作本身就会改变哈希,自检永远报过期。
+    // 排除隐藏条目，避免安装记录本身改变内容哈希。
     if (entry.name.startsWith('.')) continue
     const rel = prefix ? `${prefix}/${entry.name}` : entry.name
     const full = join(dir, entry.name)
@@ -79,9 +77,7 @@ export function hashDir(dir) {
   const hash = createHash('sha256')
   for (const file of files) {
     let content
-    /* 单个文件读不到(被编辑器/杀软占用、权限变化、读目录与读文件之间被删)不能抛出去:
-     * 这条链一路冒到插件 apply 里的启动自检 = 整个 noname-kit 加载失败(工具与工坊页
-     * 一起消失),经 /update 接口则变成 500。返回 null 让调用方按「状态未知」降级 */
+    /* 单个文件读取失败时，调用方按状态未知处理。 */
     try { content = readFileSync(file.full, 'utf8') } catch { return null }
     hash.update(file.rel)
     hash.update('\0')
@@ -100,15 +96,10 @@ function readManifest(presetDir) {
 }
 
 /**
- * 自检已安装的 preset 与插件自带那份是否一致。
- * state: 'ok' 一致 / 'stale' 不一致 / 'missing' 没装 / 'unknown' 插件自带的源读不到(打包异常)。
- * 判定纯看内容哈希:比的是"正在运行的这个插件自己带的那份",所以同一个版本的用户
- * 永远是自洽的(装的是这版自带的,插件里也是这版)→ 只有"插件更新了而 preset 没重装"
- * 或"本地那份被改过"才会报不一致。界面只陈述哈希不同这个事实,不推断是哪种原因。
+ * 按实际内容比较已安装和随包的预设。文件读取失败或随包预设不完整时返回 unknown。
+ * 哈希相同为 ok，不同为 stale；尚未安装为 missing。
  */
 export function presetStatus({ presetDir, bundledDir }) {
-  // 先看插件自带那份是否完整:源不完整属打包异常,不能报成"你该重装"
-  // ——否则用户点重装还会再失败一次,两步都困惑。
   const bundledHash = hashDir(bundledDir)
   if (!bundledHash || !existsSync(join(bundledDir, COMPOSITION_FILE))) {
     return { state: 'unknown', error: `插件自带的 preset 源不完整(缺 ${COMPOSITION_FILE}):${bundledDir}` }
@@ -118,8 +109,6 @@ export function presetStatus({ presetDir, bundledDir }) {
   }
   const manifest = readManifest(presetDir)
   const installedHash = hashDir(presetDir)
-  /* 已装那份里有文件读不到(哈希算不出来):不猜"过期",如实报未知,并给出唯一有效动作
-   * ——设置页的「♻️ 重装 preset」会整份覆盖,顺带修掉被占用的坏份 */
   if (installedHash === null) {
     return {
       state: 'unknown', bundledHash, installedHash: null, installedAt: manifest?.installedAt ?? null,
@@ -134,10 +123,7 @@ export function presetStatus({ presetDir, bundledDir }) {
   }
 }
 
-/** preset 备份滚动清理:只保留最新 3 个 .bak-<时间戳>(与扩展包 backup/ 的
- * 滚动清理同哲学——备份内容都源自插件仓库,git 历史里可溯源,堆多了只是垃圾)。
- * 只匹配 <presetDir>.bak-* 前缀,不碰兄弟 preset 与任何其他文件;
- * 清理失败不影响重装本身。 */
+/** 只保留本预设最近三份备份。清理失败不影响重装结果。 */
 function prunePresetBackups(presetDir) {
   const PREFIX_KEEP = 3
   try {
@@ -146,17 +132,14 @@ function prunePresetBackups(presetDir) {
     const baks = readdirSync(dir).filter((n) => n.startsWith(prefix)).sort()
     // 名字尾部是毫秒时间戳(等宽),字典序即时间序;留最新的 PREFIX_KEEP 个
     for (const name of baks.slice(0, Math.max(0, baks.length - PREFIX_KEEP))) {
-      try { rmSync(join(dir, name), { recursive: true, force: true }) } catch { /* 单个删不掉跳过 */ }
+      try { rmSync(join(dir, name), { recursive: true, force: true }) } catch { }
     }
-  } catch { /* 目录读不到就算了 */ }
+  } catch { }
 }
 
 /**
- * 安装/重装 preset:先把旧的那份整体备份成兄弟目录(名字带 .bak-<时间戳>,
- * 因为 PRESET_ID 不允许点号,DSH 的 discovery 会明确跳过这类名字,不会在
- * preset 列表里多出一条垃圾),再复制新的一份并盖章。备份滚动清理只保留
- * 最新 3 个。
- * 目标位置若是个链接(含 Windows junction)则只删链接本身,绝不递归进目标。
+ * 重装前保留原预设目录。备份名含点号，DSH 不会把它当成可用预设。
+ * 安装位置若是符号链接或联接点，只移除链接本身。
  */
 export function installPreset({ presetDir, bundledDir }) {
   if (!existsSync(join(bundledDir, COMPOSITION_FILE))) {
@@ -202,7 +185,7 @@ export function installPreset({ presetDir, bundledDir }) {
   try {
     writeFileSync(join(presetDir, PRESET_MANIFEST), JSON.stringify({ hash, installedAt: Date.now() }, null, 2), 'utf8')
   } catch {
-    // 盖章写不进去不影响 preset 本身可用,只是下次自检会报 stale —— 不视为失败
+    // 安装记录写入失败时仍可使用预设。缺少安装时间，内容核验仍按实际文件执行。
   }
   return { ok: true, target: presetDir, backup, hash }
 }

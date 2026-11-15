@@ -241,7 +241,7 @@ try {
   const extB = req((r) => r.url.includes('/extension?folder=B'))
   const histB = req((r) => r.url.includes('/history?folder=B'))
   ok(extA && histA && extB && histB, '两个包的 extension/history 请求都发出(经 /tasks 链)')
-  extB.reply({ code: 'game.import("extension",function(){})' })   // B:老式游戏.import
+  extB.reply({ code: 'game.import("extension",function(){})' })   // B：老式 game.import
   histB.reply({ folder: 'B', history: { tasks: [], notes: [] }, backups: [] })
   await flush()
   const infoB = form().currentInfo
@@ -269,7 +269,7 @@ try {
     '切条目后旧条目的迟到技能列表被丢弃')
   ok(form().entrySkillsLoading === false, '技能加载态收尾')
 
-  // ── 4) 正常顺序(不迟到)仍要照常工作:防「守卫修过头」 ──
+  // ── 4) 当前条目的响应正常更新技能列表 ──
   console.log('场景 4:正常顺序回归')
   entrySelect().props.onChange({ target: { value: 'e-b1' } })
   await flush()
@@ -316,6 +316,12 @@ try {
   await flush()
   fieldByLabel('新扩展包名称').props.onChange({ target: { value: '测试包' } })
   await flush()
+  fieldByLabel('扩展作者').props.onChange({ target: { value: '  甲、乙  ' } })
+  await flush()
+  fieldByLabel('扩展简介').props.onChange({ target: { value: '  第一行\n第二行  ' } })
+  await flush()
+  fieldByLabel('扩展版本').props.onChange({ target: { value: '  2.1-beta  ' } })
+  await flush()
   fieldByLabel('一句话核心玩法').props.onChange({ target: { value: '混战大逃杀' } })
   await flush()
   fieldByLabel('玩法细节描述').props.onChange({ target: { value: '每人独立求生' } })
@@ -327,12 +333,15 @@ try {
   await flush()
   const postTasks2 = req((r) => r.url.endsWith('/tasks') && r.opts && r.opts.method === 'POST')
   ok(postTasks2, '第二次提交也注册任务')
+  const modeMeta = { name: '测试包', author: '甲、乙', intro: '第一行\n第二行', version: '2.1-beta' }
+  assert.deepEqual(JSON.parse(postTasks2.opts.body).packageMeta, modeMeta)
   postTasks2.reply({ ok: true })
   await flush()
   const msg2 = sent[sent.length - 1] || ''
   ok(msg2.indexOf('创建全新扩展包') >= 0 && msg2.indexOf('混战大逃杀') >= 0, '新包模式分支口径不变(创建全新扩展包)')
+  ok(msg2.includes(JSON.stringify(modeMeta, null, 2)), '新建模式的任务记录和发给模型的包信息一致')
 
-  // ── 7) 结构锁:坏守卫模式不得复活 ──
+  // ── 7) 请求校验依赖当前状态，跨渲染保留判断依据 ──
   console.log('场景 7:结构锁')
   const bad = []
   const lines = src.split('\n')
@@ -413,6 +422,7 @@ try {
     ok(form().err.includes(expected) && !form().busy, '未填完整时给出提示：' + expected)
     ok(requests.length === requestCount && sent.length === sentCount, '未填完整时不登记任务或发送消息')
   }
+  const factionColor = () => findAll(n => n.type === 'input' && n.props.type === 'color')[0]
   const noCharacterOptions = (result) => result.body.newFaction === null && result.body.portraitVideo === ''
     && !result.message.includes('星海势力') && !result.message.includes('星海 图.png') && !result.message.includes('动态 立绘.MP4')
     && !result.message.includes('── 新势力 ──') && !result.message.includes('── 视频动态立绘 ──')
@@ -439,8 +449,21 @@ try {
   await expectBlocked('支持 MP4')
   await change('动态立绘视频路径', '  "D:\\素材 文件\\动态 立绘.MP4"  ')
   await change('图片路径', 'D:\\素材 文件\\静态立绘.png')
+  ok(checkbox('自定义势力颜色') && !checkbox('自定义势力颜色').props.checked && !factionColor(), '势力颜色默认使用引擎样式')
+  const defaultOptions = await submitTask('options-default-color')
+  const defaultMeta = { name: '我的扩展', author: '', intro: '', version: '1.0' }
+  assert.deepEqual(defaultOptions.body.packageMeta, defaultMeta)
+  ok(defaultOptions.message.includes(JSON.stringify(defaultMeta, null, 2)), '武将新包未填作者和简介时保留空值，版本默认 1.0')
+  assert.deepEqual(defaultOptions.body.newFaction, { name: '星海势力', image: 'D:\\素材 文件\\星海 图.png' })
+  ok(defaultOptions.message.includes('势力颜色: 使用引擎默认样式'), '未选颜色时要求模型沿用引擎默认样式')
+  await toggle('自定义势力颜色', true)
+  ok(factionColor().props['aria-label'] === '势力颜色', '勾选后提供可访问的取色器')
+  factionColor().props.onChange({ target: { value: '#7a12bc' } })
+  await flush()
+  ok(findAll(n => n.type === 'code' && textOf(n) === '#7A12BC').length === 1, '界面展示选中的十六进制颜色')
   const createdOptions = await submitTask('options-new')
-  assert.deepEqual(createdOptions.body.newFaction, { name: '星海势力', image: 'D:\\素材 文件\\星海 图.png' })
+  assert.deepEqual(createdOptions.body.newFaction, { name: '星海势力', image: 'D:\\素材 文件\\星海 图.png', color: '#7A12BC' })
+  ok(createdOptions.message.includes('势力颜色: #7A12BC'), '登记和发送给模型的颜色一致')
   ok(createdOptions.body.portraitVideo === 'D:\\素材 文件\\动态 立绘.MP4', '任务登记保留带空格的路径并去除复制路径的外层引号')
   ok(createdOptions.body.image === 'D:\\素材 文件\\静态立绘.png', '势力图与视频不覆盖静态立绘字段')
   ok(createdOptions.message.includes('星海势力') && createdOptions.message.includes('星海 图.png') && createdOptions.message.includes('动态 立绘.MP4'), 'AI 消息同时包含势力名称、势力图与视频路径')
@@ -456,7 +479,7 @@ try {
   await toggle('使用视频作为动态立绘', false)
   ok(!findAll(n => ['factionName', 'factionImage', 'portraitVideo'].includes(n.props['data-nnk-field'])).length, '取消勾选后附属输入框隐藏')
   ok(form().factionName.includes('星海势力') && form().portraitVideo.includes('动态 立绘.MP4'), '取消勾选保留草稿输入')
-  ok(noCharacterOptions(await submitTask('options-disabled')), '隐藏草稿不进入登记请求或 AI 消息')
+  ok(!factionColor() && noCharacterOptions(await submitTask('options-disabled')), '隐藏草稿不进入登记请求或 AI 消息')
   await toggle('创建新势力', true)
   await toggle('使用视频作为动态立绘', true)
   ok(fieldByLabel('新势力名称').props.value.includes('星海势力') && fieldByLabel('动态立绘视频路径').props.value.includes('动态 立绘.MP4'), '重新勾选恢复原输入')
@@ -465,7 +488,14 @@ try {
   clickRadio('类型card')
   await flush()
   ok(!checkbox('创建新势力') && !checkbox('使用视频作为动态立绘'), '切到卡牌后隐藏武将专用选项')
-  ok(noCharacterOptions(await submitTask('options-card')), '卡牌提交不携带已勾选的武将选项')
+  await change('扩展作者', '卡牌作者')
+  await change('扩展简介', '卡牌包介绍')
+  await change('扩展版本', ' ')
+  const newCard = await submitTask('options-card')
+  ok(noCharacterOptions(newCard), '卡牌提交不携带已勾选的武将选项')
+  const cardMeta = { ...defaultMeta, author: '卡牌作者', intro: '卡牌包介绍' }
+  assert.deepEqual(newCard.body.packageMeta, cardMeta)
+  ok(newCard.message.includes(JSON.stringify(cardMeta, null, 2)), '卡牌新包下发元数据且版本留空使用默认值')
   clickRadio('类型mode')
   await flush()
   await change('一句话核心玩法', '各自为战')
@@ -485,11 +515,18 @@ try {
   ok(form().goal === 'create' && checkbox('创建新势力') && checkbox('使用视频作为动态立绘'), '已有包的新增武将仍显示两个选项')
   clickRadio('写入方式manual')
   await flush()
+  ok(!findAll(n => ['packageAuthor', 'packageIntro', 'packageVersion'].includes(n.props['data-nnk-field'])).length, '切换已有包时隐藏新包字段')
   const existingCreate = await submitTask('options-existing-new')
+  ok(existingCreate.body.packageMeta === null && !existingCreate.message.includes('── 新扩展包信息 ──') && !existingCreate.message.includes('卡牌作者'), '已有包新增武将不登记或发送新包草稿信息')
   ok(existingCreate.body.newFaction.name === '星海势力' && existingCreate.body.portraitVideo.endsWith('.MP4'), '已有包新增武将同样登记势力和视频')
   ok(existingCreate.message.includes('编辑已有扩展包') && existingCreate.message.includes('── 新势力 ──') && existingCreate.message.includes('── 视频动态立绘 ──'), '已有包新增武将的消息包含两项新需求')
   ok(existingCreate.message.includes('references/custom-faction.md') && existingCreate.message.includes('已有兼容方案') && factionReference.includes('全局注册'), '已有包新增武将使用同一份自建势力参考并保留兼容边界')
   ok(existingCreate.body.writeMode === 'manual' && existingCreate.message.includes('手动复制(只生成源码，不写入扩展源码)') && existingCreate.message.includes('素材复制遵守用户已授权范围'), '手动模式保留源码手动与素材授权语义')
+
+  ok(existingCreate.body.newFaction.color === '#7A12BC' && existingCreate.message.includes('势力颜色: #7A12BC'), '已有扩展新增武将保留选中的颜色')
+  await toggle('自定义势力颜色', false)
+  const resetColor = await submitTask('options-reset-color')
+  ok(!factionColor() && !('color' in resetColor.body.newFaction) && resetColor.message.includes('势力颜色: 使用引擎默认样式'), '取消自定义即可恢复默认配色')
 
   console.log('场景 13:编辑已有武将显示视频选项，不显示新势力')
   clickRadio('目标edit')

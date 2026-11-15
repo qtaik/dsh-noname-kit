@@ -120,6 +120,8 @@ window.__ModuleLoader__.load({
       '.nnk-character-option .nnk-option-toggle input{width:17px;height:17px;flex:none;accent-color:var(--dsw-alias-brand-primary);margin:0}',
       '.nnk-character-option .nnk-input{min-height:44px;font-size:14px}',
       '.nnk-character-option .nnk-option-fields{min-width:0}',
+      '.nnk-faction-color{display:flex;align-items:center;gap:10px;margin:6px 0 0 26px}',
+      '.nnk-faction-color input{width:56px;height:34px;padding:3px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-2);cursor:pointer}',
       '.nnk-character-option .nnk-hint{margin-top:8px}'
     ].join('\n');
     if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css="dsh-noname-kit/ui"]') === null) {
@@ -489,14 +491,13 @@ window.__ModuleLoader__.load({
       if (type === 'button' && /^(?:↑|↓|✕|📋|🗑)$/u.test(iconLabel) && !(props && props['aria-label'])) {
         props = Object.assign({}, props, { 'aria-label': props && props.title || ({ '↑': '上移技能', '↓': '下移技能', '✕': '关闭', '📋': '任务列表', '🗑': '删除注意点' })[iconLabel] });
       }
-      // 仅装饰 UI 文字；代码、日志、用户正文及所有控件属性均原样传递。
+      /* 只装饰界面文字，控件属性及代码、日志和用户原文保持原值。 */
       var decorate = type === 'button' || type === 'label' || /(?:^| )nnk-(?:tab|label|hint|err|ok|panel-title|group-title|modal-title|badge|seat-state|ui-text)(?: |$)/.test(className);
       if (decorate && !(props && props['data-nnk-literal']) && typeof visualIcons === 'function') children = children.map(visualIcons);
       return React.createElement.apply(React, [type, props].concat(children));
     }
-    // e(tag, className, ...children):className 为字符串(可为空串);子元素数量不限。
     function e(tag, className) {
-      /* e 仅接受 tag、className 和子节点；检测误传的 props 对象并提示改用 h，避免把样式对象作为 React 子节点。 */
+      /* e 以字符串 className 为参数。收到属性对象时转交 h，避免把对象传成子节点。 */
       var kids = Array.prototype.slice.call(arguments, 2);
       if (kids.length && kids[0] && typeof kids[0] === 'object' && !Array.isArray(kids[0]) && !kids[0].$$typeof) {
         console.error('[联机助手] e() 手滑:第 3 个参数是对象,已按 props 处理(该用 h)——', tag, className, Object.keys(kids[0]), new Error('e').stack);
@@ -663,8 +664,9 @@ window.__ModuleLoader__.load({
     function NewTaskForm(props) {
       var state = React.useState({
         mode: 'new', type: 'character', folder: '我的扩展', taskId: '', title: '', idPrefix: '',
+        packageAuthor: '', packageIntro: '', packageVersion: '1.0',
         charInfo: '', skills: [{ name: '', desc: '', audios: '' }], image: '', dieAudios: '', usedIds: [], notes: [],
-        createFaction: false, factionName: '', factionImage: '', usePortraitVideo: false, portraitVideo: '',
+        createFaction: false, factionName: '', factionImage: '', factionColor: '', usePortraitVideo: false, portraitVideo: '',
         pileJoin: false, pileRows: [{ suit: 'spade', point: '' }],
         style: 'classic', writeMode: 'auto',
         reference: '', busy: false, err: '',
@@ -739,12 +741,9 @@ window.__ModuleLoader__.load({
       };
 
       // 「编辑已有武将/卡牌」:列出目标包内条目(锚点/无锚老包通吃)。
-      // 竞态守卫:快速连切(包/类型/条目)时,先发后至的旧响应必须丢弃。
-      // 判定写在函数式更新里比对「当前状态 vs 请求参数」——组件体重渲染会重建
-      // 局部变量,靠 ++seq 计数守不住(例如:切包 A→B 后 A 的迟到响应
-      // 把条目列表整个换成 A 的);比对状态天然跨渲染有效。
+      // 只接收与当前包、类型和条目匹配的响应，避免切换后被迟到响应覆盖。
       var loadEntries = function (folder, kind) {
-        // mode 类型没有条目下拉(服务端 /entries 只认 character/card),不发必败请求、不清包信息提示
+        // 自定义模式没有条目下拉。/entries 只支持武将和卡牌。
         if (!folder || (kind !== 'character' && kind !== 'card')) { patch({ entryList: [], entryId: '', entryLoading: false, entrySkills: [], pickedSkills: [] }); return }
         patch({ entryLoading: true });
         fetch('/noname-kit-api/entries?folder=' + encodeURIComponent(folder) + '&kind=' + kind).then(function (r) { return r.json() }).then(function (b) {
@@ -784,8 +783,7 @@ window.__ModuleLoader__.load({
       };
 
       var pickEntry = function (id) {
-        // entrySkillsLoading 一并归零:选了「— 选择条目 —」(空)时不会有新请求来收尾,
-        // 上一次的加载态会永远挂着(守卫丢弃旧响应后没人再清它)
+        // 清空条目不会发起新请求，因此同时清除技能加载状态。
         setForm(function (prev) { return Object.assign({}, prev, { entryId: id, pickedSkills: [], entrySkills: [], editNotes: '', entrySkillsLoading: false }) });
         if (id) loadEntrySkills(form.folder, id);
       };
@@ -846,7 +844,7 @@ window.__ModuleLoader__.load({
         }, function () { /* 拉不到就不显示,不挡流程 */ });
       };
 
-      // 锚点化迁移:只由用户手动触发,给无锚老文件建立区块索引(只加注释行,不改代码)
+      // 建立区块索引由用户触发。工具会备份并为条目补齐索引所需的标记和分隔符。
       var migrateFolder = function () {
         if (!form.folder || !form.currentInfo || form.currentInfo.indexOf('读取失败') >= 0) { patch({ err: '请先选择扩展包并确认可读取' }); return }
         patch({ busy: true, currentInfo: '正在建立区块索引…' });
@@ -915,15 +913,21 @@ window.__ModuleLoader__.load({
         } else {
           if (!filledSkills.length) { errSet('请至少填写一个技能(技能名和效果至少填一处)'); return }
           if (!form.folder.trim()) { errSet('目标扩展文件夹不能为空'); return }
-          /* 按当前 form.type 校验卡牌牌堆条目，避免读取尚未赋值的局部 type。 */
           if (form.type === 'card' && form.pileJoin && !form.pileRows.some(function (r) { return r.point !== '' })) { errSet('选了「加入牌堆」但没填任何牌的花色点数——至少填一行,或改选「不加入牌堆」'); return }
         }
+        var packageMeta = isEdit ? null : {
+          name: form.folder.trim(),
+          author: form.packageAuthor.trim(),
+          intro: form.packageIntro.trim(),
+          version: form.packageVersion.trim() || '1.0',
+        };
         var creatingCharacter = form.type === 'character' && !editingExisting;
         var cleanPath = function (value) { return String(value || '').trim().replace(/^"(.*)"$/, '$1').trim() };
         var newFaction = creatingCharacter && form.createFaction ? { name: form.factionName.trim(), image: cleanPath(form.factionImage) } : null;
         var portraitVideo = form.type === 'character' && form.usePortraitVideo ? cleanPath(form.portraitVideo) : '';
         if (newFaction && !newFaction.name) { errSet('请填写新势力名称'); return }
         if (newFaction && !newFaction.image) { errSet('请填写势力图片路径'); return }
+        if (newFaction && form.factionColor) newFaction.color = form.factionColor.toUpperCase();
         if (form.type === 'character' && form.usePortraitVideo) {
           if (!portraitVideo) { errSet('请填写动态立绘视频路径'); return }
           if (!/\.(mp4|webm|m4v|mov|ogv)$/i.test(portraitVideo)) { errSet('动态立绘视频支持 MP4、WebM、M4V、MOV、OGV，请填写视频文件路径'); return }
@@ -961,8 +965,7 @@ window.__ModuleLoader__.load({
         }
         var dieAudioList = (type === 'character' && !editingExisting) ? splitAudioPaths(form.dieAudios) : [];
 
-        // 游戏目录随任务消息下发给 AI(persona complete:true 会压掉插件 systemPrompt,
-        // systemPrompt 里的环境小节到不了模型——任务消息是唯一保证可见的通道)
+        // 任务消息附带提交时的游戏目录，便于定位本次任务的读写目标。
         var settingsP = fetch('/noname-kit-api/settings').then(function (r) { return r.json() }, function () { return {} });
         var ensureId = form.taskId.trim()
           ? Promise.resolve(form.taskId.trim())
@@ -978,12 +981,10 @@ window.__ModuleLoader__.load({
           dispatch.check();
           return fetch('/noname-kit-api/tasks', {
             method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: taskId, folder: form.folder.trim(), type: type, title: form.title.trim(), charInfo: form.charInfo.trim(), newFaction: newFaction, portraitVideo: portraitVideo, pile: pile, skills: skills, image: form.image.trim(), dieAudios: dieAudioList, target: editingExisting ? { kind: type, id: form.entryId } : null, writeMode: form.writeMode, modeBrief: isMode ? form.brief.trim() : '', modeNum: isMode ? (form.numConfig === 'custom' ? (form.numCustom || 'custom') : form.numConfig) : '', modeWin: isMode ? form.winConfig.trim() : '', modeRules: isMode ? form.rules.trim() : '' }),
+            body: JSON.stringify({ id: taskId, folder: form.folder.trim(), packageMeta: packageMeta, type: type, title: form.title.trim(), charInfo: form.charInfo.trim(), newFaction: newFaction, portraitVideo: portraitVideo, pile: pile, skills: skills, image: form.image.trim(), dieAudios: dieAudioList, target: editingExisting ? { kind: type, id: form.entryId } : null, writeMode: form.writeMode, modeBrief: isMode ? form.brief.trim() : '', modeNum: isMode ? (form.numConfig === 'custom' ? (form.numCustom || 'custom') : form.numConfig) : '', modeWin: isMode ? form.winConfig.trim() : '', modeRules: isMode ? form.rules.trim() : '' }),
           }).then(function (r) { return r.json() }).then(function (reg) {
             if (!reg.ok) throw new Error(reg.error || '任务注册失败');
             registeredTaskId = taskId;
-            // gameDir/gameDirPosix 必须随 ctx 传给下一个 then(各自独立作用域,
-            // 跨回调直接引用会 ReferenceError: gameDir is not defined)
             return { taskId: taskId, pile: pile, gameDir: gameDir, gameDirPosix: gameDirPosix };
           });
         }).then(function (ctx2) {
@@ -1007,6 +1008,7 @@ window.__ModuleLoader__.load({
             : '';
           var factionBlock = newFaction
             ? '── 新势力 ──\n名称: ' + newFaction.name + '\n势力图片路径: ' + newFaction.image +
+              '\n势力颜色: ' + (newFaction.color || '使用引擎默认样式') +
               '\n创建此势力并把本次新武将归入该势力；先核对当前引擎和启用的 UI 中势力注册、翻译及标识图的实际用法，内部 ID 遵守任务前缀并避免重名。' +
               '势力图单独用 noname_copy_images 复制到扩展包 image/，使用独立的势力图文件名并保留真实后缀；此次复制不带 taskId，不与武将立绘合批登记，避免把势力图当成立绘。素材和注册代码均放在本扩展内。' +
               '实现参考：加载 noname-extension-dev 后按技能资源目录读取 references/custom-faction.md，核对当前引擎和已有兼容方案。'
@@ -1027,12 +1029,16 @@ window.__ModuleLoader__.load({
           if (type === 'card' && pile.join && pile.entries) pileText = '加入牌堆,条目(每行「花色 点数」;花色只允许 spade/heart/club/diamond/none,none=无花色):\n' + pile.entries;
           else if (type === 'card') pileText = '不加入牌堆(仅作技能素材牌)';
           else pileText = '(武将无牌堆)';
+          var packageBlock = packageMeta
+            ? '── 新扩展包信息 ──\n' + JSON.stringify(packageMeta, null, 2)
+            : '';
           var text;
           if (isMode && !editingExisting) {
             text = [
               '【无名杀工坊·新任务】',
               '任务ID: ' + taskId,
               '任务性质: 创建全新扩展包(含一个自定义游戏模式;目标文件夹当前不存在,需要从零创建 extension.js 与 info.json)',
+              packageBlock,
               '类型: 🎲 新玩法(自定义游戏模式,用 game.addMode 注册为独立模式)',
               (form.title.trim() ? '模式名称(显示名,注册为模式翻译): ' + form.title.trim() : ''),
               '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成源码，不写入扩展源码)' : '自动写入'),
@@ -1044,7 +1050,7 @@ window.__ModuleLoader__.load({
               '── 玩法细节(用户原话,逐条理解,不得增删主规则) ──',
               form.rules.trim(),
               form.reference.trim() ? '── 用户提供的参考代码 ──\n' + form.reference.trim() : '',
-              '执行请求: 请完成上述需求；开发流程按 noname-extension-dev 执行，有未确定的玩法或范围问题再澄清。',
+              '执行请求: 请按 noname-extension-dev 逐技能或逐条规则核对需求，问清会改变玩法的待定项，再给出完整的【需求理解确认】清单。等我回复「确认」后开始实现。',
               form.idPrefix.trim() ? '内部 ID 命名规则:模式名/新增技能的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,面向玩家展示的名称与描述写入 translate，内部规则技按实际展示需要设置。' : '',
             ].filter(Boolean).join('\n');
           } else if (editingExisting) {
@@ -1074,7 +1080,7 @@ window.__ModuleLoader__.load({
               form.image.trim() ? '── 图片 ──\n用户已提供图片路径: ' + form.image.trim() + '\n实现完成后用 noname_copy_images 复制进扩展包 image/ 目录,按目标条目ID(' + form.entryId + ')命名文件,调用时带上任务ID。' : '',
               (audioBlock || ''),
               characterOptionsBlock,
-              '执行请求: 请完成上述需求；开发流程按 noname-extension-dev 执行，有未确定的玩法或范围问题再澄清。',
+              '执行请求: 请按 noname-extension-dev 逐技能或逐条规则核对需求，问清会改变玩法的待定项，再给出完整的【需求理解确认】清单。等我回复「确认」后开始实现。',
               (newSkillRows.length && form.idPrefix.trim() ? '内部 ID 命名规则:新增技能的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,中文显示名写入 translate。' : ''),
             ].filter(Boolean).join('\n');
           } else if (isEdit) {
@@ -1098,7 +1104,7 @@ window.__ModuleLoader__.load({
               (audioBlock || ''),
               (dieAudioBlock || ''),
               characterOptionsBlock,
-              '执行请求: 请完成上述需求；开发流程按 noname-extension-dev 执行，有未确定的玩法或范围问题再澄清。',
+              '执行请求: 请按 noname-extension-dev 逐技能或逐条规则核对需求，问清会改变玩法的待定项，再给出完整的【需求理解确认】清单。等我回复「确认」后开始实现。',
               form.idPrefix.trim() ? '内部 ID 命名规则:新增技能/武将/卡牌的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,中文显示名写入 translate。' : '',
             ].filter(Boolean).join('\n');
           } else {
@@ -1106,6 +1112,7 @@ window.__ModuleLoader__.load({
               '【无名杀工坊·新任务】',
               '任务ID: ' + taskId,
               '任务性质: 创建全新扩展包(目标文件夹当前不存在,需要从零创建 extension.js 与 info.json)',
+              packageBlock,
               '类型: ' + (type === 'card' ? '卡牌' : '武将(含 ' + skills.length + ' 个技能)'),
               (form.title.trim() ? '名称(显示名,写入 translate): ' + form.title.trim() : ''),
               '写法: ' + (form.style === 'module' ? '新版 ES Module' : '老版 game.import'),
@@ -1122,7 +1129,7 @@ window.__ModuleLoader__.load({
               (audioBlock || ''),
               (dieAudioBlock || ''),
               characterOptionsBlock,
-              '执行请求: 请完成上述需求；开发流程按 noname-extension-dev 执行，有未确定的玩法或范围问题再澄清。',
+              '执行请求: 请按 noname-extension-dev 逐技能或逐条规则核对需求，问清会改变玩法的待定项，再给出完整的【需求理解确认】清单。等我回复「确认」后开始实现。',
               form.idPrefix.trim() ? '内部 ID 命名规则:所有新增技能/武将/卡牌的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文(如 ' + form.idPrefix.trim() + 'tianfa),中文显示名写入 translate——防止跨扩展包命名冲突。' : '',
             ].filter(Boolean).join('\n');
           }
@@ -1200,9 +1207,15 @@ window.__ModuleLoader__.load({
              form.folder && form.usedIds && form.usedIds.length
                ? e('div', 'nnk-hint', '已用任务ID: ' + form.usedIds.map(function (u) { return u.id + '(' + u.state + ')' }).join('、') + ' —— 新任务请避开这些')
                : (form.folder ? e('div', 'nnk-hint', '此包暂无任务记录') : null)]
-          : [textField('新扩展包名称(游戏 extension/ 下的文件夹名)', form.folder, set('folder'))],
+          : [
+            textField('新扩展包名称(同时用作文件夹名)', form.folder, set('folder')),
+            optionField('packageAuthor', '扩展作者(可选)', form.packageAuthor, '输入作者名称'),
+            h(FormField, { key: 'packageIntro', fieldKey: 'packageIntro', label: '扩展简介(可选)' },
+              h('textarea', { className: 'nnk-textarea', rows: 3, value: form.packageIntro, placeholder: '简单介绍这个扩展包', onChange: function (ev) { set('packageIntro')(ev.target.value) } })),
+            optionField('packageVersion', '扩展版本', form.packageVersion, '1.0'),
+          ],
         radioGroup('类型', form.type, [{ value: 'character', text: '⚔️ 武将' }, { value: 'card', text: '🃏 卡牌' }, { value: 'mode', text: '🎲 新玩法(自定义模式)' }], switchType),
-        // 模式任务固定编辑选中的现有扩展包，目标选择由 switchMode 与 switchType 统一设置。
+        // 编辑已有包里的自定义模式时，无需再选择新增或编辑目标。
         isEdit && form.type !== 'mode' ? radioGroup('目标', form.goal, [{ value: 'create', text: '✨ 创建新' }, { value: 'edit', text: '✏️ 编辑已有' }], switchGoal) : null,
         isModeCreate ? [
           e('div', 'nnk-hint', '🎲 以全新扩展包交付,生成后可随时在「📂 编辑已有扩展包」里继续调整。'),
@@ -1215,7 +1228,7 @@ window.__ModuleLoader__.load({
                     textField('胜利条件(可选;不填则以玩法细节为准)', form.winConfig, set('winConfig'), { placeholder: '例: 场上只剩 1 人时结算,幸存者获胜' }),
           h(FormField, { fieldKey: 'rules-create', label: '玩法细节描述(自由描述所有规则:特殊机制/阶段效果/阵营/限制…越具体,AI 越容易准确理解)', value: form.rules, foldable: true },
           h('textarea', { className: 'nnk-textarea', style: { minHeight: '120px' }, value: form.rules, placeholder: '例: 全场按 冬→春→夏→秋 每 3 轮轮换季节;准备阶段强制执行当季效果——冬:少摸一张牌或流失1点体力;春:多摸一张牌或回复1点体力…', onChange: function (ev) { set('rules')(ev.target.value) } })),
-          e('div', 'nnk-hint', '提交后 AI 会核对当前引擎和规则实现；需求完整时简述理解后制作，有未确定的玩法再询问。生成后进游戏实测，逐条规则点「确认无误」完成任务。')
+          e('div', 'nnk-hint', 'AI 会核对当前引擎和规则实现，把逐条规则列入【需求理解确认】清单。你回复「确认」后开始实现。进游戏实测后，逐条规则点「确认无误」完成任务。')
         ] : null,
         editingExisting ? [
           form.type !== 'mode' ? e('label', 'nnk-label', '编辑目标(选择要修改的' + (form.type === 'card' ? '卡牌' : '武将') + ')' + (form.entryLoading ? '(加载中…)' : '')) : null,
@@ -1249,7 +1262,7 @@ window.__ModuleLoader__.load({
               ? '卡牌改动描述(条目本身的变化:类别/花色点数/名称等;可选)'
               : '武将改动描述(条目本身的变化:体力/护甲/名称等;可选)', value: form.editNotes, foldable: true },
           h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.editNotes, placeholder: form.type === 'mode' ? '例: 人数上限改成 12;胜利条件改为计分制,先到 100 分获胜' : form.type === 'card' ? '例: 类别改为锦囊牌,花色点数改为黑桃 5;卡面描述同步修改' : '例: 初始体力信息改为 3/4/1(3 点体力、4 点上限、1 点护甲);显示名保持不变', onChange: function (ev) { set('editNotes')(ev.target.value) } })),
-          form.type === 'mode' ? [h(FormField, { fieldKey: 'rules-edit', label: '新增或调整的规则(可选;AI 会先读现有代码,说明改动前后及影响范围)', value: form.rules, foldable: true }, h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.rules, placeholder: '例: 新增一条规则——雪天全场武力-1;秋季距离修正改为无视坐骑只对玩家生效', onChange: function (ev) { set('rules')(ev.target.value) } }))] : null,
+          form.type === 'mode' ? [h(FormField, { fieldKey: 'rules-edit', label: '新增或调整的规则（可选，AI 会先读现有代码，把改动前后及影响范围列入确认清单）', value: form.rules, foldable: true }, h('textarea', { className: 'nnk-textarea', style: { minHeight: '80px' }, value: form.rules, placeholder: '例: 新增一条规则——雪天全场武力-1;秋季距离修正改为无视坐骑只对玩家生效', onChange: function (ev) { set('rules')(ev.target.value) } }))] : null,
                     form.type === 'character' ? radioGroup('是否新增技能', form.addSkills ? 'yes' : 'no', [{ value: 'no', text: '不新增' }, { value: 'yes', text: '新增技能(填下面的技能列表)' }], function (v) { patch({ addSkills: v === 'yes' }) }) : null,
           form.addSkills && form.type === 'character' ? skillRows() : null
         ] : null,
@@ -1262,6 +1275,11 @@ window.__ModuleLoader__.load({
           form.createFaction ? h('div', { id: skillScope + '-faction', className: 'nnk-option-fields' },
             optionField('factionName', '新势力名称', form.factionName, '例：星海', 60),
             optionField('factionImage', '势力图片路径', form.factionImage, '例：D:\\素材\\星海.png', 500),
+            h('label', { className: 'nnk-option-toggle' },
+              h('input', { type: 'checkbox', checked: !!form.factionColor, onChange: function (ev) { set('factionColor')(ev.target.checked ? '#808080' : '') } }), '自定义势力颜色'),
+            form.factionColor ? h('div', { className: 'nnk-faction-color' },
+              h('input', { type: 'color', 'aria-label': '势力颜色', value: form.factionColor, onChange: function (ev) { set('factionColor')(ev.target.value) } }),
+              h('code', null, form.factionColor.toUpperCase())) : null,
             e('div', 'nnk-hint', '填写本地图片的完整路径，新武将将使用这个势力。')) : null
         ) : null,
         form.type === 'mode' ? null : h('div', { key: 'img', className: 'nnk-field' },
@@ -1317,13 +1335,13 @@ window.__ModuleLoader__.load({
             h('button', { className: 'nnk-smallbtn', onClick: function () { patch({ pileRows: form.pileRows.concat([{ suit: 'spade', point: '' }]) }) } }, '➕ 加一张')
           ) : null
         ] : null,
-        radioGroup('写入方式', form.writeMode, [{ value: 'auto', text: '自动写入(校验通过后直接落盘)' }, { value: 'manual', text: '手动复制(只生成代码)' }], set('writeMode')),
+        radioGroup('写入方式', form.writeMode, [{ value: 'auto', text: '自动写入（确认方案并校验通过后写入）' }, { value: 'manual', text: '手动复制(只生成代码)' }], set('writeMode')),
         textField('示例参考代码(你找到的想模仿的官方实现;可选)', form.reference, set('reference'), { code: true, placeholder: '粘贴官方技能代码,AI 会优先参考它的写法' }),
         ),
         h('div', { className: 'nnk-submit-area' },
         form.err ? e('div', 'nnk-err', form.err) : null,
-        h('button', { className: 'nnk-submit', disabled: form.busy, onClick: submit }, form.busy ? '已发送…' : (isEdit ? '发给 AI 修改' : '发给 AI 开工')),
-        e('div', 'nnk-hint', '提交即请求 AI 执行所填需求；信息完整时简述理解后开始，有玩法歧义或需要扩大范围时再询问。')
+        h('button', { className: 'nnk-submit', disabled: form.busy, onClick: submit }, form.busy ? '已发送…' : '提交需求'),
+        e('div', 'nnk-hint', '提交后，AI 会逐项核对，只询问会改变玩法的待定项，再给出完整的【需求理解确认】清单。你回复「确认」后才开始实现。')
         )
       );
       } catch (renderError) {
@@ -1396,7 +1414,7 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'nnk-history' },
         data.msg ? e('div', 'nnk-ok', data.msg) : null,
         data.detailError ? h('div', { className: 'nnk-err', role: 'alert' }, data.detailError) : null,
-        // 详情卡片放列表上方:点「备份/注意点」后立即可见(列表很长时沉底等于没反应)
+        // 把详情放在列表上方，使长列表中的备份和注意点也能立即查看。
         data.detail ? (function () {
           var detail = data.detail, backups = detail.backups || [];
           return h('div', { className: 'nnk-card nnk-history-detail', ref: function (el) {
@@ -1502,7 +1520,7 @@ window.__ModuleLoader__.load({
         fetch('/noname-kit-api/update/check', { method: 'POST' }).then(function (r) { return r.json() }).then(function (body) {
           healthBus.adopt(body);
           var check = body.check || {};
-          // link 方式不参与检测,直说,别绕
+          // 链接安装不查询远程版本。
           set({ healthBusy: false, healthMsg: check.skipped === 'link' ? 'link 方式不参与版本检测' : (check.error ? '' : '✅ 已检查') });
         }, function (error) { set({ healthBusy: false, healthErr: '检查失败: ' + (error && error.message || error) }) });
       };
@@ -1572,8 +1590,7 @@ window.__ModuleLoader__.load({
         else if (preset.state === 'ok') line = e('div', 'nnk-hint', '✅ 与插件自带的一致');
         else if (preset.state === 'missing') line = e('div', 'nnk-hint', '⚠️ 未安装——新建会话里选不到「无名杀开发模式」,点右侧重装。');
         else if (preset.state === 'stale') {
-          // 只陈述事实(哈希不同)+ 后果(重装会覆盖本地这份),不替用户猜原因 ——
-          // "本地被改过"或"插件更新了"都只是可能,猜错反而误导
+          // 文件哈希不同只说明内容有差异。重装会替换当前预设副本。
           var mine = String(preset.installedHash || '').slice(0, 8);
           var theirs = String(preset.bundledHash || '').slice(0, 8);
           line = e('div', 'nnk-hint', '⚠️ 与插件自带的不一致(已装 ' + mine + ' ≠ 插件 ' + theirs + ')。点重装会用插件自带那份覆盖本地这份(先备份)。');
@@ -1714,8 +1731,7 @@ window.__ModuleLoader__.load({
       return { check: check, diff: diff, reference: reference, verified: !!(check && check.status === 'verified' && diff) };
     }
     function onlineEventText(ev, evs, omitPeerLabel) {
-      /* 空项防护:动态流是 events.map(onlineEventText),任何一环混进 null/非对象,
-       * 这里读 .type 就炸整页(与 onlinePickEvent 同款防线) */
+      /* 事件列表里的空项或异常项用简短文本显示，避免中断其余事件的渲染。 */
       if (!ev || typeof ev !== 'object') return String(ev || '(空事件)');
       var eventPeerLabel = ev.data && ev.data.peerLabel;
       if (!omitPeerLabel && typeof eventPeerLabel === 'string' && eventPeerLabel.trim()) return '[' + eventPeerLabel.trim().slice(0, 120) + '] ' + onlineEventText(ev, evs, true);
@@ -2167,7 +2183,6 @@ window.__ModuleLoader__.load({
           body: h('div', {},
             e('div', 'nnk-hint', '1. 点「复制」把整段邀请码发给朋友;2. 朋友在「我要加入 → 📨 收到邀请码?从这里加入」粘贴,把生成的「回执码」发回给你;3. 回执码贴到下面(或列表里第 #' + row.id + ' 行),点「连接」。他进的是同一个房间,一样在大厅等载入。'),
             row.status === 'pending' && Date.now() - (row.at || 0) >= 180000
-              /* 需要内联样式时使用 h(tag, props, children)；e 的参数为 tag、className 与子节点。 */
               ? h('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, '⚠️ 这张码已生成 ' + Math.floor((Date.now() - row.at) / 60000) + ' 分钟——里面的候选地址基本过期了,直连大概率失败;作废它再生成一张新码,新码马上发马上用')
               : null,
             e('div', 'nnk-label', '邀请码(整段复制)'),
@@ -2556,7 +2571,7 @@ window.__ModuleLoader__.load({
         var disabled = (d.exts && d.exts.disabled) || [], changed = (d.exts && d.exts.changed) || [], unverified = (d.exts && d.exts.unverified) || [];
         var missPacks = Array.isArray(d.packs && d.packs.missing) ? d.packs.missing : [];
         var missCards = Array.isArray(d.cards && d.cards.missing) ? d.cards.missing : [];
-        /* P2P 连接识别 v1:身份随清单交换,主机看客人、客人看房主 */
+        /* 清单体检验证通过时，从对端身份字段读取显示信息。 */
         var peer = verified ? (hostFlow ? (d.guestIdentity || null) : (d.hostIdentity || null)) : (current.check && current.check.identity);
         /* 旧版成功事件不证明当前内容完整,不能据此隐藏体检中的缺包。 */
         var stillMissing = missing;
@@ -2657,7 +2672,7 @@ window.__ModuleLoader__.load({
         }
         return null;
       }
-      /* 码龄:候选地址跟着 NAT 端口映射活,几分钟就过期——超 3 分钟亮牌 */
+      /* 生成三分钟后提醒刷新邀请码，避免使用已失效的 NAT 映射。 */
       function inviteAgeText(at) {
         if (!at) return '';
         var sec = Math.max(0, Math.round((Date.now() - at) / 1000));
@@ -2728,7 +2743,7 @@ window.__ModuleLoader__.load({
       function roomBrief() {
         var ev0 = onlinePickEvent(evs, 'room_members');
         var d = (ev0 && ev0.data) || {};
-        /* list 恒为数组:主卡与弹窗都直接 .filter,形状坏了不该炸整页 */
+        /* 主卡和大厅共用成员数组。缺失或异常数据按空列表处理。 */
         var list = Array.isArray(d.list) ? d.list : [];
         var caps = (d.caps && typeof d.caps === 'object') ? d.caps : MODE_MAX;
         /* 座位数:主机=当前选中模式的上限(点别的模式立刻变),选中的就是房间
@@ -2875,7 +2890,7 @@ window.__ModuleLoader__.load({
                 (function () {
                   var link = bridge.cfg && bridge.cfg.link;
                   if (!link || !link.kind) return null;
-                  /* 内核离线后插件仍会保留最后一拍 cfg:别把上一场的线路当"当前" */
+                  /* 内核离线后仍有上一份配置快照。线路只有在线时才视为当前值。 */
                   if (!bridgeOnline) return null;
                   var kindText = link.kind === 'relay' ? '中继'
                     : link.kind === 'direct' ? (link.injected ? '虚拟网卡/IPv6 直连地址' : '局域网直连')
@@ -2968,12 +2983,10 @@ window.__ModuleLoader__.load({
                   answerEv
                     ? h('div', { style: { marginTop: '10px' } },
                       e('div', 'nnk-label', '回执码(发回给房主)'),
-                      /* 同上:e(带样式对象)会炸整页——内联样式必须用 h */
                       codeAgeText(answerEv.ts) ? h('div', { className: 'nnk-hint', style: { color: 'var(--dsw-alias-state-warning-primary, #b8860b)' } }, codeAgeText(answerEv.ts)) : null,
                       h('textarea', { className: 'nnk-textarea nnk-code', readOnly: true, value: (answerEv.data && answerEv.data.code) || '' }),
                       h('div', { className: 'nnk-row', style: { marginTop: '0' } },
                         h('button', { className: 'nnk-copy', onClick: function () { copyText((answerEv.data && answerEv.data.code) || '') } }, '📋 复制回执码'),
-                        /* 弹窗误触收起后不必慌张:这里能把回执码窗口再弹回来 */
                         h('button', { className: 'nnk-copy', onClick: function () { setAnswerPopupDismissed('') } }, '🔎 再看一次')))
                     : null)
                 : h('button', { className: 'nnk-copy', onClick: function () { setShowInviteFallback(true) } }, '📨 收到邀请码?从这里加入…')),
@@ -3303,7 +3316,7 @@ window.__ModuleLoader__.load({
             '── 问题描述/游戏内表现/报错 ──',
             issue,
             '── 执行要求 ──',
-            '执行请求: 请读取当前代码并修复上述问题；开发流程与按文件校验按 noname-extension-dev 执行。完成后调用 noname_skills_written，原样带回任务ID ' + task.id + '。',
+            '执行请求: 请按已确认的方案修复上述问题。确实需要改变玩法或扩大范围时，请先列出变更部分，等我回复「确认」后再实现变更。先读取当前代码，按 noname-extension-dev 执行开发流程与按文件校验。完成后调用 noname_skills_written，原样带回任务ID ' + task.id + '。',
             'skills 只填本轮实际修复的任务技能名称,不要照抄整个任务清单;其他技能的确认状态保持不变。' + (skill ? '本次反馈技能名: ' + JSON.stringify(skill) + '。' : ''),
             '如果本轮确实修改了其他已确认技能,将这些技能名称同时列入 skills 和 retestSkills,使其重新待测试;未修改的已确认技能不得列入 retestSkills。',
           ].filter(Boolean).join('\n');
@@ -3316,8 +3329,7 @@ window.__ModuleLoader__.load({
         }).catch(function (error) { setD({ busy: false, err: error && error.message || String(error) }) });
       };
       var markDone = function (task) {
-        // 防呆:缺图或技能未全确认时,手动完成会绕过「缺图不自动完成」的保护——
-        // 弹确认把状态亮出来,用户明确选择才放行(不剥夺自由度,只防手滑)
+        // 手动完成允许越过自动完成条件，因此缺图或技能未确认时先展示确认。
         var skills = Array.isArray(task.skills) ? task.skills : [];
         var confirmed = skills.filter(function (s) { return s.status === 'confirmed' }).length;
         var warn = [];
@@ -3433,7 +3445,7 @@ window.__ModuleLoader__.load({
             );
           })) : null,
           expanded && fbTarget && !isDoneSection ? h('div', { className: 'nnk-task-feedback' },
-            e('div', 'nnk-hint', '向' + (fbTarget.skill ? '技能「' + fbTarget.skill + '」' : '任务「' + task.id + '」') + '反馈(记录后自动发给当前会话的 AI):'),
+            e('div', 'nnk-hint', '向' + (fbTarget.skill ? '技能「' + fbTarget.skill + '」' : '任务「' + task.id + '」') + '反馈。提交后会发给当前会话的 AI。已确认方案内的修复继续进行，涉及玩法变更或范围扩大时需先确认。'),
             h('textarea', {
               className: 'nnk-mini', value: box.issue,
               placeholder: '现象 / game.log 输出 / 报错',
@@ -3693,9 +3705,7 @@ window.__ModuleLoader__.load({
           inject: function (sessionId) { return { sessionId: sessionId } },
         }, function (props) {
           props = props || {};
-          // DSH 布局的侧栏拖宽手柄是透明覆盖层,侵入内容区约 40px(z=8):
-          // 工坊内容贴左渲染时,左侧按钮的点击会被它吃掉(现象=点了没反应)。
-          // 留出安全边距让内容避开手柄热区;手柄压在空白上,拖拽功能不受影响。
+          // 左侧留出边距，避免 DSH 的侧栏拖动手柄盖住工坊按钮。
           return React.createElement(AppearanceScope, null,
             React.createElement('div', { className: 'nnk-host-frame', style: { paddingLeft: '48px' } },
               React.createElement(WorkshopView, Object.assign({}, props, { sessions: sessions, uiSession: uiSession }))));
@@ -3727,7 +3737,6 @@ window.__ModuleLoader__.load({
       });
 
       // 工坊入口:输入条 list 插槽(hero 初始屏与任意会话都渲染)+ 独立工坊浮层。
-      // 纯插件方案,不动 DSH 源码——发布自包含是硬约束。
       ctx.slots.inject('conversation.input.left', function () {
         return ctx.slots.register({ name: 'conversation.input.left', id: 'noname-workshop-chip', order: 90 }, function (props) {
           return React.createElement(AppearanceScope, null, React.createElement(WorkshopChipButton, props));

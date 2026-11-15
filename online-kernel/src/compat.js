@@ -296,12 +296,7 @@
 		proto.chooseToUse.__nnkInfoMapShim = true;
 	}
 
-	/*
-	 * 隔离1:扩展运行期钩子。引擎经 game.callHook 逐个调 lib.hooks[name] 里的
-	 * 钩子,一个崩会把整个流程带走(错误弹窗+局面卡死)。联机模式下改为逐个
-	 * try/catch:崩了记扩展名+堆栈报工坊,其余钩子照跑。非联机模式原样走
-	 * 原函数,离线行为零变化。
-	 */
+	/** 联机时分别捕获各扩展钩子异常并上报，使其他钩子继续运行。离线仍使用引擎的原始处理。 */
 	function guardHooks() {
 		var game = nnk.env.game;
 		if (typeof game.callHook !== "function" || game.callHook.__nnkGuarded) {
@@ -345,11 +340,7 @@
 		game.callHook.__nnkGuarded = true;
 	}
 
-	/*
-	 * 隔离2:联机模式下,扩展文件里的未捕获错误不再走引擎的全局 alert
-	 * (util/error.js setOnError——一局能弹十几次),改为记录+上报工坊;
-	 * 引擎本体的错误照常弹原窗(那是真问题,必须让人看见)。
-	 */
+	/** 联机时记录并上报可归因于扩展的未捕获异常。引擎本体异常继续交由原处理器。 */
 	function guardErrorPopup() {
 		if (window.__nnkOnerrorGuarded) {
 			return;

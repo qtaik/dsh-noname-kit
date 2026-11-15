@@ -178,7 +178,7 @@ try {
   ok(presetEntries.some((n) => /\.bak-\d+$/.test(n)), '备份与 preset 同层且名字带 .bak-<时间戳>')
   ok(!/^[a-z0-9][a-z0-9-]*$/.test(reinstalled.backup.split(/[\\/]/).pop()), '备份目录名不匹配 DSH 的 PRESET_ID 规则 → 不会被 discovery 收录')
 
-  // ── custom-bash 的全盘检索闸(issue #1:模型 find / 全盘找目录,几分钟出不来)──
+  // ── custom-bash 拦截宽泛扫描，并允许在明确目录下检索 ──
   const { rootSearchIssue } = await import('../presets/noname-dev/custom-bash.mjs')
   const refuseCase = [
     'find / -maxdepth 6 -type d -name "神创包" 2>/dev/null | head',
@@ -201,10 +201,7 @@ try {
   ]
   for (const cmd of allowCase) ok(rootSearchIssue(cmd) === null, '全盘检索闸:放行 ' + cmd.slice(0, 40))
 
-  // ── N) 声明式 preset(DSH 0.1.7+)与目录式的单一事实源把关 ──
-  // 0.1.7 的组合声明在插件 cordis.patch.yml(bundle patch,随插件加载自动就位),
-  // 0.1.6 及以下继续用 presets/noname-dev/agent.cordis.yml(目录式)。两份必须
-  // 内容同步:persona 漂移会把自相矛盾的指令发给 AI,这里用字符串级断言锁死。
+  // DSH 0.1.7 起使用 cordis.patch.yml，旧宿主使用目录式预设。两份正文须同步。
   {
     const repoRoot = new URL('../', import.meta.url)
     const readRepo = (p) => readFileSync(new URL(p, repoRoot), 'utf8')
@@ -258,7 +255,7 @@ try {
     const { KNOWLEDGE_TEXT } = await import('../src/knowledge.js')
     eq(KNOWLEDGE_TEXT, readRepo('presets/noname-dev/skills/noname-extension-dev/SKILL.md').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, ''), '兼容知识入口直接读取 Skill，避免维护两份开发规范')
 
-    // 机制探测:开发目录下(无宿主 peer)应为 false,但任何环境都不得抛异常
+    // 宿主能力探测在缺少宿主依赖时也应返回布尔值。
     const declarative = await preset.hostHasDeclarativePreset()
     ok(typeof declarative === 'boolean', '声明式:hostHasDeclarativePreset 返回布尔不抛异常')
   }

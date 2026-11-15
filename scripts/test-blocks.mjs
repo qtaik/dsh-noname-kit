@@ -119,11 +119,7 @@ try {
   const m2 = blocks.migrateCode(ANCHORED)
   ok(!m2.error && blocks.scanAnchored(m2.code).length === 4 && blocks.stripAnchors(m2.code) === LEGACY, '重复迁移=幂等重建(剥旧锚重打,结果一致)')
 
-  // ── 8b) 迁移:CRLF 文件(Windows 编辑器 / git autocrlf 的真实产物)──
-  // 踩过的坑:补逗号时判断"行尾最后一个非空白字符"的字符集写成 [ \t\n],漏了 \r ——
-  // CRLF 行尾的回车不得被误判成缺少逗号。
-  // 验证迁移保持有效分隔符,不会在下一行行首额外插入逗号,
-  // 并保留配对锚点与区块数量。
+  // CRLF 迁移只在缺少分隔逗号时补逗号，逗号必须位于回车前。
   const { validateExtensionCode, syntaxCheck } = await import('../src/validate.js')
   const syntaxOk = (code) => validateExtensionCode({ code, style: 'classic', kind: 'character' }).ok
   const CRLF = LEGACY.split('\n').join('\r\n')
@@ -223,9 +219,7 @@ export default function () {
   ok(pm.code.includes('},\n//#noname-kit-end skill:ts_huikan'), 'package 布局:技能块收尾补逗号(后续插入不炸)')
   ok(pm.code.includes('出牌阶段限一次。",\n//#noname-kit-end translate:ts_huikan'), 'package 布局:翻译块 end 锚落在区段收口之内')
 
-  // ── 14) card / character 对象及数组区块 ──
-  // 嵌套描述符布局 card:{ card:{…} } 是真实老包的常见形态(用户创神包即如此):
-  // 条目在内层容器里,插新块必须落到内层,插到外层会把新卡挂到错误的层级上。
+  // 嵌套描述符的卡牌和武将条目位于各自的内层容器。
   const CARDS = `game.import("extension", function (lib, game, ui, get, ai, _status) {
   return {
     name: "卡包",

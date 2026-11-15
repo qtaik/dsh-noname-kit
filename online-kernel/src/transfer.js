@@ -87,11 +87,7 @@
 		}
 	}
 
-	/* 定向发送:message 里带 sendTo(本次传输的目标通道 label 列表)时,只发给
-	 * 名单内的通道自己 send。名单为空=没有可定向的通道(对端内核过旧/通道全断)
-	 * 时直接不发——早先这里退回 game.broadcast,但联机模式下广播开门就 return
-	 * (game.online 门禁),旧对端也不懂 ready/done 协议,那条"兜底"只会把
-	 * 1.9.0 修掉的"广播即成功"假象带回来。没通道由 startOne 前置失败 */
+	/* 保留的旧协议按通道实例 ID 定向发送。没有目标通道时直接返回，由发起方报告失败。 */
 	function sendToBridges(func, payload) {
 		if (!payload.sendTo || !payload.sendTo.length) {
 			return;
@@ -121,8 +117,7 @@
 			return;
 		}
 		if (ackWait && ackWait.id === msg.id && msg.type === "fail") {
-			/* 客人明确报告接收失败(不完整/体积超限/落盘失败):立刻收场带回原因,
-			 * 别让房主干等超时后报一句笼统的"没等到回执" */
+			/* 收到接收端报告的失败时立即结束等待并传回原因。 */
 			var wf = ackWait;
 			ackWait = null;
 			clearTimeout(wf.timer);
@@ -692,7 +687,7 @@
 					lib.message.server.__nnkTxProgress = true;
 				}
 				if (!lib.message.server.__nnkTxAck) {
-					/* 客人 → 房主:ready/done 回执(补传不再"广播即成功") */
+					/* 客人通过 ready 和 done 回执确认接收准备和完成。 */
 					lib.message.server.nnk_tx_ack = function(msg) {
 						try {
 							onAck.call(this, msg);

@@ -172,8 +172,7 @@
 				if (!settled) {
 					settled = true;
 					session.end();
-					/* 文案说准:超时是"本机连不上信令服务器",与房主是否在重组无关
-					 * (旧文案让用户以为房主那边出事了)。留邀请码这条路兜底。 */
+					/* 这里等待的是本机信令连接。超时可提示用户改用邀请码。 */
 					reject(signalFailure(new Error("信令服务器连不上或响应太慢(公共服务器偶发抽风;反复失败可让房主发一张邀请码,从另一道门进)")));
 				}
 			}, 7000);
@@ -183,8 +182,7 @@
 	var api = {
 		/* deriveKey/seal/unseal 仅服务上方会话逻辑,不对外导出 */
 		randomId: randomId,
-		/* 房号指纹:FNV-1a → base36(定宽 7 位)。两边算法一致即得到同一主题;
-		 * 公共 broker 上不再出现房号明文(订阅者无法据此推导密钥/冒充房间) */
+		/* 房号经 FNV-1a 生成定宽 7 位 base36 主题前缀。 */
 		roomHash: function(code) {
 			var h = 0x811c9dc5;
 			var str = String(code || "");

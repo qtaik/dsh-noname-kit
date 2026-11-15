@@ -14,11 +14,7 @@ import { entryFileType } from './entry-file.js'
 /** 代码区(字符串/注释之外)不允许出现的全角标点。 */
 const FULLWIDTH = /[，。；：？！“”‘’【】（）〈〉《》、※]/
 
-/**
- * 扫描出字符串与注释覆盖的字符区间,返回 (index → 是否在字符串/注释内) 的判定函数。
- * 支持单引号/双引号/模板串、行注释、块注释;不处理转义以外的怪癖,足够用于标点扫描。
- * @param {string} code
- */
+/** 标记字符串、注释和正则字面量，供代码区的标点检查跳过。 */
 /* '/' 是正则起点还是除号:看前一个有效字符(运算符/开括号/行首 = 正则起点) */
 function isRegexStart(code, i) {
   let k = i - 1
@@ -171,14 +167,11 @@ export function validateExtensionCode({ code, style, kind, folder, idPrefix }) {
     warnings.push({ message: `你选的是${style === 'module' ? '新版 ES Module' : '老版 game.import'}写法,但代码看起来是${effective === 'module' ? '新式' : '老式'}——请确认。` })
   }
 
-  // 1) 语法编译检查
   const compile = compileCheck(code, effective)
   if (!compile.ok) errors.push({ message: compile.message })
 
-  // 2) 全角标点
   errors.push(...scanFullwidth(code))
 
-  // 2.5) ID 前缀约定:收集到的内部 ID 若提供了前缀,未以之开头的报 warning
   if (idPrefix && isEntryId(idPrefix)) {
     const ids = collectDefinedIds(code)
     const offenders = ids.filter((id) => !id.startsWith(idPrefix))
@@ -189,9 +182,7 @@ export function validateExtensionCode({ code, style, kind, folder, idPrefix }) {
     }
   }
 
-  // 2.6) 配音路径约定:代码区的 audio 字段不带 ext: 会去游戏本体 audio/ 找文件
-  // (扩展音频只应放扩展包内 audio/,规范禁止)。字符串里的 "ext:..." 不受影响;
-  // 数组形式 audio:["其他技能",n] 是引用别处配音的合法写法,不报。
+  // audio 数组可引用另一技能的配音。自带配音字符串用 ext: 定位扩展内文件。
   {
     const mask = buildCodeMask(code)
     let masked = ''
@@ -216,7 +207,6 @@ export function validateExtensionCode({ code, style, kind, folder, idPrefix }) {
     }
   }
 
-  // 3) name 字段与文件夹一致性
   const name = extractName(code)
   if (!name) {
     errors.push({ message: '没有找到扩展的 name 字段(返回对象里的 name: "扩展名")。' })
@@ -226,19 +216,16 @@ export function validateExtensionCode({ code, style, kind, folder, idPrefix }) {
     else warnings.push({ message: msg + '(老式写法建议也保持一致)' })
   }
 
-  // 4) translate 补齐
   if (!/lib\s*\.\s*translate\s*\.\s*\w+\s*=|translate\s*:/.test(code)) {
     warnings.push({ message: '没有发现任何 translate(翻译)定义——游戏里技能/武将/卡牌会显示原始 ID。每个 id 需要 <id> 与 <id>_info 两条。' })
   }
 
-  // 5) 主动技的 ai 字段
   const enableCount = (code.match(/\benable\s*:/g) || []).length
   const aiCount = (code.match(/\bai\s*:\s*\{/g) || []).length
   if (enableCount > 0 && aiCount === 0) {
     warnings.push({ message: '检测到 enable(主动技)但没有 ai 字段——AI 角色不会正确使用该技能,主动技必须写 ai。' })
   }
 
-  // 6) 按任务类型的结构提示
   if (kind === 'character') {
     if (!/\bsex\s*:/.test(code) || !/\bhp\s*:/.test(code) || !/\bskills\s*:/.test(code)) {
       warnings.push({ message: '武将条目通常需要 sex / group / hp / skills 四个字段,请核对。' })
@@ -252,7 +239,6 @@ export function validateExtensionCode({ code, style, kind, folder, idPrefix }) {
     }
   }
 
-  // 7) 新式写法的 import 头
   if (effective === 'module' && !/from\s*(['"])[^'"]*noname\.js\1/.test(code)) {
     warnings.push({ message: '新式扩展需要 import { lib, game, ui, get, ai, _status } from "../../noname.js",当前代码没有引入。' })
   }

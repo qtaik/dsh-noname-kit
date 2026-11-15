@@ -6,12 +6,10 @@
 
 export const name = 'dev-tool-search'
 
-/** The tools registry must exist before this tool can register. */
 export const inject = ['tools']
 
 const MAX_RESULTS = 25
 
-/** Minimal JSON schema compiler for tool parameters (zero dependencies). */
 function toJsonSchema(spec) {
   const properties = {}
   const required = []
@@ -36,17 +34,15 @@ const UNLOCKABLE_INDEX = [
   'job_list / job_output / job_kill — background jobs',
   'interrupt_agent / send_message / list_agents — multi-agent control',
   'todo_write — task tracking',
-  'ask_user_question — ask the user',
 ]
 
-/** Register the model-facing `dev_tool_search` tool. */
 export function apply(ctx) {
   ctx.tools.register({
     name: 'dev_tool_search',
     description: [
       'Discover and unlock tools that are NOT currently available.',
       '',
-      'This session starts with a resident set: bash/pwsh, str_replace_editor, skill_search, skill_load, dev_tool_search, plus the resident noname dev toolchain (noname_* tools). Everything else is unlocked on demand through this tool.',
+      'This session starts with a resident set: bash/pwsh, str_replace_editor, ask_user_question (when available), skill_search, skill_load, dev_tool_search, plus the resident noname dev toolchain (noname_* tools). Everything else is unlocked on demand through this tool.',
       '',
       'If the current task needs any of the following, call dev_tool_search FIRST — do not try to work around them with bash:',
       ...UNLOCKABLE_INDEX.map((line) => `- ${line}`),
@@ -82,7 +78,7 @@ export function apply(ctx) {
         return { text: 'Provide `query` to search the catalog, or `toolNames` to unlock tools.' }
       }
       try {
-        // Read through the executing scope, retaining registry restrictions and presentation rules.
+        // Resolve tools in the caller's scope so search results respect access rules.
         const schemas = ctx.tools.schemas(exec?.agent, exec?.toolSet).filter((schema) => {
           if (typeof ctx.tools.executable === 'function') {
             return ctx.tools.executable(schema.name, exec?.agent, exec?.toolSet) !== undefined

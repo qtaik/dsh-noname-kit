@@ -10,18 +10,14 @@ import { createSessionState, stateSchema } from './session-state.mjs'
 
 export const name = 'zero-tool-bootstrap'
 
-/** Tool presentation is selected through the current host's tools service. */
 export const inject = ['tools', 'systemPrompt']
 
 
 
-/** Context source kinds suppressed during controlled requests by default. */
 const DEFAULT_SUPPRESSED_SOURCES = ['skill-catalog', 'agent-instructions']
 
-/** Shell tool candidates: custom-bash registers bash; pwsh is available on Windows. */
 const SHELLS = ['bash', 'pwsh']
 
-/** Discovery tools always resident during normal requests (the tool-search pattern). */
 const RESIDENT_DISCOVERY_TOOLS = ['dev_tool_search', 'skill_search', 'skill_load']
 
 function stringListOrEmpty(value, field) {
@@ -40,12 +36,10 @@ function sourceList(value, field, fallback) {
   return new Set(value)
 }
 
-/** Register the per-session bootstrap filters. */
 export async function apply(ctx, config) {
-  // Core work set exposed after a compaction, before re-promotion.
+  // Use the recovery set between compaction and the next assistant message.
   const compactionTools = stringListOrEmpty(config?.compactionTools, 'compactionTools')
-  // Keep the configured development tools resident from the first request.
-  
+
   const residentTools = stringListOrEmpty(config?.residentTools, 'residentTools')
   const suppressedSources = sourceList(config?.suppressedContextSources, 'suppressedContextSources', DEFAULT_SUPPRESSED_SOURCES)
 
@@ -61,7 +55,6 @@ export async function apply(ctx, config) {
     try {
       ctx.logger.warn(message)
     } catch {
-      // Logger unavailable — the guard exists only to avoid spamming.
     }
   }
 
@@ -105,7 +98,8 @@ export async function apply(ctx, config) {
       }
       const available = new Set(tools.map((tool) => tool.name))
       const selectedShells = SHELLS.filter((toolName) => available.has(toolName))
-      const missing = compactionTools.filter((toolName) => !available.has(toolName))
+      // The question card is optional on hosts where only text questions are available.
+      const missing = compactionTools.filter((toolName) => toolName !== 'ask_user_question' && !available.has(toolName))
       if (selectedShells.length === 0 || missing.length > 0) {
         warnOnce(name + ': expected at least one phase shell and every phase tool; '
           + 'shells=' + JSON.stringify(selectedShells) + ', missing=' + JSON.stringify(missing)
@@ -122,17 +116,14 @@ export async function apply(ctx, config) {
 
   if (typeof ctx.tools?.setExecutor === 'function' && typeof ctx.tools?.resolve === 'function'
     && typeof ctx.tools?.executable === 'function') {
-    // 0.2.2+: the selected executor owns declarations. Register on this
-    // preset's standing scope so official scope rebinding handles preset
-    // switches, existing blank sessions, child Agents, and disposal.
+    // DSH 0.2.2+ reads declarations from the selected executor.
+    // Register it in the preset's scope so the host rebinds it when presets change.
     const { NativeToolExecutor } = await import('@deepseek-ai/dsh-tool-executor-native')
     const native = new NativeToolExecutor(ctx)
     const scopes = []
-    // The current host evaluates variables and tool providers synchronously,
-    // in that order, before the asynchronous presentation waterfall. Carry an
-    // assembly-local scope token to describe(), whose API only takes tools.
-    // Reentrant or incomplete assembly must not select another Agent's phase:
-    // ambiguous tokens retain the full scoped catalog, and unused tokens expire.
+    // The host evaluates prompt variables before tool declarations. Pass the agent scope
+    // through a one-use token because describe() receives only the tools. Ambiguous tokens
+    // fall back to the current scope's catalog, and unused tokens expire.
     ctx.systemPrompt.variable('noname_kit_bootstrap_scope', ({ scope }) => {
       const token = { scope }
       scopes.push(token)
@@ -163,7 +154,6 @@ export async function apply(ctx, config) {
   }
 
 
-  // Register the context filter with prepend so it runs as the outermost pre-step transform.
   ctx.on('agent/pre-step', async ({ agent }, next) => {
     const decision = await next()
     if (decision.kind === 'reject') return decision
@@ -186,7 +176,7 @@ export async function apply(ctx, config) {
       })
       return kept.length === selected.messages.length ? selected : { ...selected, messages: kept }
     } catch (error) {
-      // A filter bug must never eat context: degrade to keeping every message.
+      // Keep the host's context if the recovery filter fails.
       warnOnce(`${name}: pre-step context filter failed, keeping injected context: ${String((error && error.message) || error)}`)
       return decision
     }

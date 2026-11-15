@@ -7,7 +7,6 @@ export const PACKAGE_NAME = 'dsh-noname-kit'
 const NPM_REGISTRY = 'https://registry.npmjs.org'
 const GITHUB_API = 'https://api.github.com'
 const CHECK_TIMEOUT_MS = 8000
-/** 6 小时。启动时自动查一次 + 用户手动点,不值得更频繁(GitHub 未登录限流 60 次/小时)。 */
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000
 
 let cache = { at: 0, result: null }
@@ -139,7 +138,6 @@ export async function checkForUpdate({
   force = false,
 } = {}) {
   const install = detectInstall({ dshHome, packageName })
-  /* 在取得远端版本后生成 installHint，使升级指引携带精确版本；各返回分支与缓存均保留对应指引。 */
   const base = {
     current: currentVersion,
     installForm: install.form,

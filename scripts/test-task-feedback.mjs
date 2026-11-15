@@ -331,7 +331,7 @@ await test('done 仅在真正产生 written 节点时重开，未知 retest 名�
   await persisted(home, missing.task)
 
   await tasks.setSkillStatus(home, { taskId: '反馈任务', skill: 'B', status: 'open' })
-  // 明确构造修复前遗留记录；当前 completeById 已同步确认子项，不能再借它制造旧状态。
+  // 直接构造主任务已完成、子项仍待确认的旧记录。
   const legacyRegistry = JSON.parse(await readFile(join(home, 'noname-kit.tasks.json'), 'utf8'))
   const legacyTask = legacyRegistry.tasks.find((task) => task.id === '反馈任务')
   legacyTask.status = 'done'

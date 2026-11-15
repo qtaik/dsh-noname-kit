@@ -1,4 +1,4 @@
-/** Register a Windows-capable bash tool through ctx.subprocess.spawn without requiring a PTY. Resolve bashPath explicitly or locate bash through PATH. Each command uses a fresh bash -c process with bounded output and reported exit status. Windows execution does not provide sandbox confinement. */
+/** Each Git Bash call starts a separate process without a PTY or OS sandbox on Windows. */
 
 import { posix, win32 } from 'node:path'
 import { ensureWorkingDirectory } from './working-directory.mjs'
@@ -6,22 +6,14 @@ import { ensureWorkingDirectory } from './working-directory.mjs'
 
 export const name = 'custom-bash'
 
-/** The subprocess and tools services must exist before this tool can register. */
 export const inject = ['subprocess', 'tools', 'dshHomePath']
 
 const DEFAULT_TIMEOUT_MS = 120000
-/** 出厂默认 64K:阀门太小会把任务逼成更多次小调用,总上下文消耗反而更大。
- * 用户可在工坊「⚙ 设置」页按预算调节;会话挂载时读一次,会话内恒定。 */
 const DEFAULT_MAX_OUTPUT_BYTES = 64000
 const MIN_MAX_OUTPUT_BYTES = 64000
 const MAX_MAX_OUTPUT_BYTES = 256000
 
-/**
- * Read `bashMaxOutputBytes` from the workshop settings file
- * (`<dsh-home>/noname-kit.json`, written by the workshop ⚙ settings page).
- * Precedence: row config > this file > DEFAULT. Any absence/malformation
- * falls through silently — settings must never block a session mount.
- */
+/** An unreadable workshop settings file falls back to defaults so the session can mount. */
 function workshopMaxOutputBytes(ctx) {
   try {
     const homeBase = typeof ctx.dshHomePath === 'function' ? ctx.dshHomePath() : (ctx.dshHomePath || undefined)
@@ -32,11 +24,10 @@ function workshopMaxOutputBytes(ctx) {
     const saved = JSON.parse(readFileSync(file, 'utf8'))
     const v = Number(saved && saved.bashMaxOutputBytes)
     if (Number.isSafeInteger(v) && v >= MIN_MAX_OUTPUT_BYTES && v <= MAX_MAX_OUTPUT_BYTES) return v
-  } catch { /* no file / bad JSON — fall through to default */ }
+  } catch { }
   return undefined
 }
 
-/** Tool parameter schema for the model-facing command. */
 const commandSchema = {
   type: 'object',
   properties: {
@@ -53,7 +44,6 @@ const commandSchema = {
   additionalProperties: false,
 }
 
-/** Windows 上 Git Bash 的常见安装位置;都未命中时回退 PATH 里的 bash。 */
 function detectGitBash() {
   try {
     const { existsSync } = process.getBuiltinModule('node:fs')
@@ -65,7 +55,7 @@ function detectGitBash() {
       ...(localAppData ? [join(localAppData, 'Programs', 'Git', 'bin', 'bash.exe')] : []),
     ]
     for (const candidate of candidates) if (existsSync(candidate)) return candidate
-  } catch { /* 探测失败就回退 PATH */ }
+  } catch { }
   return 'bash'
 }
 
@@ -235,11 +225,10 @@ function readOutput(handle, channel) {
   }
 }
 
-/** Register the model-facing `bash` tool. */
 export function apply(ctx, config) {
   const bashPath = typeof config?.bashPath === 'string' && config.bashPath.length > 0 ? config.bashPath : detectGitBash()
   const timeoutMs = Number.isSafeInteger(config?.timeoutMs) && config.timeoutMs > 0 ? config.timeoutMs : DEFAULT_TIMEOUT_MS
-  // Precedence: row config (advanced, hand-edited yml) > workshop settings page > default.
+  // Fixed per session at mount. Preset config overrides the workshop setting.
   const maxOutputBytes = Number.isSafeInteger(config?.maxOutputBytes) && config.maxOutputBytes > 0
     ? config.maxOutputBytes
     : (workshopMaxOutputBytes(ctx) ?? DEFAULT_MAX_OUTPUT_BYTES)
@@ -269,7 +258,6 @@ export function apply(ctx, config) {
       render: (_args, value) => [{ type: 'text', text: value.text }],
     },
     async execute(args, exec) {
-      // 全盘检索闸:先于执行判断,拒绝时把替代做法写给模型(见 rootSearchIssue)
       const guard = rootSearchIssue(args.command)
       if (guard) throw new Error('已拒绝执行(全盘检索闸): ' + guard)
       const controller = new AbortController()

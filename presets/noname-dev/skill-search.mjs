@@ -1,11 +1,10 @@
-/** Discover and load skills on demand. skill_search returns bounded name and description matches; skill_load reads one exact skill and injects it for the next request through agent.inject. Discovery is scoped to the calling agent. Do not mount dsh-tool-skill alongside this replacement, because it injects the full catalog. */
+/** Discover skills within the calling agent's scope and load them by exact name. The stock skill plugin injects the full catalog, so this preset mounts these tools separately. */
 
 import { ensureWorkingDirectory } from './working-directory.mjs'
 
 
 export const name = 'skill-search'
 
-/** The agent, tools, and skills services must exist before these tools can register. */
 export const inject = ['agents', 'tools', 'skills']
 
 const MAX_RESULTS = 20
@@ -35,7 +34,6 @@ function searchTokens(query) {
 }
 
 
-/** Minimal JSON schema compiler for tool parameters (zero dependencies). */
 function toJsonSchema(spec) {
   const properties = {}
   const required = []
@@ -48,7 +46,6 @@ function toJsonSchema(spec) {
   return { type: 'object', properties, required, additionalProperties: false }
 }
 
-/** Register the two on-demand skill tools. */
 export function apply(ctx) {
   ctx.tools.register({
     name: 'skill_search',
@@ -144,8 +141,7 @@ export function apply(ctx) {
         }
         const body = await renderSkill({ ...skill, name: skill.name ?? args.name, provider: skill.provider ?? 'legacy', content })
         checkSignal(exec?.signal)
-        // Queue the skill content as a non-waking next-step context message,
-        // exactly like dsh-tool-skill's invocation injection.
+        // Queue the content for the next request without waking the agent.
         agent.inject({
           id: `skill-load-${args.name}-${Date.now()}`,
           role: 'user',
@@ -160,7 +156,6 @@ export function apply(ctx) {
   })
 }
 
-/** Extract the model-facing body of a loaded skill definition. */
 function extractSkillBody(skill) {
   const content = skill?.content ?? skill?.instructions ?? skill?.body
   if (typeof content === 'string') return content

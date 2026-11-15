@@ -1,8 +1,5 @@
-# dsh-noname-kit bundle patch。
-# 通过 `dsh plugin --profile <name> add dsh-noname-kit` 安装时,本文件作为 bundle
-# 配置层自动插入。nonameDir 是无名杀游戏本体目录(含 extension/ 的那层);
-# 不配置则为"仅生成模式"；开发工具仅在无名杀预设开放，扩展读写需有效游戏目录。
-# 用户可在自己 profile 的 cordis.patch.yml 里用同 id 行覆盖整行 config:
+# 插件安装时加载此配置。nonameDir 指向包含 extension/ 的游戏目录。留空时只生成源码。
+# 在个人 profile 的 cordis.patch.yml 中用相同 id 覆盖 config。
 #   - id: noname-kit
 #     name: dsh-noname-kit
 #     config:
@@ -13,15 +10,9 @@
       config:
         nonameDir: ''
 
-    # ── 「无名杀开发模式」preset(DSH 0.1.7+ 声明式)─────────────────────────
-    # 0.1.7 起 agent preset 改为 YAML 声明(不再扫描 ~/.dsh/.agent-presets 目录),
-    # 本行随插件加载自动就位、随插件更新,无需安装/重装。
-    # 0.1.6 及以下没有 @deepseek-ai/dsh-agent-preset 包:disabled 探测表达式解析
-    # 不到该包即整行禁用,目录式 preset(install-preset 装的那份)继续生效,两套互不干扰。
-    # 插件自有脚本一律用「包名子路径」引用(经 exports ./presets/noname-dev/* 导出),
-    # 技能目录用 !!js 从 baseUrl 相对解析——任何安装形态(npm/link/路径)都可移植。
-    # 注意:persona 正文与 presets/noname-dev/agent.cordis.yml(0.1.6 目录式那份)
-    # 必须保持一致,两处由 test-preset 的同步用例把关,改任一处都要同步另一处。
+    # 支持 dsh-agent-preset 的宿主随插件加载声明式预设。旧宿主使用已安装的目录式预设。
+    # 脚本通过包的 exports 定位，技能目录相对 baseUrl 定位，两者兼容 npm 安装和本地链接。
+    # test-preset 检查此处的 persona 与 presets/noname-dev/agent.cordis.yml 一致。
     - id: preset-noname-dev
       name: '@deepseek-ai/dsh-agent-preset'
       disabled: !!js (() => { try { process.getBuiltinModule('node:module').createRequire(String(baseUrl)).resolve('@deepseek-ai/dsh-agent-preset/package.json'); return false } catch { return true } })()
@@ -43,7 +34,11 @@
               prefix: >-
                 你是无名杀(Noname)扩展开发工程师，目标是完成用户要求的武将、卡牌或游戏模式，并减少实际游戏中的错误。
                 开始开发、审查或排错前，用 skill_load 加载 noname-extension-dev；同一会话已读且内容未变时复用。它是开发流程和专业规范的主来源，任务消息提供本次目标、素材与写入方式，工具说明规定实际参数与限制。
-                只读讨论按用户要求答复。需求完整且用户已明确要求制作或修复时，简述理解后执行；工坊提交是对表单需求的执行请求。有玩法歧义、缺少关键决定、用户仅要求讨论或方案尚未选定时，先澄清或等待选择；已有授权和澄清结果足以确定方案时，不再要求额外回复「确认」。同一方案的继续实现和反馈修复直接推进，新玩法取舍或明显扩大范围时再问。
+                只读讨论按用户要求答复。接到新建武将、卡牌、模式或修改已有玩法的任务时，确认前可以只读查阅现有扩展、同类官方实现和当前引擎。
+                逐技能或逐条规则核对需求，列出完整的【需求理解确认】清单。已明确的内容写成简明的玩法结论。只有现有信息无法确定、且不同答案会改变玩法的内容，才在对应条目下标为「待确认」。
+                使用 ask_user_question 集中问清待确认项。宿主无法提供提问工具时用文字提问。收到答复后更新对应条目，给出完整的最终清单。没有待确认项时，直接给出完整清单。
+                给出最终清单后停下来，等待用户明确回复「确认」。单独回答澄清问题只代表该项已经明确。收到对最终清单的确认后，才开始编写和写入代码。
+                已确认方案内的错误修复按原规则继续。需要改变玩法或扩大范围时，列出变更部分并等待用户明确回复「确认」。
                 先读已有代码，查相似实现和当前引擎的实际用法，再编写代码；可组合参考，复用源码未变的已核实结论，证据足够后停止扩查。不能凭记忆编造接口，也不能将未搜到说成不存在。无法核实时说明具体缺口。
                 修改范围限于本次目标、勾选技能及完成需求必需的直接关联代码；先核对归属和必要性，保留无关条目，不顺带重构或新增玩法。扩展源码使用 noname_write_extension，素材使用对应复制工具；遵守手动方式、宿主权限、预算、超时与取消，不绕过写入保护。
                 按实际文件校验并核对玩法；完成后只登记本轮实际实现或修改的任务节点，保留其他节点状态。区分源码完成、静态检查和游戏实测，按证据说明结果。
@@ -69,8 +64,8 @@
             name: dsh-noname-kit/presets/noname-dev/zero-tool-bootstrap.mjs
             config:
               suppressedContextSources: [agent-instructions, skill-catalog]
-              residentTools: [noname_list_catalog, noname_read_catalog, noname_search_reference, noname_validate, noname_read_extension, noname_write_extension, noname_skills_written, noname_copy_images, noname_copy_audio, noname_copy_videos]
-              compactionTools: [read, glob, grep, dev_tool_search, skill_search, skill_load, noname_list_catalog, noname_read_catalog, noname_search_reference, noname_validate, noname_read_extension, noname_write_extension, noname_skills_written, noname_copy_images, noname_copy_audio, noname_copy_videos]
+              residentTools: [ask_user_question, noname_list_catalog, noname_read_catalog, noname_search_reference, noname_validate, noname_read_extension, noname_write_extension, noname_skills_written, noname_copy_images, noname_copy_audio, noname_copy_videos]
+              compactionTools: [read, glob, grep, dev_tool_search, skill_search, skill_load, ask_user_question, noname_list_catalog, noname_read_catalog, noname_search_reference, noname_validate, noname_read_extension, noname_write_extension, noname_skills_written, noname_copy_images, noname_copy_audio, noname_copy_videos]
 
           - id: tool-bash
             name: '@deepseek-ai/dsh-tool-bash'
@@ -84,10 +79,8 @@
             name: dsh-noname-kit/presets/noname-dev/custom-bash.mjs
             disabled: !!js process.platform !== 'win32'
             config:
-              # Git Bash 路径自动探测(Program Files / (x86) / LOCALAPPDATA);非标准安装请显式指定:
-              #   bashPath: 'D:/Git/bin/bash.exe'
-              # bash 单次输出上限(阀门)在工坊「⚙ 设置」页调节(默认 64K,可调 64~256K);
-              # 高级用户也可在此手改: maxOutputBytes: 64000(行配置优先于设置页)。
+              # 非标准 Git Bash 安装可指定 bashPath，例如 'D:/Git/bin/bash.exe'。
+              # 此处设置的 maxOutputBytes 优先于工坊设置。
 
           - id: tool-fs
             name: '@deepseek-ai/dsh-tool-fs'

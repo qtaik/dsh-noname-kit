@@ -1,9 +1,6 @@
 /**
- * 保存武将、卡牌和模式任务的需求、技能状态、素材及反馈。
- * 技能状态按 open → written → confirmed 流转，反馈后回到 open。
- * 全部技能确认且所需素材齐全后自动完成；新建武将和卡牌需要图片，编辑任务和模式不要求图片。
- * 已登记的配音必须全部复制到位；模式规则可通过 skills_written 动态登记。
- * 删除任务仅移除登记记录，保留扩展源码、备份和历史。
+ * 管理武将、卡牌和模式任务的需求、交付状态与反馈。
+ * 技能状态依次为 open、written、confirmed，提交反馈后回到 open。
  */
 import { readJsonSafe, writeJsonAtomic } from './store.js'
 import { join } from 'node:path'
@@ -59,9 +56,8 @@ function newSkill(item) {
 
 function touch(task) { task.updatedAt = Date.now() }
 
-/** 全部技能 confirmed 且登记的图片与配音交付完整时自动完成。编辑已有条目的任务豁免图片条件；登记 N 条配音源路径时要求至少交付 N 个目标文件，未登记配音时不增加完成条件。 */
+/** 已确认技能且登记素材齐全后可完成任务。编辑条目和模式无需立绘或卡图。 */
 function isCompletable(task) {
-  // 🎲 mode 任务:无预登记图片(模式扩展无立绘/卡图需求),图片条件豁免(同 target 编辑任务)
   const imageOk = task.target || task.type === 'mode' ? true : Boolean(task.image)
   const audioOk = task.skills.every((s) =>
     !(Array.isArray(s.audios) && s.audios.length) ||
@@ -76,12 +72,11 @@ function descriptionOf(skills) {
 }
 
 /**
- * 创建任务。ID 全局唯一;character 任务带 skills 分叉;card 任务单节点。
- * skills: [{name, desc}];card 类型自动生成单节点。
- * target 可选 { kind: 'character'|'card', id }:「编辑已有条目」任务,非法值归 null。
- * writeMode:'manual' 存手动,其余归 'auto'——写入工具以此为准(AI 传参不覆盖)。
+ * 任务 ID 在登记处唯一。武将使用技能清单，卡牌生成单个节点。
+ * target 标记编辑已有条目。packageMeta 记录新包需求，名称取目标目录名。
+ * 写入工具以登记的 writeMode 为准。
  */
-export async function createTask(dshHome, { id, folder, type, title, charInfo, newFaction, portraitVideo, pile, skills, image, dieAudios, target, writeMode, modeBrief, modeNum, modeWin, modeRules }) {
+export async function createTask(dshHome, { id, folder, packageMeta, type, title, charInfo, newFaction, portraitVideo, pile, skills, image, dieAudios, target, writeMode, modeBrief, modeNum, modeWin, modeRules }) {
   if (typeof id !== 'string' || !ID_RE.test(id.trim())) {
     return { ok: false, error: `任务ID「${id}」不合法:只允许中文/字母/数字/下划线/连字符,长度 1-64。` }
   }
@@ -89,14 +84,24 @@ export async function createTask(dshHome, { id, folder, type, title, charInfo, n
     return { ok: false, error: `扩展文件夹名「${folder}」不合法。` }
   }
   const cleanId = id.trim()
+  let metadata
+  if (packageMeta != null) {
+    if (target || typeof packageMeta !== 'object' || Array.isArray(packageMeta) ||
+        ['author', 'intro', 'version'].some(key => packageMeta[key] != null && typeof packageMeta[key] !== 'string')) {
+      return { ok: false, error: '扩展包信息只能用于新建包，作者、简介和版本须为文本。' }
+    }
+    metadata = {
+      name: folder.trim(),
+      author: (packageMeta.author ?? '').trim(),
+      intro: (packageMeta.intro ?? '').trim(),
+      version: (packageMeta.version ?? '').trim() || '1.0',
+    }
+  }
   const registry = await readRegistry(dshHome)
   if (registry.tasks.some((t) => t.id === cleanId)) {
     return { ok: false, error: `任务ID「${cleanId}」已存在,换一个(或加上日期/序号)。` }
   }
-  // 🎲 mode = 自定义游戏模式任务:新玩法规则节点由 AI 在 skills_written 时动态登记
-  // (自由描述无法预先拆规则),创建模式初始 skills 为空;编辑模式把用户填的
-  // 「模式骨架改动/新增或调整的规则」预置为节点(带内容,任务树可见、逐条确认),
-  // dynamicSkills 置真使 AI 回传的其他规则节点也能动态登记
+  // 模式任务可预填规则，其他规则可在回传实现结果时登记。
   const taskType = type === 'card' ? 'card' : type === 'mode' ? 'mode' : 'character'
   const skillList = taskType === 'mode'
     ? (Array.isArray(skills) && skills.length ? skills.map(newSkill) : [])
@@ -116,6 +121,13 @@ export async function createTask(dshHome, { id, folder, type, title, charInfo, n
       return { ok: false, error: '新势力需要名称（不超过 60 字）和图片路径（不超过 500 字）。' }
     }
     faction = { name: newFaction.name.trim(), image: newFaction.image.trim() };
+    const color = typeof newFaction.color === 'string' ? newFaction.color.trim() : newFaction.color;
+    if (color != null && color !== '') {
+      if (typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)) {
+        return { ok: false, error: '势力颜色须为六位十六进制 RGB，例如 #6688AA。' }
+      }
+      faction.color = color.toUpperCase();
+    }
   }
   const characterVideoAllowed = taskType === 'character' && (!target || taskTarget?.kind === 'character');
   if (characterVideoAllowed && portraitVideo != null && portraitVideo !== '') {
@@ -130,6 +142,7 @@ export async function createTask(dshHome, { id, folder, type, title, charInfo, n
     type: taskType,
     target: taskTarget,
     title: String(title || '').slice(0, 60),
+    ...(metadata ? { packageMeta: metadata } : {}),
     charInfo: String(charInfo || '').slice(0, 500),
     newFaction: faction,
     portraitVideo: video,
@@ -138,7 +151,6 @@ export async function createTask(dshHome, { id, folder, type, title, charInfo, n
     dieAudios: cleanAudioPaths(dieAudios),
     dieAudioFiles: [],
     skills: skillList,
-    // 🎲 mode 专属:需求四要素留档 + 动态规则节点标志(skills_written 据此放行回传规则名)
     dynamicSkills: taskType === 'mode',
     modeBrief: taskType === 'mode' ? String(modeBrief || '').slice(0, 300) : '',
     modeNum: taskType === 'mode' ? String(modeNum || '').slice(0, 10) : '',
@@ -163,7 +175,6 @@ export async function listTasks(dshHome, { openOnly } = {}) {
   return list.slice().sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
-/** 按 ID 取任务;不存在返回 null。 */
 export async function getTask(dshHome, taskId) {
   const registry = await readRegistry(dshHome)
   return registry.tasks.find((t) => t.id === taskId) || null
@@ -245,9 +256,10 @@ export async function setSkillStatus(dshHome, { taskId, skill, status }) {
   return { ok: true, autoCompleted, task, confirmed, total: task.skills.length }
 }
 
-/** AI 写入完成:把本轮技能标为 written(待测试)，保留已确认状态；实际修改的已确认技能须用 retestSkills 明确重新待测。
- * 可携带引擎级注意点(合并去重存任务)。
- *  🎲 mode 任务(dynamicSkills)的规则节点由 AI 回传时动态登记——自由描述无法预先拆规则。 */
+/**
+ * 已确认的技能默认保留状态。确有修改时通过 retestSkills 将其重新标为待测试。
+ * 模式允许在此追加规则节点。引擎注意事项合并去重。
+ */
 export async function markSkillsWritten(dshHome, { taskId, skills, notes, retestSkills = [] }) {
   const registry = await readRegistry(dshHome)
   const task = registry.tasks.find((t) => t.id === taskId)

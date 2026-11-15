@@ -7,8 +7,7 @@ globalThis.require=createRequire(import.meta.url);
 const clone=x=>JSON.parse(JSON.stringify(x)),H='1'.repeat(64),D='2'.repeat(64);
 const scope=(id,generation=3)=>({sessionId:'party',roundId:'round',documentGeneration:generation,bindingId:'binding-'+id,bindingNonce:'nonce-'+id,expectedOrigin:'http://localhost:8089'});
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
-// Both official versions have this identical 1054-byte method. It is inspected,
-// never executed; these fixtures do not simulate actual native settlement PASS.
+// The two supported official versions share this avatar method. The fixture uses it to verify admission.
 class NativeAvatarPlayer {
   setAvatar(name2, name22, video, fakeme) {
     var node;
@@ -65,8 +64,7 @@ const identityMethodSources={
 const identityCallback='_noname_func:function () {\n              if (game.showIdentity) {\n                game.showIdentity();\n              }\n              if (game.zhu && game.zhu.isAlive() && get.population("nei") === 1 && get.config("nei_fullscreenpop")) {\n                game.me.$fullscreenpop(\'<span style="font-family:xinwei"><span data-nature="fire">主公</span><span data-nature="soil"> vs </span><span data-nature="thunder">内奸</span></span>\', null, null, false);\n              }\n            }';
 const identityCallback6=identityCallback.replace(/\n  /g,'\n');
 const nativeDeleteSource='function(time = 500, callback) {\n  if (this.timeout) {\n    clearTimeout(this.timeout);\n    delete this.timeout;\n  }\n  if (!this._listeningEnd || this._transitionEnded) {\n    if (typeof time != "number") {\n      time = 500;\n    }\n    this.classList.add("removing");\n    this.timeout = setTimeout(() => {\n      this.remove();\n      this.classList.remove("removing");\n      if (typeof callback == "function") {\n        callback();\n      }\n    }, time);\n  } else {\n    this._onEndDelete = true;\n  }\n  return this;\n}';
-// No Electron, actual DOM, transport, timers or native settlement runs here.
-// The reviewed callback/method bodies execute only against these memory objects.
+// The identity callback and engine methods run against in-memory DOM and timer fixtures.
 function identityFixture(version='1.11.6',popup=false,hostVersion=version){
  const timers=[],created=[],document={},window={getComputedStyle:()=>({getPropertyValue:()=>''})};
  class Node {

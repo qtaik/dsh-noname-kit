@@ -94,8 +94,7 @@ export function apply(ctx, config) {
   const readSettingsFile = () => readJsonSafeSync(settingsPath, {})
   const saved = readSettingsFile()
 
-  // 取第一个"有效"的来源:行配置 > 向导保存值;行配置无效时回落到向导值,
-  // 这样换机/配错后用户在工坊向导里点一下就能修复,不用改 yml。
+  // 优先使用有效的行配置，行配置无效时读取工坊保存的目录。
   const rowDir = config.nonameDir ? resolve(config.nonameDir) : ''
   const savedDir = saved.nonameDir ? resolve(saved.nonameDir) : ''
   let nonameDir = isValidGameDir(rowDir) ? rowDir : (isValidGameDir(savedDir) ? savedDir : (rowDir || savedDir || ''))
@@ -104,9 +103,7 @@ export function apply(ctx, config) {
     console.warn(`[noname-kit] ⚠️ cordis.yml 里的 nonameDir 不是有效的无名杀目录(缺少 extension/ 等): ${rowDir}`)
   }
 
-  /** 校验并热切换当前游戏目录;返回 { error?, adjustedFrom? }。
-   * 小白高频误填:结尾多带一层 \extension(真正要填的是 extension/ 所在的上一层)。
-   * 该情形自动剥掉并记入 adjustedFrom,由调用方在成功响应里提示。 */
+  /** 校验并热切换游戏目录。若路径指向 extension/，使用其上级并返回 adjustedFrom。 */
   const setActive = (dir) => {
     dir = String(dir || '').trim()
     if (!dir) return { error: '路径为空' }
@@ -773,18 +770,12 @@ export function apply(ctx, config) {
     path: '/noname-kit-api',
     handler: async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://x')
-      /* json 使用可提升的函数声明，供前面的 CSRF 拒绝分支直接返回 403。 */
       function json(status, body) {
         const bodyText = JSON.stringify(body)
         res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
         res.end(bodyText)
       }
-      /* 同源防护(CSRF / DNS rebinding):本接口能改游戏目录、删任务、回滚文件、
-       * 往游戏内核下发命令,却只监听回环——浏览器里打开的任何恶意页面都能用
-       * 简单请求(表单/text-plain)打到 127.0.0.1:<端口>。实际对端必须是回环，
-       * 读写请求均校验 Origin；非 GET 还要求 JSON。来源可疑直接 403。
-       * 注意:内核的 /online/bridge 轮询来自游戏页(location.origin 是游戏服务),
-       * 不是普通网页——它带 token,单独放行在下面的分支里。 */
+      /* 工坊接口校验请求对端、Host 或 Origin 及内容类型，限制跨站和 DNS 重绑定请求。游戏心跳另有本地来源和 token 校验。 */
       const isLoopbackName = (h) => h === '127.0.0.1' || h === 'localhost' || h === '[::1]' || h === '::1'
       const originName = (o) => { try { return new URL(o).hostname } catch { return '' } }
       // Headers cannot authenticate the transport peer. The game bridge is also
@@ -801,10 +792,7 @@ export function apply(ctx, config) {
           return json(403, { ok: false, error: '仅接受本机游戏页面的心跳(Origin 校验未通过)' })
         }
       }
-      /* GET 也要挡 DNS rebinding:恶意的 evil.com 解析到 127.0.0.1 后,浏览器会带
-       * Host: evil.com 打这些只读接口——/online/status 里有房号与邀请码正文、
-       * /extension 有扩展源码、/tasks 有任务登记。只认「IP 字面量或 localhost」的
-       * Host:局域网用 IP 访问照常,域名访问被拒(文案里说清怎么办) */
+      /* GET 请求提供 Host 时，仅接受 IP 字面量或本机名称，防止域名重绑定后读取工坊数据。 */
       if (req.method === 'GET') {
         const hostName = String(req.headers.host || '').replace(/:\d+$/, '')
         const ipLiteral = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostName) || /^\[[0-9a-fA-F:]+\]$/.test(hostName)
@@ -822,13 +810,11 @@ export function apply(ctx, config) {
             return isLoopbackName(u.hostname) && u.host === host
           } catch { return false }
         }
-        /* 无 Origin(非浏览器)不等于可信:DSH 支持绑 0.0.0.0(手机/局域网访问),
-         * 那时同网段脚本可无 Origin 直接调这些接口改游戏目录/回滚文件/下发内核
-         * 命令。非浏览器请求再叠一层"来源必须是回环"判定 */
+        /* 无 Origin 的本机请求允许继续。前面的 socket 检查已拒绝远程对端。 */
         if (!allowed(origin)) {
           return json(403, { ok: false, error: '仅接受来自本机工坊页面的请求(Origin 校验未通过)' })
         }
-        /* 简单请求绕过预检的另一个口子:content-type 不是 JSON 的 POST 也拒 */
+        /* 非 GET 请求显式声明内容类型时，仅接受 application/json。 */
         const ctype = String(req.headers['content-type'] || '')
         if (req.method !== 'GET' && ctype && !ctype.includes('application/json')) {
           return json(415, { ok: false, error: '请求必须是 application/json' })
@@ -846,7 +832,7 @@ export function apply(ctx, config) {
           chunks.push(chunk)
         }
         const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
-        /* 归一:null/数组/标量一律当空对象,别让它变成 500 */
+        // JSON 根节点不是对象时，按空请求处理。
         return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
       }
       try {
@@ -1113,9 +1099,7 @@ export function apply(ctx, config) {
           return json(result.ok ? 200 : 400, { ...result, version: bundledKernelVersion() })
         }
         if (req.method === 'GET' && url.pathname === '/noname-kit-api/online/avatars') {
-          // 人物标识的头像下拉:直接扫游戏目录(自带包+扩展包),不依赖游戏运行。
-          // 扫全盘 1 秒级,缓存 5 分钟(空结果 30 秒重试,兼容目录还没就绪)。
-          // 失败也计冷却:否则面板每次重挂都触发全盘重扫
+          // 头像从本机游戏目录读取，不依赖游戏运行。缓存空结果和失败以限制重扫频率。
           const ttl = avatarsCache.list && avatarsCache.list.length ? 5 * 60_000 : 30_000
           const dirChanged = avatarsCache.dir !== (nonameDir || '')
           if (dirChanged || !avatarsCache.at || Date.now() - avatarsCache.at > ttl) {
@@ -1236,8 +1220,7 @@ export function apply(ctx, config) {
           catch (error) { return json(400, { ok: false, error: error.message }) }
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/blocks/migrate') {
-          // 锚点化迁移:只由用户在工坊手动触发,AI 侧没有任何工具能调它。
-          // 多文件包:遍历全部 .js,对含条目的文件逐个锚点化(壳文件自动跳过)
+          // 区块索引由工坊手动触发，逐个处理含可识别条目的 JavaScript 文件。
           if (!active) return json(503, { ok: false, error: 'noname-kit 未配置 nonameDir' })
           const body = await readBody()
           try {

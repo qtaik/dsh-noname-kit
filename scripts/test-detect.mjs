@@ -34,7 +34,7 @@ try {
   const r1 = await detectCandidates([home])
   ok(r1.includes(deep), 'decade 深层结构(第 6 层)能扫到')
 
-  // ── 2) 常规浅层结构(回归:别把老行为改坏) ──
+  // ── 2) 常规浅层 resources/app 结构 ──
   const shallow = join(home, '无名杀', 'resources', 'app')
   makeGameRoot(shallow)
   const r2 = await detectCandidates([home])
@@ -46,19 +46,19 @@ try {
   const r3 = await detectCandidates([home])
   ok(!r3.includes(unrelated), '非 noname 名字的深层游戏目录不扫描(剪枝保留)')
 
-  // ── 3.5) 安装路径中间有壳目录名(game):不能被 SKIP 误伤(与 noname 同型漏洞) ──
+  // 壳目录 game 仍需进入，才能找到更深处的游戏根。
   const viaGame = join(home, 'game', 'noname', 'resources', 'app')
   makeGameRoot(viaGame)
   const r35 = await detectCandidates([home])
   ok(r35.includes(viaGame), '安装路径中间的 game 文件夹不再被 SKIP 误伤')
 
-  // ── 3.8) 壳目录链(无名字匹配祖先):src 进壳清单后新解锁的路径 ──
+  // 普通目录下的 resources/app/src 链也能定位到游戏根。
   const viaShell = join(home, '某游戏', 'resources', 'app', 'src')
   makeGameRoot(viaShell)
   const r38 = await detectCandidates([home])
   ok(r38.includes(viaShell), '壳目录链(某游戏/resources/app/src)能扫到')
 
-  // ── 3.9) rootsOverride 传空数组 = 明确不扫任何根(与不传参走默认根区分) ──
+  // 空的 rootsOverride 表示没有扫描起点。
   const r39 = await detectCandidates([])
   ok(Array.isArray(r39) && r39.length === 0, 'rootsOverride 空数组:不扫默认盘符根')
 

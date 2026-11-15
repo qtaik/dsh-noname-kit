@@ -1,13 +1,7 @@
 /**
- * noname-kit 官方参考搜索 v2。
- *
- * 移植「全能搜索」扩展的搜索思想到文件级:
- * 1. 一次性建目录索引:扫描源码里的 `lib.translate.<id> = '中文名'` 与 `<id>_info = '描述'`,
- *    以及 translate/character 对象内的中文键值对,得到 ID → 中文名/描述 的映射
- *    (官方包与 extension/ 下用户扩展都在索引里)
- * 2. 中文归一化匹配(全角→半角、小写、去空格),多关键词 AND;ID 精确匹配权重最高
- * 3. 命中 ID 后,在源码里做花括号配对提取,返回完整的技能/武将/卡牌定义对象
- * 4. 普通文件按关键词评分兜底；大文件使用固定内存分块搜索，并返回明确覆盖范围和续搜位置
+ * 官方实现与已安装扩展的源码检索，借鉴「全能搜索」的匹配方式。
+ * 优先按条目 ID、译名和描述索引定位。未命中时按源码关键词检索。
+ * 大文件分段读取，返回覆盖范围和后续读取位置。
  */
 import { readdir, lstat, open } from 'node:fs/promises'
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
@@ -129,10 +123,7 @@ function excerptAround(text, offset) {
   return numberedExcerpt(text.slice(start, end), lineOf(text, start))
 }
 
-/**
- * 在源文件里提取某个 ID 的完整定义块(花括号配对;字符串内括号按普通字符计数的
- * 误差在实践中罕见,失败时调用方退回行窗口)。
- */
+/** 尝试按花括号边界提取定义。匹配不区分注释或字符串，失败时由调用方回退到行窗口。 */
 function extractDefinition(text, relFile, id) {
   const patterns = [
     new RegExp(`${id}\\s*:\\s*\\{`),
@@ -395,7 +386,6 @@ function searchIndexed(index, raw, maxMatches) {
   const qGrams = bigramsOf(qClean)
   if (qGrams.size >= 3) {
     const existIds = new Set(matches.map((m) => m.id).filter(Boolean))
-    /* 结果列表使用 let，允许后续按 limit 截断时重新赋值。 */
     let simHits = []
     for (const [id, entry] of index.byId) {
       if (!entry.name && !entry.info) continue

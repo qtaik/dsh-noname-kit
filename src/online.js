@@ -11,14 +11,12 @@ import { installKernelFiles, bindKernelBridgeFiles, kernelContentHash, kernelIns
 
 export const KERNEL_FOLDER = '联机助手'
 export const KERNEL_MANIFEST = '.nnk-kernel.json'
-/** 命令在队列里的最长等待:内核 0.7s 一轮,60s 足够宽裕;过期丢弃防陈旧命令误执行。 */
+/** 过期命令从队列移除，避免内核恢复心跳后执行陈旧命令。 */
 const COMMAND_TTL_MS = 60_000
-/** bridge.snapshot() 里 online 的判定窗口(内核 0.7s 一轮,3 秒没消息即视为离线)。 */
 const ONLINE_WINDOW_MS = 3000
-/* 为游戏页面重载保留 30 秒房间状态宽限；超时后快照不再下发 state 与 role，避免显示已结束的房间。 */
+/* 页面重载期间，房间状态保留到宽限期结束。 */
 const ROOM_STATE_GRACE_MS = 30_000
 
-/** 插件包内自带的内核源目录(唯一真源)。 */
 export function bundledKernelDir() {
   return fileURLToPath(new URL('../online-kernel/', import.meta.url))
 }
@@ -90,14 +88,11 @@ export function kernelStatus({ nonameDir, token }) {
   let installedHash
   try { installedHash = hashKernelDir(target) }
   catch (error) { return { state: 'stale', error: '读取已安装内核失败: ' + error.message, bundledHash } }
-  /* 内核心跳绑定在哪个 dsh(装它时写入的 baseUrl)——双 dsh 共管一个游戏目录时,
-   * 心跳只发绑定方,另一方会显示离线,这个字段让绑定关系可见 */
+  /* 多个 DSH 实例管理同一游戏目录时，只有绑定地址接收心跳。 */
   let boundApi = null
   /* 比较内核持有的 token 与当前插件 token，向界面提供 tokenMatches，以区分令牌失配与普通离线。 */
   let tokenMatches = null
-  /* 桥配置在不在:内容哈希刻意跳过 nnk-bridge.json(安装时写入、不属于内核内容),
-   * 所以它丢了/坏了 state 照样报 ok——而心跳全靠它,表现只有「内核永久离线」,
-   * 界面用 missing/invalid 区分缺失或无效配置，并提供显式重新绑定入口。 */
+  /* 桥接配置不参与内核哈希，因此独立报告配置缺失或无效。 */
   let bridgeConfig = 'missing'
   try {
     const bridgeCfg = JSON.parse(readFileSync(join(target, 'nnk-bridge.json'), 'utf8'))
@@ -289,8 +284,7 @@ export function createBridgeSession({ token, syncSource }) {
         transferPaused: session.transferPaused,
         transferProtocol: session.transferProtocol,
         bootStage: session.bootStage,
-        /* 角色/房间状态只在心跳还热时下发:游戏关掉后房间随即从工坊消失,
-         * 不会永远挂着最后一拍的房号;cfg 保留(身份回填/离线保存仍可用) */
+        /* 房间状态可在离线判定后短暂保留，便于游戏页面重载。 */
         role: stateFresh ? session.role : '',
         state: stateFresh ? session.state : null,
         cfg: session.cfg,

@@ -34,8 +34,7 @@ async function connected(mode,profiles={}){
  async function close(){for(const k of runtimes)k.runtime.dispose();for(const k of runtimes){for(const r of k.runtime.sessions.snapshot())k.runtime.sessions.getOwner(r.peerId)?.stopTransport('fixture cleanup');k.runtime.lobby.publication?.endAndClearRetained('fixture cleanup');for(const a of [...k.runtime.connector.attempts])a.closeUnentered('fixture cleanup');}await f.close();}
  return {f,host,guest,join,close};
 }
-// Real carrier/coordinator/operation-port code; native documents and settlement
-// observations below are deterministic fixtures, not native or physical two-machine coverage.
+// Simulated documents supply settlement observations to the real operation port.
 function simulatedDocuments(f){
  const adapters=[];for(const [side,role]of [[f.host,'host'],[f.guest,'guest']]){
   const runtime=side.runtime,manager=runtime.engines,db=new Map([['nnk_onlineName',role==='host'?'Host':'Guest'],['nnk_onlineAvatar','caocao']]),bindings=[];let generation=0;
@@ -179,9 +178,7 @@ cases.push(['late rejected old coordinator cleanup cannot clear a newer cleanup 
  const f=await connected('single');try{const c=f.host.runtime.coordinator,round={...enrollment,phase:'waiting',failed:false},held=deferred();c.round=round;c.retire=()=>held.promise;c.fail(round,Error('old failure'));const old=c.cleanupPromise,newer=Promise.resolve('newer exact-owner cleanup');c.cleanupPromise=newer;held.reject(Error('old cleanup rejected late'));await assert.rejects(old,/old cleanup rejected late/);assert.equal(c.cleanupPromise,newer);assert.match(round.cleanupError,/old cleanup rejected late/);
  }finally{await f.close();}
 }]);
-// Exercise the complete production OnlinePanel, including its real hooks,
-// derived role/state, event handlers and main cards. Only React scheduling,
-// polling and HTTP are fixtures; no browser, game, native or physical two-machine coverage.
+// Run the production OnlinePanel with fixture-controlled React scheduling, polling and HTTP.
 function onlinePanelFixture(){
  const section=source.slice(source.indexOf('    var ONLINE_MODES = ['),source.indexOf('    // ── 工坊页('));
  assert.ok(section.includes('function OnlinePanel()'));

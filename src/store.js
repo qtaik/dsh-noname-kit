@@ -24,17 +24,16 @@ function stashCorrupt(file, ts) {
   }
 }
 
-/** 留档不能无限堆积(同一份状态文件被反复损坏,比如目录在云同步盘里被反复写回
- *  旧的坏副本):同前缀只留最新 3 份。留档内容只是"抢救线索",不是备份链。 */
+/** 每个状态文件只保留最近三份损坏留档，供排查或手动恢复。 */
 function pruneCorruptStashes(file) {
   try {
     const dir = dirname(file)
     const prefix = basename(file) + '.corrupt-'
     const olds = readdirSync(dir).filter((n) => n.startsWith(prefix)).sort()
     for (const n of olds.slice(0, Math.max(0, olds.length - 3))) {
-      try { unlinkSync(join(dir, n)) } catch { /* 单个删不掉跳过 */ }
+      try { unlinkSync(join(dir, n)) } catch { }
     }
-  } catch { /* 目录读不到就算了,不影响留档本身 */ }
+  } catch { }
 }
 
 /**
@@ -92,7 +91,7 @@ export async function readJsonSafe(file, fallback) {
   }
 }
 
-/** 原子写:临时文件 + rename。失败时抛错,由调用方决定是否吞。 */
+/** 原子替换 JSON，保留原始写入错误。 */
 export function writeJsonAtomicSync(file, value) {
   const tmp = join(dirname(file), `.${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.tmp`)
   try {
@@ -112,7 +111,7 @@ export async function writeJsonAtomic(file, value) {
     await writeFile(tmp, JSON.stringify(value, null, 2), 'utf8')
     await rename(tmp, file)
   } catch (error) {
-    try { await (await import('node:fs/promises')).unlink(tmp) } catch { /* 忽略 */ }
+    try { await (await import('node:fs/promises')).unlink(tmp) } catch { }
     throw error
   }
 }

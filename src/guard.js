@@ -169,7 +169,6 @@ export function bashGuardReason(command, protectRoot, baseDirs) {
     }
   }
 
-  // 1) 重定向写(> / >> / 2>;带不带空格都算)
   {
     const targets = []
     const re = new RegExp(REDIRECT_RE.source, 'gm')
@@ -182,9 +181,7 @@ export function bashGuardReason(command, protectRoot, baseDirs) {
     if (hit) return `bash 的重定向写入目标是游戏 extension 目录(${hit})`
   }
 
-  /* 2) 改文件的命令(rm/mv/cp/tee/mkdir…,含 sudo|xargs/find -exec 前缀)
-   * 判据:该命令片段里出现的**任何**路径 token 落在保护根内即拦——
-   * 不看它是源还是目标:往机场里拷东西、从机场里拷出去,都是对扩展目录的写操作面。 */
+  /* 文件操作只要涉及受保护路径就拦截，静态扫描不区分源和目标。 */
   {
     const frags = []
     const re = new RegExp(MUTATION_CMD_RE.source, 'gi')
@@ -198,7 +195,6 @@ export function bashGuardReason(command, protectRoot, baseDirs) {
     if (hit) return `bash 的文件操作命令涉及游戏 extension 目录(${hit})`
   }
 
-  // 3) sed -i / perl -i 就地修改
   {
     const frags = []
     const re = new RegExp(SED_INPLACE_RE.source, 'gi')
@@ -208,7 +204,6 @@ export function bashGuardReason(command, protectRoot, baseDirs) {
     if (hit) return `bash 的就地修改(sed/perl -i)指向游戏 extension 目录(${hit})`
   }
 
-  // 4) git checkout/restore/reset/clean
   {
     const frags = []
     const re = new RegExp(GIT_REVERT_RE.source, 'gi')
@@ -218,10 +213,7 @@ export function bashGuardReason(command, protectRoot, baseDirs) {
     if (hit) return `bash 的 git 还原类命令涉及游戏 extension 目录(${hit})`
   }
 
-  /* 5) 解释器一行式(node -e / python -c / pwsh -Command …):脚本里可能直接写文件,
-   * 命令里出现保护路径即拦(保守;读脚本被误拦时用户确认一次即可)。
-   * 路径多半写在**脚本字符串里面**(node -e "…('/path/x.js')…"),所以要把
-   * 引号内的内容也扫一遍找路径。 */
+  /* 解释器可能在引号内的脚本正文引用受保护路径，因此也扫描脚本内容。 */
   {
     const frags = []
     const re = new RegExp(INTERPRETER_RE.source, 'gi')

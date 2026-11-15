@@ -1,6 +1,5 @@
-/** Read small durable preset state through the host projection registry, with an append-only event-array adapter for older hosts. Unavailable history is an error rather than a fresh session. */
+/** Read preset state from host projections or legacy session events. Missing history raises an error to prevent treating a restored session as new. */
 
-/** Construct a JSON-state parser for the host projection checkpoint contract. */
 export function stateSchema(validate, label) {
   return { parse(value) {
     if (!validate(value)) throw new TypeError(`${label}: invalid persisted preset state`)
@@ -24,7 +23,7 @@ export function createSessionState(ctx, definition) {
     else if (typeof service.stateOf === 'function') handle = { stateOf: (session) => service.stateOf(session, definition.key) }
     else throw new TypeError('session-state: host projection registration has no reader')
   }
-  // Await this while the plugin owns its lifecycle, before publishing consumers.
+  // Callers await ready before registering hooks that read this state.
   const ready = register()
 
   const legacyEntry = (session) => {

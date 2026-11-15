@@ -76,8 +76,7 @@ try {
   status = online.kernelStatus({ nonameDir: gameDir })
   ok(status.state === 'ok', '多轮重装后仍 ok')
 
-  // ── 5) unknown:伪造空的插件源不可测(源路径固定),改为验证缺文件时的防御 ──
-  // hashKernelDir 对不存在目录返回 null —— 这是 unknown 判定的基础
+  // 缺失目录的哈希为空，供内核状态判断识别。
   ok(online.hashKernelDir(join(home, 'no-such-dir')) === null, 'hashKernelDir 对缺失目录返回 null')
 
   // ── 6) 心跳桥会话 ──────────────────────────────────────────
@@ -187,7 +186,7 @@ export default { name: "standard", character: characters, translate: translates 
   const idxOld = avatars.findIndex((a) => a.id === 'av_old')
   ok(idxYuejin >= 0 && idxOld >= 0 && idxYuejin < idxOld, '按中文名排序(标乐进 b < 老武将 l)')
 
-  // ── 结构性回归锁:重试预算与信令超时的策略(防止被无声改回) ──
+  // ── 信令连接超时与提示文案 ──
   const repoRoot = join(here, '..')
   const guestSrc = readFileSync(join(repoRoot, 'online-kernel', 'src', 'guest.js'), 'utf8')
   const sigSrc = readFileSync(join(repoRoot, 'online-kernel', 'src', 'signaling.js'), 'utf8')
@@ -196,12 +195,7 @@ export default { name: "standard", character: characters, translate: translates 
   ok(sigSrc.includes('}, 7000);'), '信令兜底超时 7 秒(不再 12 秒拖慢自动重回)')
   ok(!sigSrc.includes('连接超时(可改用邀请码方式)'), '超时文案不再甩锅房主')
 
-  // ── 房主关闭游戏时停止客机的自动重试 ──
-
-
-
-  // ── 房间模式白名单使用单一来源,避免原生单挑模式的 normal 值影响校验 ──
-  // 白名单保持对工坊支持的实际房间模式进行校验。
+  // 房间模式以工坊支持的模式为准，避免引擎内部的 normal 值进入房间配置。
   const hostSrc = readFileSync(join(repoRoot, 'online-kernel', 'src', 'host.js'), 'utf8')
 
   ok(!hostSrc.includes('env._status.mode || "identity"'), '对局结束接力不再收引擎被单挑局改写的模式(创建房间报 normal 的污染源)')
@@ -281,7 +275,7 @@ export default { name: "standard", character: characters, translate: translates 
   ok(bridgeSrc.includes('virtualIps: (function()'), '内核心跳 cfg 带虚拟网卡检测结果')
   ok(clientSrc.includes('直连地址已就绪:') && clientSrc.includes('virtualIps.join'), '面板显示直连地址就绪状态(虚拟网卡 IPv4 + 公网 IPv6;用户看得见,不再是隐形功能)')
 
-  // ── 载入时保留连接,退出房间时停止自动重回 ──
+  // ── 载入期间的连接判活与断线处理 ──
   ok(rtcSrc.includes('lastBuffered'), '心跳判死识别传输层 ACK 推进(对端主线程忙时不再误杀)')
   ok(rtcSrc.includes('peerTraffic') && rtcSrc.includes('_lastIn'), '心跳判死第三路证据:主通道来包(对端开局狂发数据、心跳定时器饿死不误杀)')
   ok(rtcSrc.includes('> 20000'), '心跳判死阈值 20 秒(对端静默加载留余量)')
@@ -326,9 +320,6 @@ export default { name: "standard", character: characters, translate: translates 
   ok(onlineSrc.includes('function ioHint(error)'), '安装内核失败按错误码给人话与下一步(EPERM/EBUSY/ENOSPC)')
 
 
-  /* ── 对局中重进与客机就绪状态 ──*/
-
-
   /* 连接失效判定查询传输层状态,避免主线程忙时只凭 JS 心跳误判。*/
   ok(rtcSrc.includes('function startPing(channel, onDead, peerTraffic, pcState)'),
     'startPing 增加传输层判活参数(pc.connectionState)')
@@ -336,8 +327,7 @@ export default { name: "standard", character: characters, translate: translates 
     'JS 静默时:connected 继续等、disconnected 给恢复期、failed/closed 才判死')
 
 
-  /* ── 直连线路状态、连接兜底优先级与出牌时限 ──
-   * 覆盖线路可见性及无需 TURN 中继服务器的连接策略。 */
+  // ── 直连候选优先级与线路状态显示 ──
   ok(rtcSrc.includes('candidate:1 1 udp 1 " + ip.replace('),
     '注入候选优先级降到 1(排最后):同网/公网直连优先,虚拟网卡只当兜底')
   ok(rtcSrc.includes('function trackPc(pc)') && rtcSrc.includes('"candidate-pair"') && rtcSrc.includes('currentRoundTripTime'),

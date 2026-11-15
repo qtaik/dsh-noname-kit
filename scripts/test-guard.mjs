@@ -65,10 +65,7 @@ for (const [name, cmd] of mustBlock) {
   if (reason) check('  ↳ 提示含出路', guardMessage(reason).includes('noname_write_extension'))
 }
 
-/* 已知取舍:守卫对「改文件命令」只看命令里有没有保护路径,不看源/目标方向——
- * `cp -r <扩展包> /tmp/bak`(拷出去)也会被拦。刻意如此:守卫是安全边界,
- * 多拦一次用户确认即可,漏拦一次就是无备份直改扩展。取证式读取用不带写动作的
- * 纯读命令(见下),不受影响。 */
+/* 允许读取扩展目录，并允许把读取结果重定向到保护范围外。 */
 console.log('\nbash:必须放行')
 const mustAllow = [
   ['纯读 grep', 'grep -n "foo" /d/games/noname/resources/app/extension/pk/extension.js'],

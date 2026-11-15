@@ -278,11 +278,9 @@ async function writeExtensionInner(nonameDir, { folder, file, code, blocks, edit
     await copyFile(target, join(backupDir, basename(backup)))
     await pruneHistoryBackups(nonameDir, folder, await pruneBackups(backupDir, relative(nonameDir, backupDir)))
   }
-  /* 通过同目录临时文件与 rename 原子替换，避免写入中断留下截断的 extension.js。 */
   await writeFileAtomic(target, finalCode)
 
-  // 初值必须是 boolean 而非 null/null 省略:info.json 已存在且本次未提交时,
-  // infoWritten 会一直保持初值——null 过不了 output schema
+  // 未提交且文件已存在时，infoWritten 仍为 false，以符合工具返回结构。
   let infoWritten = false
   if (hasInfoJson) {
     const infoPath = join(full, 'info.json')
@@ -370,9 +368,8 @@ export async function readExtension(nonameDir, folder, opts = {}) {
 }
 
 /**
- * 锚点化迁移(用户在工坊手动触发,AI 侧没有任何工具能调它):对无锚老文件插入
- * 锚点注释行,一个代码字符不动;写前跑语法校验(不过不落盘),通过后自动备份再写。
- * file 缺省 = extension.js;多文件包对子目录模块文件逐个迁移。
+ * 工坊可在指定文件建立索引。只允许增加锚点和缺少的行尾逗号。
+ * 通过语法校验后才备份并写入。
  */
 export async function migrateAnchors(nonameDir, folder, file) { assertNoLinkPath(nonameDir); return withBatchWrite(nonameDir,()=>migrateAnchorsInner(nonameDir,folder,file)) }
 async function migrateAnchorsInner(nonameDir, folder, file) {
@@ -382,8 +379,7 @@ async function migrateAnchorsInner(nonameDir, folder, file) {
   try { oldCode = await readFile(target, 'utf8') } catch { return { ok: false, error: '该文件不存在。' } }
   const r = migrateCode(oldCode, { file: entryPath.rel, allowPartial: true })
   if (r.error) return { ok: false, error: r.error, ...(r.skipped?.length ? { skipped: r.skipped, totalEntries: r.totalEntries } : {}) }
-  // 迁移只加注释行,自检用纯语法检查即可;模块文件没有 name 字段,
-  // validateExtensionCode 的语义规则(name 必有等)对它不适用
+  // 迁移只需语法检查，子模块无需入口的 name 等结构字段。
   const verdict = syntaxCheck(r.code)
   if (!verdict.ok) return { ok: false, error: '迁移后语法校验失败(不应发生,已放弃写入): ' + (verdict.message || '未知') }
   const backupDir = join(dirname(target), 'backup')
@@ -467,13 +463,10 @@ export async function listBackups(nonameDir, folder) {
   return out.sort().reverse()
 }
 
-/** 回滚:把指定备份覆盖回 extension.js。返回旧内容备份名。 */
+/** 将指定备份恢复到对应源码，并保留恢复前的版本。 */
 export async function rollbackExtension(nonameDir, folder, backupName) { assertNoLinkPath(nonameDir); return withBatchWrite(nonameDir,()=>rollbackExtensionInner(nonameDir,folder,backupName)) }
 async function rollbackExtensionInner(nonameDir, folder, backupName) {
-  /* 接受两种形态:
-   *   "extension.20261007-...js"                —— 包根 backup/ 里的(旧客户端)
-   *   "character/backup/character.2026...js"    —— 子目录模块的备份(多文件包)
-   * 子目录形态写回集 / 必须有 /backup/ 段,其余按包内相对路径定位。 */
+  /* 可传包根 backup/ 内的文件名，也可传包含 backup/ 的包内相对路径。 */
   const rel = String(backupName || '').split('\\').join('/')
   if (rel.includes('..') || rel.startsWith('/') || !/\.js$/.test(rel)) {
     throw new Error('非法的备份文件名。')
@@ -482,7 +475,7 @@ async function rollbackExtensionInner(nonameDir, folder, backupName) {
   let backupPath
   let target
   const segs = rel.split('/')
-  /* 回滚路径与写入侧使用相同的 safeEntryFilePath 规则：允许包内相对 .js 路径及中文名称，拒绝 .. 与绝对路径。 */
+  /* 拒绝绝对路径和路径穿越，只允许通过包内备份恢复 .js 文件。 */
   const safeSeg = (x) => Boolean(x) && x !== '..' && x !== '.' && !x.includes('\\') && !x.includes(':')
   const safeJsName = (x) => safeSeg(x) && /\.js$/i.test(x)
   if (segs.length === 1) {
@@ -529,9 +522,7 @@ async function rollbackExtensionInner(nonameDir, folder, backupName) {
   return { folder, restored: backupName }
 }
 
-/** 尽力从 translate 区段提取条目显示名(工坊「编辑已有条目」下拉的括号注):
- * 对象值找 name 字段,数组值取首元素(老式扩展武将 `cs_x: ['名字','描述']`),
- * 字符串值本身就是名字;x 与 x_info 以先出现者为准。提不到就不入表。 */
+/** 从官方包的翻译区段尝试提取头像列表显示名。 */
 function extractDisplayNames(code, sectionNames = ['translate'], options = {}) {
   const names = new Map()
   for (const secName of sectionNames) {
