@@ -1,8 +1,8 @@
-# dsh-noname-kit
+# NONAME-KIT · 无名杀 AI 扩展开发插件
 
 <img src="docs/icon-small.png" width="72" height="72" alt="NONAME-KIT 图标">
 
-无名杀扩展开发工坊，为 DeepSeek Harness 提供武将、卡牌和自定义模式开发工具。
+NONAME-KIT 是 DeepSeek Harness（DSH）的无名杀扩展开发插件，用 AI 辅助编写武将技能、卡牌和自定义玩法代码。提交需求后，AI 会核对关键细节，等你确认方案后再开始实现。
 
 - 搜索本地游戏源码，读取和修改已有扩展。
 - 写入前检查语法和改动范围，覆盖源码前自动备份。

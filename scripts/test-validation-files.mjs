@@ -18,6 +18,12 @@ await test('default path keeps full entry validation', () => {
   assert.equal(validateFileCode(entryOptions).ok, true)
   assert.equal(validateFileCode({ code: moduleCode }).ok, false)
 })
+await test('a parenthesized mechanism definition does not replace the extension name', () => {
+  const code = `export const nnkMechanic_test_echo = ({ id: 'test_echo', name: '回响', kind: 'shared-rule', description: '重复效果', resolve() {} });
+export default { name: '${folder}', package: { skill: { skill: {}, translate: {} } } };`
+  assert.equal(validateFileCode({ code, folder }).ok, true)
+  assert.match(validateFileCode({ code, folder: '别的包' }).errors[0].message, new RegExp(folder))
+})
 for (const file of ['extension.js', './extension.js', './/extension.js', '.\\extension.js', ...(process.platform === 'win32' ? ['./EXTENSION.JS'] : [])]) {
   await test('entry alias cannot downgrade name checks: ' + file, () => {
     const result = validateFileCode({ code: moduleCode, file })

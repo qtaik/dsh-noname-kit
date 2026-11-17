@@ -112,7 +112,10 @@ const sessions = { binding: id => id === 'form-session' ? binding : undefined }
 function render() {
   cur = inst; inst.cursor = 0; inst.scheduled = false
   tree = NewTaskForm({ prepareDispatch: () => prepareTaskDispatch(sessions, 'form-session') })
-  pendingEffects.splice(0).forEach((e) => e.fn())
+  pendingEffects.splice(0).forEach(({ slot, fn }) => {
+    slot.cleanup?.()
+    slot.cleanup = fn()
+  })
   return tree
 }
 function mount() { requests.length = 0; sent = []; preset = 'noname-dev'; inst = { hooks: [], cursor: 0, scheduled: false }; render() }
@@ -636,6 +639,96 @@ try {
   preset = 'noname-dev'
   const dispatched = await submitTask('dispatch-retry')
   ok(dispatched.body.skills[0].name === '派单测试' && dispatched.message.includes('任务ID: dispatch-retry'), '切回无名杀预设后正常登记和派单')
+
+  console.log('场景 17:三类机制按各自字段登记，派单保留确认流程')
+  mount()
+  clickRadio('类型mechanic')
+  await flush()
+  const commonMechanicFields = ['调用时机', '判定与结算', '规则说明']
+  const checkMechanicExample = (name) => {
+    const fields = commonMechanicFields.map(fieldByLabel)
+    const example = findAll(n => n.type === 'details' && textOf(n).startsWith('填写示例 · ' + name))[0]
+    ok(fields.every(field => field.type === 'textarea') && example && commonMechanicFields.every(label => textOf(example).includes(label)), name + '提供三项通用字段和可展开的对应案例')
+  }
+  checkMechanicExample('预约技')
+  const reserveDescription = fieldByLabel('规则说明').props.placeholder
+  const reserveRules = fieldByLabel('判定与结算').props.placeholder
+  ok(reserveDescription.includes('每轮开始时，你可以为此技能选择一个本轮的触发时机') && reserveRules.includes('持有者从此技能提供的候选时机中选一个') && reserveRules.includes('下一轮开始时重新选择'), '预约技由当前持有者逐轮选择本技能的触发时机')
+  await change('机制 ID', 'cs_reserve')
+  await change('机制名称', '预约技')
+  await change('调用时机', '每轮开始时由技能持有者选择')
+  await change('规则说明', '每轮开始时，你可以为此技能选择一个本轮的触发时机。')
+  await change('判定与结算', '本轮在所选时机按技能自身的条件判定。')
+  await change('技能可调参数', '该技能提供的候选触发时机')
+  const typed = await submitTask('mechanic-type')
+  ok(typed.body.type === 'mechanic' && typed.body.mechanic.kind === 'skill-type' && typed.body.mechanic.parameters === '该技能提供的候选触发时机' && !typed.body.image, '技能类型带参数且无需登记图片')
+  ok(typed.body.mechanic.invocation === '每轮开始时由技能持有者选择' && typed.message.includes('调用时机: 每轮开始时由技能持有者选择'), '技能类型的调用时机随任务登记并派单')
+  ok(typed.message.includes('references/custom-mechanic.md') && typed.message.includes('等我回复「确认」后') && typed.message.includes('该技能提供的候选触发时机'), '机制任务消息含参考、参数和确认流程')
+
+  clickRadio('机制类别shared-rule')
+  await flush()
+  checkMechanicExample('接力')
+  await change('调用时机', '')
+  await expectBlocked('共用规则的调用时机')
+  await change('调用时机', '主技能对原目标结算后')
+  const shared = await submitTask('mechanic-shared')
+  ok(shared.body.mechanic.kind === 'shared-rule' && shared.body.mechanic.invocation === '主技能对原目标结算后' && !('parameters' in shared.body.mechanic), '共用规则有调用时机且无隐藏类别参数')
+
+  clickRadio('机制类别global-rule')
+  await flush()
+  checkMechanicExample('轮首补给')
+  await expectBlocked('全局规则的启用条件和影响范围')
+  await change('调用时机', '每轮开始时')
+  await change('启用条件', '身份局开局')
+  await change('影响范围', '所有存活角色')
+  await change('结束条件', '第三轮结束')
+  const global = await submitTask('mechanic-global')
+  ok(global.body.mechanic.kind === 'global-rule' && global.body.mechanic.scope === '所有存活角色' && global.message.includes('结束条件: 第三轮结束'), '全局规则登记启用条件、范围和结束时机')
+  ok(global.body.mechanic.invocation === '每轮开始时' && global.message.includes('调用时机: 每轮开始时') && global.message.includes('启用条件: 身份局开局'), '全局规则独立登记和派单每次调用时机及整条规则的启用条件')
+
+  console.log('场景 18:已有包里的机制引用与编辑')
+  mount()
+  clickRadio('模式edit')
+  await flush()
+  req(r => r.url.endsWith('/settings?allExtensions=1')).reply({ nonameDir: 'D:\\Games\\noname', extensions: ['A', 'B'] })
+  await flush()
+  folderSelect().props.onChange({ target: { value: 'A' } })
+  await flush()
+  folderSelect().props.onChange({ target: { value: 'B' } })
+  await flush()
+  const reserve = { id: 'cs_reserve', name: '预约技', kind: 'skill-type', description: '由持有者每轮选择触发时机', file: 'mechanics/reserve.js', line: 5 }
+  const relay = { id: 'cs_relay', name: '接力', kind: 'shared-rule', description: '原目标选择接棒者', file: 'extension.js', line: 7 }
+  const rule = { id: 'cs_draw', name: '轮首补给', kind: 'global-rule', description: '每轮摸牌', file: 'extension.js', line: 19 }
+  req(r => r.url.endsWith('/mechanics?folder=B')).reply({ ok: true, mechanics: [reserve, relay, rule] })
+  await flush()
+  req(r => r.url.endsWith('/mechanics?folder=A')).reply({ ok: true, mechanics: [{ ...reserve, name: 'A 包机制' }] })
+  await flush()
+  await toggle('预约技（技能类型（XX 技） · cs_reserve）', true)
+  await expectBlocked('请为引用了机制的技能填写名称')
+  const skillInput = findAll(n => n.type === 'input' && String(n.props.placeholder).startsWith('技能名'))[0]
+  skillInput.props.onChange({ target: { value: '破阵' } })
+  await flush()
+  await toggle('接力（共用规则 · cs_relay）', true)
+  ok(!textOf(tree).includes('A 包机制') && !textOf(tree).includes('轮首补给'), '包切换时不会显示迟到的机制清单，全局规则不出现在技能选择里')
+  const referenced = await submitTask('mechanic-references')
+  ok(referenced.body.skills[0].mechanicIds.join(',') === 'cs_reserve,cs_relay' && referenced.message.includes('mechanics/reserve.js:5') && referenced.message.includes('cs_relay'), '同一技能可引用两类机制，派单含定义位置')
+
+  clickRadio('类型mechanic')
+  await flush()
+  clickRadio('目标edit')
+  await flush()
+  fieldByLabel('选择已有机制').props.onChange({ target: { value: 'cs_draw' } })
+  await flush()
+  checkMechanicExample('轮首补给')
+  await expectBlocked('请至少修改一项机制内容')
+  await change('调用时机', '每逢偶数轮开始时')
+  const timingOnly = await submitTask('mechanic-timing-only')
+  ok(timingOnly.body.mechanic.invocation === '每逢偶数轮开始时' && timingOnly.body.mechanic.rules === '' && timingOnly.message.includes('调用时机: 每逢偶数轮开始时') && !timingOnly.message.includes('本次规则改动:'), '编辑机制可以单独修改调用时机，派单保留其他规则')
+  await change('调用时机', '')
+  await change('判定与结算', '从第二轮起才摸牌')
+  const modified = await submitTask('mechanic-edit')
+  ok(modified.body.target.kind === 'mechanic' && modified.body.target.id === 'cs_draw' && modified.body.mechanic.kind === 'global-rule' && modified.body.title === '轮首补给', '编辑机制沿用名称、ID 和类型，允许只填写具体改动')
+  ok(modified.message.includes('extension.js:19') && modified.message.includes('本次规则改动: 从第二轮起才摸牌'), '编辑派单带原定义位置和改动内容')
 
   console.log('\n全部通过:' + passed + ' 项')
 } catch (err) {

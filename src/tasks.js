@@ -1,5 +1,5 @@
 /**
- * 管理武将、卡牌和模式任务的需求、交付状态与反馈。
+ * 管理武将、卡牌、模式和机制任务的需求、交付状态与反馈。
  * 技能状态依次为 open、written、confirmed，提交反馈后回到 open。
  */
 import { readJsonSafe, writeJsonAtomic } from './store.js'
@@ -7,6 +7,8 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 
 const ID_RE = /^[\w\u4e00-\u9fff-]{1,64}$/
+const MECHANIC_ID_RE = /^[a-z][a-z0-9_]{0,63}$/
+const MECHANIC_KINDS = new Set(['skill-type', 'shared-rule', 'global-rule'])
 const MAX_AUDIOS_PER_TARGET = 10
 
 function tasksPath(dshHome) {
@@ -51,14 +53,59 @@ function newSkill(item) {
     status: 'open',
     rounds: 0,
     feedbacks: [],
+    ...(Array.isArray(item?.mechanicIds) ? { mechanicIds: [...new Set(item.mechanicIds.map(id => id.trim()))] } : {}),
   }
+}
+
+/** Validate mechanism requirements before either package discovery or registry writes. */
+export function validateTaskMechanics({ type, title, mechanic, target, skills }) {
+  const references = new Set()
+  for (const node of Array.isArray(skills) ? skills : []) {
+    if (node?.mechanicIds === undefined) continue
+    if (!Array.isArray(node.mechanicIds) || node.mechanicIds.some(id => typeof id !== 'string' || !MECHANIC_ID_RE.test(id.trim()))) {
+      return { ok: false, error: '技能引用机制须为 ID 数组，ID 以小写字母开头，只含小写字母、数字或下划线，长度 1–64。' }
+    }
+    for (const id of node.mechanicIds) references.add(id.trim())
+  }
+  if (references.size && ['card', 'mode', 'mechanic'].includes(type)) {
+    return { ok: false, error: '机制引用只能登记到武将任务的技能节点。' }
+  }
+  if (type !== 'mechanic') {
+    if (target?.kind === 'mechanic') return { ok: false, error: '编辑机制必须使用 mechanic 任务类型。' }
+    return { ok: true, mechanicIds: [...references] }
+  }
+  if (!mechanic || typeof mechanic !== 'object' || Array.isArray(mechanic) ||
+      typeof mechanic.id !== 'string' || !MECHANIC_ID_RE.test(mechanic.id.trim()) || !MECHANIC_KINDS.has(mechanic.kind)) {
+    return { ok: false, error: '机制需要合法的小写 ID 和 kind（skill-type、shared-rule 或 global-rule）。' }
+  }
+  if (typeof title !== 'string' || !title.trim() || title.trim().length > 60) {
+    return { ok: false, error: '机制名称必填，且不能超过 60 字。' }
+  }
+  const id = mechanic.id.trim()
+  const editing = target != null
+  if (editing && (target.kind !== 'mechanic' || typeof target.id !== 'string' || target.id.trim() !== id)) {
+    return { ok: false, error: '编辑机制时 target.kind 须为 mechanic，且目标 ID 必须与机制 ID 一致。' }
+  }
+  const required = new Set(['description'])
+  if (!editing) required.add('rules')
+  if (!editing && mechanic.kind === 'shared-rule') required.add('invocation')
+  if (!editing && mechanic.kind === 'global-rule') { required.add('activation'); required.add('scope') }
+  const normalized = { id, kind: mechanic.kind }
+  for (const [field, maximum] of Object.entries({ description: 1200, rules: 5000, parameters: 2000, invocation: 2000, activation: 2000, scope: 2000, end: 2000 })) {
+    const value = mechanic[field] === undefined ? '' : mechanic[field]
+    if (typeof value !== 'string' || value.trim().length > maximum || (required.has(field) && !value.trim())) {
+      return { ok: false, error: `机制 ${field} 须为${required.has(field) ? '非空' : ''}文本，且不能超过 ${maximum} 字。` }
+    }
+    normalized[field] = value.trim()
+  }
+  return { ok: true, mechanic: normalized, mechanicIds: [] }
 }
 
 function touch(task) { task.updatedAt = Date.now() }
 
-/** 已确认技能且登记素材齐全后可完成任务。编辑条目和模式无需立绘或卡图。 */
+/** 已确认技能且登记素材齐全后可完成任务。编辑条目、模式和机制无需立绘或卡图。 */
 function isCompletable(task) {
-  const imageOk = task.target || task.type === 'mode' ? true : Boolean(task.image)
+  const imageOk = task.target || task.type === 'mode' || task.type === 'mechanic' ? true : Boolean(task.image)
   const audioOk = task.skills.every((s) =>
     !(Array.isArray(s.audios) && s.audios.length) ||
     (Array.isArray(s.audioFiles) && s.audioFiles.length >= s.audios.length))
@@ -72,17 +119,19 @@ function descriptionOf(skills) {
 }
 
 /**
- * 任务 ID 在登记处唯一。武将使用技能清单，卡牌生成单个节点。
+ * 任务 ID 在登记处唯一。武将使用技能清单，卡牌和机制生成单个节点。
  * target 标记编辑已有条目。packageMeta 记录新包需求，名称取目标目录名。
  * 写入工具以登记的 writeMode 为准。
  */
-export async function createTask(dshHome, { id, folder, packageMeta, type, title, charInfo, newFaction, portraitVideo, pile, skills, image, dieAudios, target, writeMode, modeBrief, modeNum, modeWin, modeRules }) {
+export async function createTask(dshHome, { id, folder, packageMeta, type, title, mechanic, charInfo, newFaction, portraitVideo, pile, skills, image, dieAudios, target, writeMode, modeBrief, modeNum, modeWin, modeRules }) {
   if (typeof id !== 'string' || !ID_RE.test(id.trim())) {
     return { ok: false, error: `任务ID「${id}」不合法:只允许中文/字母/数字/下划线/连字符,长度 1-64。` }
   }
   if (typeof folder !== 'string' || !ID_RE.test(folder.trim())) {
     return { ok: false, error: `扩展文件夹名「${folder}」不合法。` }
   }
+  const mechanism = validateTaskMechanics({ type, title, mechanic, target, skills })
+  if (!mechanism.ok) return mechanism
   const cleanId = id.trim()
   let metadata
   if (packageMeta != null) {
@@ -102,13 +151,17 @@ export async function createTask(dshHome, { id, folder, packageMeta, type, title
     return { ok: false, error: `任务ID「${cleanId}」已存在,换一个(或加上日期/序号)。` }
   }
   // 模式任务可预填规则，其他规则可在回传实现结果时登记。
-  const taskType = type === 'card' ? 'card' : type === 'mode' ? 'mode' : 'character'
-  const skillList = taskType === 'mode'
+  const taskType = type === 'card' ? 'card' : type === 'mode' ? 'mode' : type === 'mechanic' ? 'mechanic' : 'character'
+  const skillList = taskType === 'mechanic'
+    ? [newSkill({ name: title.trim(), desc: mechanism.mechanic.description })]
+    : taskType === 'mode'
     ? (Array.isArray(skills) && skills.length ? skills.map(newSkill) : [])
     : taskType === 'card'
     ? [newSkill({ name: title || (Array.isArray(skills) && skills[0] && skills[0].name) || '新卡牌', desc: descriptionOf(skills) })]
     : ((Array.isArray(skills) && skills.length ? skills : [{ name: title || '新技能', desc: '' }]).map(newSkill))
-  const taskTarget = target && (target.kind === 'character' || target.kind === 'card')
+  const taskTarget = taskType === 'mechanic' && target
+    ? { kind: 'mechanic', id: mechanism.mechanic.id }
+    : target && (target.kind === 'character' || target.kind === 'card')
     && typeof target.id === 'string' && ID_RE.test(target.id.trim())
     ? { kind: target.kind, id: target.id.trim() }
     : null
@@ -141,14 +194,15 @@ export async function createTask(dshHome, { id, folder, packageMeta, type, title
     folder: folder.trim(),
     type: taskType,
     target: taskTarget,
-    title: String(title || '').slice(0, 60),
+    title: taskType === 'mechanic' ? title.trim() : String(title || '').slice(0, 60),
+    ...(taskType === 'mechanic' ? { mechanic: mechanism.mechanic } : {}),
     ...(metadata ? { packageMeta: metadata } : {}),
     charInfo: String(charInfo || '').slice(0, 500),
     newFaction: faction,
     portraitVideo: video,
     pile: pile && pile.join ? { join: true, entries: String(pile.entries || '').slice(0, 2000) } : { join: false, entries: '' },
-    image: String(image || '').trim().slice(0, 500),
-    dieAudios: cleanAudioPaths(dieAudios),
+    image: taskType === 'mechanic' ? '' : String(image || '').trim().slice(0, 500),
+    dieAudios: taskType === 'mechanic' ? [] : cleanAudioPaths(dieAudios),
     dieAudioFiles: [],
     skills: skillList,
     dynamicSkills: taskType === 'mode',

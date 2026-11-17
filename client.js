@@ -660,7 +660,7 @@ window.__ModuleLoader__.load({
     }
 
 
-    // ── 任务表单:武将区 / 卡牌区 ──────────────────────────────────
+    // ── 工坊任务表单 ──────────────────────────────────────────
     function NewTaskForm(props) {
       var state = React.useState({
         mode: 'new', type: 'character', folder: '我的扩展', taskId: '', title: '', idPrefix: '',
@@ -674,7 +674,9 @@ window.__ModuleLoader__.load({
         goal: 'create', entryId: '', entryList: [], entryLoading: false, editNotes: '', addSkills: false,
         entrySkills: [], entrySkillsLoading: false, pickedSkills: [],
         // 🎲 新玩法(自定义模式)专属字段
-        brief: '', numConfig: '5', numCustom: '', winConfig: '', rules: ''
+        brief: '', numConfig: '5', numCustom: '', winConfig: '', rules: '',
+        mechanicKind: 'skill-type', mechanicId: '', mechanicName: '', mechanicDescription: '', mechanicRules: '',
+        mechanicParameters: '', mechanicInvocation: '', mechanicActivation: '', mechanicScope: '', mechanicEnd: ''
       });
       // pickedSkills = [{ id, name, note }]:勾选的技能 + 用户当场写的修改内容
       var form = state[0], setForm = state[1];
@@ -703,6 +705,63 @@ window.__ModuleLoader__.load({
       }
       var set = function (key) { return function (v) { setForm(function (prev) { var next = {}; next[key] = v; return Object.assign({}, prev, next) }) } };
       var patch = function (p) { setForm(function (prev) { return Object.assign({}, prev, p) }) };
+
+      var mechanismKinds = [
+        { value: 'skill-type', text: '技能类型（XX 技）', example: {
+          name: '预约技', id: 'demo_reserve',
+          invocation: '每轮开始时，由当前持有者为这项技能选择本轮的触发时机。',
+          rules: '持有者从此技能提供的候选时机中选一个。本轮到所选时机时，按技能自身的发动条件、次数、目标和代价处理。下一轮开始时重新选择。',
+          description: '每轮开始时，你可以为此技能选择一个本轮的触发时机。',
+          parameters: '每个技能可提供不同的候选时机。例如同一个技能提供自己的准备阶段开始时、自己的结束阶段开始时两个选项，由持有者为本轮选择其一。'
+        } },
+        { value: 'shared-rule', text: '共用规则', example: {
+          name: '接力', id: 'demo_relay',
+          invocation: '主技能对一名角色的效果结算完毕后，由该角色发起接力。',
+          rules: '该角色可选另一名符合技能条件的在场角色。选定后，对接棒者结算一次技能指定的效果，例如摸一张牌或获得 1 点护甲。取消、无人可选或选人者离场时结束。接棒者不再转交。',
+          description: '受到主技能效果后，你可以选另一名符合条件的角色接棒，由其获得该技能的接力效果。'
+        } },
+        { value: 'global-rule', text: '全局规则', example: {
+          name: '轮首补给', id: 'demo_supply',
+          invocation: '每轮开始时。',
+          rules: '规则启用期间，按座次让当前在场且存活的角色各摸一张牌，每轮结算一次。',
+          description: '身份局的前三轮，所有存活角色于每轮开始时各摸一张牌。',
+          activation: '身份局开局时启用。', scope: '当前在场且存活的角色。', end: '第三轮结束时停用。'
+        } }
+      ];
+      var catalogState = React.useState({ folder: '', items: [], warnings: [], error: '', loading: false });
+      var catalog = catalogState[0], setCatalog = catalogState[1];
+      var catalogRevision = React.useState(0);
+      var catalogFolder = form.mode === 'edit' && (form.type === 'mechanic' || form.type === 'character') && form.extList.includes(form.folder) ? form.folder : '';
+      React.useEffect(function () {
+        if (!catalogFolder) return;
+        var active = true;
+        setCatalog({ folder: catalogFolder, items: [], warnings: [], error: '', loading: true });
+        fetch('/noname-kit-api/mechanics?folder=' + encodeURIComponent(catalogFolder)).then(function (r) { return r.json() }).then(function (body) {
+          if (!body.ok || !Array.isArray(body.mechanics)) throw new Error(body.error || '机制列表获取失败');
+          if (active) setCatalog({ folder: catalogFolder, items: body.mechanics, warnings: body.warnings || [], error: '', loading: false });
+        }).catch(function (error) {
+          if (active) setCatalog({ folder: catalogFolder, items: [], warnings: [], error: error.message || '机制列表获取失败', loading: false });
+        });
+        return function () { active = false };
+      }, [catalogFolder, catalogRevision[0]]);
+      var currentCatalog = catalogFolder && catalog.folder === catalogFolder ? catalog : null;
+      var mechanisms = currentCatalog ? currentCatalog.items : [];
+      var selectedMechanic = form.type === 'mechanic' && form.goal === 'edit' ? mechanisms.find(function (item) { return item.id === form.entryId }) : null;
+
+      function clearSkillMechanics(skills) {
+        return skills.map(function (s) { return Object.assign({}, s, { mechanicIds: [] }) });
+      }
+
+      function mechanicFields(item) {
+        return { mechanicId: item ? item.id : '', mechanicKind: item ? item.kind : 'skill-type', mechanicName: item ? item.name : '',
+          mechanicDescription: item ? item.description : '', mechanicRules: '', mechanicParameters: '', mechanicInvocation: '',
+          mechanicActivation: '', mechanicScope: '', mechanicEnd: '' };
+      }
+
+      function pickMechanic(id) {
+        var item = mechanisms.find(function (row) { return row.id === id });
+        patch(Object.assign({ entryId: id, err: '' }, mechanicFields(item)));
+      }
 
       var genTaskId = function (folder, avoid) {
         avoid = avoid || [];
@@ -735,8 +794,9 @@ window.__ModuleLoader__.load({
       var switchMode = function (mode) {
         // 🎲 mode 类型两种目标都支持:新建 = 从零生成模式;编辑 = 修改已生成的模式包
         var goal = (form.type === 'mode' && mode === 'edit') ? 'edit' : 'create';
-        patch({ mode: mode, goal: goal, err: '', currentInfo: '', usedIds: [], notes: [],
-          entryId: '', entryList: [], entrySkills: [], pickedSkills: [], editNotes: '', addSkills: false });
+        patch(Object.assign({ mode: mode, goal: goal, err: '', currentInfo: '', usedIds: [], notes: [],
+          entryId: '', entryList: [], entrySkills: [], pickedSkills: [], editNotes: '', addSkills: false,
+          skills: clearSkillMechanics(form.skills) }, form.type === 'mechanic' ? mechanicFields(null) : {}));
         if (mode === 'edit' && form.extList.length === 0 && !form.extLoading) loadExtensionFolders();
       };
 
@@ -793,12 +853,13 @@ window.__ModuleLoader__.load({
         patch({ pickedSkills: has ? form.pickedSkills.filter(function (p) { return p.id !== id }) : form.pickedSkills.concat([{ id: id, name: name, note: '' }]) });
       };
 
-      var setPickedNote = function (id, note) {
-        patch({ pickedSkills: form.pickedSkills.map(function (p) { return p.id === id ? Object.assign({}, p, { note: note }) : p }) });
+      var updatePicked = function (id, changes) {
+        patch({ pickedSkills: form.pickedSkills.map(function (p) { return p.id === id ? Object.assign({}, p, changes) : p }) });
       };
 
       var switchGoal = function (goal) {
-        patch({ goal: goal, entryId: '', err: '', currentInfo: '', entrySkills: [], pickedSkills: [], editNotes: '' });
+        patch(Object.assign({ goal: goal, entryId: '', err: '', currentInfo: '', entrySkills: [], pickedSkills: [], editNotes: '' },
+          form.type === 'mechanic' ? mechanicFields(null) : {}));
         if (goal === 'edit') loadEntries(form.folder, form.type);
       };
 
@@ -811,7 +872,8 @@ window.__ModuleLoader__.load({
       };
 
       var pickExisting = function (folder) {
-        patch({ folder: folder, currentInfo: '', usedIds: [], entryId: '', entryList: [], entrySkills: [], pickedSkills: [], editNotes: '', addSkills: false });
+        patch(Object.assign({ folder: folder, currentInfo: '', usedIds: [], entryId: '', entryList: [], entrySkills: [], pickedSkills: [], editNotes: '', addSkills: false,
+          skills: clearSkillMechanics(form.skills) }, form.type === 'mechanic' ? mechanicFields(null) : {}));
         if (!folder) return;
         if (form.goal === 'edit') loadEntries(folder, form.type);
         // 仅在响应所属扩展仍被选中时更新信息、风格、已用 ID 和注意点，防止切包后的迟到响应覆盖当前表单。
@@ -893,10 +955,36 @@ window.__ModuleLoader__.load({
         var isEdit = form.mode === 'edit';
         var editingExisting = isEdit && form.goal === 'edit';
         var isMode = form.type === 'mode';
+        var isMechanic = form.type === 'mechanic';
         var isModeCreate = isMode && !editingExisting;
         var filledSkills = form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() });
         var errSet = function (msg) { setForm(function (prev) { return Object.assign({}, prev, { err: msg }) }) };
-        if (isModeCreate) {
+        if (form.type === 'character' && (!editingExisting || form.addSkills) && form.skills.some(function (s) {
+          return s.mechanicIds && s.mechanicIds.length && !s.name.trim();
+        })) { errSet('请为引用了机制的技能填写名称'); return }
+        var mechanic = null;
+        var title = (isMechanic ? form.mechanicName : form.title).trim();
+        if (isMechanic) {
+          var kind = form.mechanicKind;
+          mechanic = { id: form.mechanicId.trim(), kind: kind, description: form.mechanicDescription.trim(), rules: form.mechanicRules.trim(), invocation: form.mechanicInvocation.trim() };
+          if (kind === 'skill-type') mechanic.parameters = form.mechanicParameters.trim();
+          if (kind === 'global-rule') {
+            mechanic.activation = form.mechanicActivation.trim();
+            mechanic.scope = form.mechanicScope.trim();
+            mechanic.end = form.mechanicEnd.trim();
+          }
+          if (!form.folder.trim() || (isEdit && !catalogFolder)) { errSet('请选择目标扩展包'); return }
+          if (editingExisting && !selectedMechanic) { errSet('请选择要编辑的机制'); return }
+          if (!/^[a-z][a-z0-9_]{0,63}$/.test(mechanic.id)) { errSet('机制 ID 以小写字母开头，只用小写字母、数字或下划线，最多 64 字符'); return }
+          if (!title || !mechanic.description) { errSet('请填写机制名称和规则说明'); return }
+          if (!editingExisting && !mechanic.rules) { errSet('请填写判定与结算'); return }
+          if (editingExisting && title === selectedMechanic.name.trim() && mechanic.description === selectedMechanic.description.trim() &&
+              !['rules', 'invocation', 'parameters', 'activation', 'scope', 'end'].some(function (field) { return mechanic[field] })) {
+            errSet('请至少修改一项机制内容'); return;
+          }
+          if (!editingExisting && kind === 'shared-rule' && !mechanic.invocation) { errSet('请填写共用规则的调用时机'); return }
+          if (!editingExisting && kind === 'global-rule' && (!mechanic.activation || !mechanic.scope)) { errSet('请填写全局规则的启用条件和影响范围'); return }
+        } else if (isModeCreate) {
           if (!form.folder.trim()) { errSet('目标扩展文件夹不能为空'); return }
           if (!form.brief.trim()) { errSet('请填写一句话核心玩法'); return }
           if (!form.rules.trim()) { errSet('请填写玩法细节描述(至少一条规则)'); return }
@@ -904,8 +992,8 @@ window.__ModuleLoader__.load({
           if (!form.folder.trim()) { errSet('目标扩展文件夹不能为空'); return }
           var entryLabel = form.type === 'mode' ? '规则/条目' : (form.type === 'card' ? '卡牌' : '武将');
           if (form.type !== 'mode' && !form.entryId) { errSet('请先选择要修改的' + entryLabel); return }
-          var emptyNote = form.pickedSkills.filter(function (p) { return !p.note.trim() }).map(function (p) { return p.name || p.id });
-          if (emptyNote.length) { errSet('勾选的技能要填写修改内容: ' + emptyNote.join('、')); return }
+          var emptyNote = form.pickedSkills.filter(function (p) { return !p.note.trim() && !(p.mechanicIds || []).length }).map(function (p) { return p.name || p.id });
+          if (emptyNote.length) { errSet('勾选的技能要填写修改内容或选择机制: ' + emptyNote.join('、')); return }
           var addSkillFilled = form.addSkills && form.type === 'character' && form.skills.some(function (s) { return s.name.trim() || s.desc.trim() });
           var modeRulesFilled = isMode && form.rules.trim();
           var videoEditSelected = form.type === 'character' && form.usePortraitVideo;
@@ -944,19 +1032,21 @@ window.__ModuleLoader__.load({
         var splitAudioPaths = function (v) {
           return String(v || '').split(/[,，;；\n]/).map(function (t) { return t.trim() }).filter(Boolean).slice(0, 10);
         };
-        var skills = isMode && !editingExisting
+        var newSkillRows = type === 'character' && (!editingExisting || form.addSkills)
+          ? filledSkills.map(function (s) { return { name: s.name.trim(), desc: s.desc.trim(), audios: splitAudioPaths(s.audios), mechanicIds: s.mechanicIds || [] } })
+          : [];
+        var skills = isMechanic ? [{ name: title, desc: mechanic.rules }]
+          : isMode && !editingExisting
           ? []
           : editingExisting
           ? [].concat(
               form.editNotes.trim() ? [{ name: form.type === 'mode' ? '模式包调整' : '修改 ' + form.entryId, desc: form.editNotes.trim() }] : [],
-              form.pickedSkills.map(function (p) { return { name: p.name || p.id, desc: p.note.trim() } }),
-              form.addSkills && type === 'character'
-                ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim(), audios: splitAudioPaths(s.audios) } })
-                : [],
+              form.pickedSkills.map(function (p) { return { name: p.name || p.id, desc: p.note.trim(), mechanicIds: p.mechanicIds || [] } }),
+              newSkillRows,
               isMode && form.rules.trim() ? [{ name: '模式规则调整', desc: form.rules.trim() }] : []
             )
           : (type === 'character'
-          ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim(), audios: splitAudioPaths(s.audios) } })
+          ? newSkillRows
           : [{ name: form.title.trim() || '新卡牌', desc: (form.skills[0] && form.skills[0].desc ? form.skills[0].desc.trim() : '') }]);
         if (editingExisting && portraitVideo) {
           var videoNodeName = '视频动态立绘', videoNodeNumber = 1;
@@ -981,7 +1071,7 @@ window.__ModuleLoader__.load({
           dispatch.check();
           return fetch('/noname-kit-api/tasks', {
             method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: taskId, folder: form.folder.trim(), packageMeta: packageMeta, type: type, title: form.title.trim(), charInfo: form.charInfo.trim(), newFaction: newFaction, portraitVideo: portraitVideo, pile: pile, skills: skills, image: form.image.trim(), dieAudios: dieAudioList, target: editingExisting ? { kind: type, id: form.entryId } : null, writeMode: form.writeMode, modeBrief: isMode ? form.brief.trim() : '', modeNum: isMode ? (form.numConfig === 'custom' ? (form.numCustom || 'custom') : form.numConfig) : '', modeWin: isMode ? form.winConfig.trim() : '', modeRules: isMode ? form.rules.trim() : '' }),
+            body: JSON.stringify({ id: taskId, folder: form.folder.trim(), packageMeta: packageMeta, type: type, title: title, mechanic: mechanic, charInfo: form.charInfo.trim(), newFaction: newFaction, portraitVideo: portraitVideo, pile: pile, skills: skills, image: isMechanic ? '' : form.image.trim(), dieAudios: dieAudioList, target: editingExisting ? { kind: type, id: form.entryId } : null, writeMode: form.writeMode, modeBrief: isMode ? form.brief.trim() : '', modeNum: isMode ? (form.numConfig === 'custom' ? (form.numCustom || 'custom') : form.numConfig) : '', modeWin: isMode ? form.winConfig.trim() : '', modeRules: isMode ? form.rules.trim() : '' }),
           }).then(function (r) { return r.json() }).then(function (reg) {
             if (!reg.ok) throw new Error(reg.error || '任务注册失败');
             registeredTaskId = taskId;
@@ -993,6 +1083,15 @@ window.__ModuleLoader__.load({
           var gameDir = ctx2.gameDir || '';
           var gameDirPosix = ctx2.gameDirPosix || '';
           var skillLines = skills.map(function (s, i) { return (i + 1) + '. ' + s.name + (s.desc ? ':' + s.desc : '') }).join('\n');
+          var mechanicReferences = skills.filter(function (s) { return s.mechanicIds && s.mechanicIds.length }).map(function (s) {
+            return '- ' + s.name + '：' + s.mechanicIds.map(function (id) {
+              var item = mechanisms.find(function (row) { return row.id === id });
+              return item ? item.name + '（' + id + '，' + item.kind + '，' + item.file + ':' + item.line + '）' : id;
+            }).join('、');
+          });
+          var mechanicReferenceBlock = mechanicReferences.length
+            ? '── 技能引用的自定义机制 ──\n' + mechanicReferences.join('\n') + '\n加载 noname-extension-dev 后按技能资源目录读取 references/custom-mechanic.md。复用机制的现有定义，逐技能确认调用时机、参数和结算。'
+            : '';
           // 配音区块:只列登记了配音的技能;目标文件名由 AI 按内部 ID 命名(此处不知道 ID)
           var audioLines = skills.filter(function (s) { return s.audios && s.audios.length })
             .map(function (s) { return '- ' + s.name + '(' + s.audios.length + ' 句): ' + s.audios.join('、') }).join('\n');
@@ -1022,7 +1121,7 @@ window.__ModuleLoader__.load({
               (editingExisting ? '静态立绘独立处理，先核对目标武将原有图片并沿用作为回退；本次未填图片路径不代表缺图，仅实际缺少静态图时说明。' : '静态立绘独立处理，已提供时用于加载或播放失败的回退；未提供时说明缺图。') +
               '不把视频或势力图登记为静态立绘图片。复制成功不等于已验证播放，交付时分别说明复制、播放实现和实际验证结果。'
             : '';
-          var characterOptionsBlock = [factionBlock, portraitVideoBlock,
+          var characterOptionsBlock = [factionBlock, portraitVideoBlock, mechanicReferenceBlock,
             (factionBlock || portraitVideoBlock) ? '以上勾选项属于本任务需求，交付检查一并覆盖。手动模式只生成源码成品；素材复制遵守用户已授权范围，用户要求全部手动时提供资源清单与放置位置。' : ''
           ].filter(Boolean).join('\n');
           var pileText;
@@ -1033,7 +1132,32 @@ window.__ModuleLoader__.load({
             ? '── 新扩展包信息 ──\n' + JSON.stringify(packageMeta, null, 2)
             : '';
           var text;
-          if (isMode && !editingExisting) {
+          if (isMechanic) {
+            text = [
+              '【无名杀工坊·自定义机制】',
+              '任务ID: ' + taskId,
+              '任务性质: ' + (editingExisting ? '修改已有机制，沿用现有 ID 和类型' : isEdit ? '向已有扩展包添加机制' : '创建扩展包及第一个机制（包括 extension.js 和 info.json）'),
+              packageBlock,
+              '目标扩展文件夹: ' + form.folder.trim(),
+              gameDir ? '游戏目录（Git Bash：' + gameDirPosix + '）: ' + gameDir : '',
+              '写法: ' + (isEdit ? '沿用目标扩展当前写法' : form.style === 'module' ? '新版 ES Module' : '老版 game.import'),
+              '写入方式: ' + (form.writeMode === 'manual' ? '手动复制(只生成源码，不写入扩展源码)' : '自动写入'),
+              '机制名称: ' + title,
+              '机制 ID: ' + mechanic.id,
+              '机制类型: ' + mechanismKinds.find(function (item) { return item.value === mechanic.kind }).text + '（' + mechanic.kind + '）',
+              selectedMechanic ? '定义位置: ' + selectedMechanic.file + ':' + selectedMechanic.line + '。先读取原实现并核对现有调用方。未提出改动的规则按现有实现核对。' : '',
+              mechanic.invocation ? '调用时机: ' + mechanic.invocation : '',
+              mechanic.rules ? (editingExisting ? '本次规则改动: ' : '判定与结算: ') + mechanic.rules : '',
+              '规则说明: ' + mechanic.description,
+              mechanic.parameters ? '技能可调参数: ' + mechanic.parameters : '',
+              mechanic.activation ? '启用条件: ' + mechanic.activation : '',
+              mechanic.scope ? '影响范围: ' + mechanic.scope : '',
+              mechanic.end ? '结束条件: ' + mechanic.end : '',
+              form.reference.trim() ? '── 用户提供的参考代码 ──\n' + form.reference.trim() : '',
+              '执行请求: 加载 noname-extension-dev 后读取 references/custom-mechanic.md。按约定生成可调用的机制定义并接入目标引擎，逐条核对需求，问清会改变玩法的待定项，给出【需求理解确认】清单。等我回复「确认」后开始实现。',
+              '任务节点名称（noname_skills_written）: ' + title,
+            ].filter(Boolean).join('\n');
+          } else if (isMode && !editingExisting) {
             text = [
               '【无名杀工坊·新任务】',
               '任务ID: ' + taskId,
@@ -1054,9 +1178,6 @@ window.__ModuleLoader__.load({
               form.idPrefix.trim() ? '内部 ID 命名规则:模式名/新增技能的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文,面向玩家展示的名称与描述写入 translate，内部规则技按实际展示需要设置。' : '',
             ].filter(Boolean).join('\n');
           } else if (editingExisting) {
-            var newSkillRows = form.addSkills && type === 'character'
-              ? form.skills.filter(function (s) { return s.name.trim() || s.desc.trim() }).map(function (s) { return { name: s.name.trim(), desc: s.desc.trim() } })
-              : [];
             var pickedSkillRows = form.pickedSkills;
             var entryFile = (form.entryList.filter(function (en) { return en.id === form.entryId })[0] || {}).file || 'extension.js';
             text = [
@@ -1146,6 +1267,28 @@ window.__ModuleLoader__.load({
       var isEdit = form.mode === 'edit';
       var editingExisting = isEdit && form.goal === 'edit';
       var isModeCreate = form.type === 'mode' && !editingExisting;
+      var isMechanic = form.type === 'mechanic';
+      var linkableMechanisms = mechanisms.filter(function (item) { return item.kind !== 'global-rule' });
+      var mechanicKindLabel = function (kind) {
+        return mechanismKinds.find(function (item) { return item.value === kind }).text;
+      };
+      var mechanicPicker = function (ids, update) {
+        ids = ids || [];
+        if (!linkableMechanisms.length && !ids.length) return null;
+        var missing = ids.filter(function (id) { return !linkableMechanisms.some(function (item) { return item.id === id }) });
+        return h('details', { className: 'nnk-character-option' },
+          h('summary', null, '引用自定义机制' + (ids.length ? '（已选 ' + ids.length + '）' : '')),
+          linkableMechanisms.map(function (item) {
+            return h('label', { className: 'nnk-option-toggle', key: item.id, title: item.description },
+              h('input', { type: 'checkbox', checked: ids.includes(item.id), onChange: function (ev) {
+                update(ev.target.checked ? ids.concat(item.id) : ids.filter(function (id) { return id !== item.id }));
+              } }), item.name + '（' + mechanicKindLabel(item.kind) + ' · ' + item.id + '）');
+          }),
+          currentCatalog && !currentCatalog.loading ? missing.map(function (id) {
+            return h('label', { className: 'nnk-option-toggle', key: id },
+              h('input', { type: 'checkbox', checked: true, onChange: function () { update(ids.filter(function (item) { return item !== id })) } }), '机制 ' + id + ' 当前不可用，取消勾选可移除引用');
+          }) : null);
+      };
       // 技能列表编辑器(创建新武将 / 编辑已有+新增技能 共用)
       var skillRows = function () {
         return [
@@ -1171,7 +1314,8 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'nnk-skill-inner nnk-description-editor', inert: hidden ? '' : undefined, 'aria-hidden': hidden || undefined }, h('div', { className: 'nnk-skill-fields' },
               h('input', { className: 'nnk-input', value: s.name, placeholder: '技能名(显示名,例: 挥砍)', style: { marginBottom: '4px' }, onChange: function (ev) { setSkill(idx, 'name')(ev.target.value) } }),
               h('textarea', { className: 'nnk-textarea', style: { minHeight: '60px' }, value: s.desc, placeholder: '效果:触发/频率/目标/数值/边界', onChange: function (ev) { setSkill(idx, 'desc')(ev.target.value) } }),
-              h('input', { className: 'nnk-input', value: s.audios || '', placeholder: '配音文件(可选;本地 mp3 路径,多句用逗号分隔)——复制进包内 audio/skill/ 后按 内部ID1.mp3、内部ID2.mp3 编号', style: { marginTop: '4px' }, onChange: function (ev) { setSkill(idx, 'audios')(ev.target.value) } })
+              h('input', { className: 'nnk-input', value: s.audios || '', placeholder: '配音文件(可选;本地 mp3 路径,多句用逗号分隔)——复制进包内 audio/skill/ 后按 内部ID1.mp3、内部ID2.mp3 编号', style: { marginTop: '4px' }, onChange: function (ev) { setSkill(idx, 'audios')(ev.target.value) } }),
+              mechanicPicker(s.mechanicIds, setSkill(idx, 'mechanicIds'))
                 )),
                 s.desc ? h('div', { className: 'nnk-description-summary', 'aria-hidden': !hidden || undefined, 'data-nnk-literal': true }, h('span', { className: 'nnk-description-excerpt' }, s.desc)) : null
               )
@@ -1184,9 +1328,52 @@ window.__ModuleLoader__.load({
         return h(FormField, { key: key, fieldKey: key, label: label },
           h('input', { type: 'text', className: 'nnk-input', value: value, placeholder: placeholder, maxLength: maxLength, onChange: function (ev) { set(key)(ev.target.value) } }));
       };
+      var mechanicField = function (key, label, maxLength, rows, placeholder) {
+        return h(FormField, { key: key, fieldKey: key, label: label },
+          h('textarea', { className: 'nnk-textarea', rows: rows, value: form[key], maxLength: maxLength,
+            placeholder: placeholder, onChange: function (ev) { set(key)(ev.target.value) } }));
+      };
+      var mechanismForm = function () {
+        var kind = form.mechanicKind;
+        var example = mechanismKinds.find(function (item) { return item.value === kind }).example;
+        var exampleFields = [
+          ['机制 ID', example.id], ['调用时机', example.invocation], ['判定与结算', example.rules], ['规则说明', example.description],
+          ['技能可调参数', example.parameters], ['启用条件', example.activation], ['影响范围', example.scope], ['结束条件', example.end]
+        ];
+        return [
+          editingExisting ? h(FormField, { key: 'mechanic-target', fieldKey: 'mechanic-target', label: '选择已有机制' },
+            h('select', { className: 'nnk-input', value: form.entryId, onChange: function (ev) { pickMechanic(ev.target.value) } },
+              h('option', { value: '' }, '— 选择机制 —'),
+              mechanisms.map(function (item) { return h('option', { key: item.id, value: item.id }, item.name + '（' + item.id + '）') }))) : null,
+          editingExisting && !selectedMechanic && currentCatalog && !currentCatalog.loading && !currentCatalog.error && !mechanisms.length
+            ? e('div', 'nnk-hint', '此扩展包还没有可编辑的机制。可以切换到「创建新」。') : null,
+          editingExisting && !selectedMechanic ? null : [
+            editingExisting ? e('div', 'nnk-hint', mechanicKindLabel(kind) + ' · ' + form.mechanicId + ' · ' + selectedMechanic.file + ':' + selectedMechanic.line)
+              : radioGroup('机制类别', kind, mechanismKinds, set('mechanicKind')),
+            h('details', { key: kind, className: 'nnk-character-option' },
+              h('summary', null, '填写示例 · ' + example.name),
+              exampleFields.filter(function (field) { return field[1] }).map(function (field) {
+                return h('div', { key: field[0], className: 'nnk-hint' }, h('b', null, field[0] + '：'), field[1]);
+              })),
+            !editingExisting ? optionField('mechanicId', '机制 ID', form.mechanicId, '建议用包前缀，例如 ' + example.id, 64) : null,
+            optionField('mechanicName', '机制名称', form.mechanicName, '例：' + example.name, 60),
+            mechanicField('mechanicInvocation', '调用时机' + (editingExisting || kind !== 'shared-rule' ? '（可选）' : ''), 2000, 2,
+              editingExisting ? '留空沿用现有时机' : example.invocation),
+            mechanicField('mechanicRules', editingExisting ? '判定与结算（可选）' : '判定与结算', 5000, 4,
+              editingExisting ? '仅调整其他字段时可留空' : example.rules),
+            mechanicField('mechanicDescription', '规则说明（游戏内可查看）', 1200, 2, example.description),
+            kind === 'skill-type' ? mechanicField('mechanicParameters', '技能可调参数（可选）', 2000, 2, example.parameters) : null,
+            kind === 'global-rule' ? [
+              mechanicField('mechanicActivation', '启用条件' + (editingExisting ? '（可选）' : ''), 2000, 2, example.activation),
+              mechanicField('mechanicScope', '影响范围' + (editingExisting ? '（可选）' : ''), 2000, 2, example.scope),
+              mechanicField('mechanicEnd', '结束条件（可选）', 2000, 2, example.end)
+            ] : null
+          ]
+        ];
+      };
       try {
       return h('div', { className: 'nnk-card nnk-task-form' },
-        e('div', 'nnk-task-heading', h('b', null, isEdit ? '编辑已有扩展包' : '创建新扩展包'), h('span', { className: 'nnk-hint' }, '　任务粒度:' + (form.type === 'mode' ? '一个完整的自定义游戏模式' : '一个完整武将(含全部技能)或一张卡牌'))),
+        e('div', 'nnk-task-heading', h('b', null, isEdit ? '编辑已有扩展包' : '创建新扩展包'), h('span', { className: 'nnk-hint' }, '　任务粒度:' + (isMechanic ? '一项自定义机制' : form.type === 'mode' ? '一个完整的自定义游戏模式' : '一个完整武将(含全部技能)或一张卡牌'))),
         h('div', { className: 'nnk-form-fields' },
         radioGroup('模式', form.mode, [{ value: 'new', text: '🆕 创建新扩展包' }, { value: 'edit', text: '📂 编辑已有扩展包' }], switchMode),
         textField('任务ID(留空自动按「文件夹名-序号」生成;反馈时用它精准定位)', form.taskId, set('taskId'), { placeholder: '例: my-pack-01' }),
@@ -1214,9 +1401,13 @@ window.__ModuleLoader__.load({
               h('textarea', { className: 'nnk-textarea', rows: 3, value: form.packageIntro, placeholder: '简单介绍这个扩展包', onChange: function (ev) { set('packageIntro')(ev.target.value) } })),
             optionField('packageVersion', '扩展版本', form.packageVersion, '1.0'),
           ],
-        radioGroup('类型', form.type, [{ value: 'character', text: '⚔️ 武将' }, { value: 'card', text: '🃏 卡牌' }, { value: 'mode', text: '🎲 新玩法(自定义模式)' }], switchType),
+        radioGroup('类型', form.type, [{ value: 'character', text: '⚔️ 武将' }, { value: 'card', text: '🃏 卡牌' }, { value: 'mode', text: '🎲 新玩法(自定义模式)' }, { value: 'mechanic', text: '自定义机制' }], switchType),
         // 编辑已有包里的自定义模式时，无需再选择新增或编辑目标。
         isEdit && form.type !== 'mode' ? radioGroup('目标', form.goal, [{ value: 'create', text: '✨ 创建新' }, { value: 'edit', text: '✏️ 编辑已有' }], switchGoal) : null,
+        catalogFolder ? h('div', { className: 'nnk-hint' },
+          !currentCatalog || currentCatalog.loading ? '正在读取自定义机制…' : currentCatalog.error || currentCatalog.warnings.join('；'),
+          currentCatalog && !currentCatalog.loading ? h('button', { type: 'button', className: 'nnk-smallbtn', onClick: function () { catalogRevision[1](function (value) { return value + 1 }) } }, '刷新机制列表') : null) : null,
+        isMechanic ? mechanismForm() : null,
         isModeCreate ? [
           e('div', 'nnk-hint', '🎲 以全新扩展包交付,生成后可随时在「📂 编辑已有扩展包」里继续调整。'),
           textField('一句话核心玩法(这是什么玩法?)', form.brief, set('brief'), { placeholder: '例: 无身份混战大逃杀,每个玩家独立求生' }),
@@ -1230,7 +1421,7 @@ window.__ModuleLoader__.load({
           h('textarea', { className: 'nnk-textarea', style: { minHeight: '120px' }, value: form.rules, placeholder: '例: 全场按 冬→春→夏→秋 每 3 轮轮换季节;准备阶段强制执行当季效果——冬:少摸一张牌或流失1点体力;春:多摸一张牌或回复1点体力…', onChange: function (ev) { set('rules')(ev.target.value) } })),
           e('div', 'nnk-hint', 'AI 会核对当前引擎和规则实现，把逐条规则列入【需求理解确认】清单。你回复「确认」后开始实现。进游戏实测后，逐条规则点「确认无误」完成任务。')
         ] : null,
-        editingExisting ? [
+        editingExisting && !isMechanic ? [
           form.type !== 'mode' ? e('label', 'nnk-label', '编辑目标(选择要修改的' + (form.type === 'card' ? '卡牌' : '武将') + ')' + (form.entryLoading ? '(加载中…)' : '')) : null,
           form.type !== 'mode' ? h('select', { className: 'nnk-input', value: form.entryId, onChange: function (ev) { pickEntry(ev.target.value) } },
             [h('option', { key: '', value: '' }, '— 选择要修改的' + (form.type === 'card' ? '卡牌' : '武将') + ' —')].concat(form.entryList.map(function (en) {
@@ -1249,7 +1440,8 @@ window.__ModuleLoader__.load({
                   h('input', { type: 'checkbox', checked: !!picked, onChange: function () { togglePicked(en.id, en.name) } }),
                   en.id + (en.name ? '(' + en.name + ')' : '')
                 ),
-                picked ? h('input', { className: 'nnk-input', style: { display: 'block', width: '100%', boxSizing: 'border-box', marginTop: '4px' }, value: picked.note, placeholder: '要改成什么(必填),例: 伤害 1 改为 2,每回合限一次', onChange: function (ev) { setPickedNote(en.id, ev.target.value) } }) : null
+                picked ? [h('input', { key: 'note', className: 'nnk-input', style: { display: 'block', width: '100%', boxSizing: 'border-box', marginTop: '4px' }, value: picked.note, placeholder: '要改成什么，例如每回合限一次', onChange: function (ev) { updatePicked(en.id, { note: ev.target.value }) } }),
+                  form.type === 'character' ? mechanicPicker(picked.mechanicIds, function (ids) { updatePicked(en.id, { mechanicIds: ids }) }) : null] : null
               );
             }))
           ] : null,
@@ -1266,8 +1458,8 @@ window.__ModuleLoader__.load({
                     form.type === 'character' ? radioGroup('是否新增技能', form.addSkills ? 'yes' : 'no', [{ value: 'no', text: '不新增' }, { value: 'yes', text: '新增技能(填下面的技能列表)' }], function (v) { patch({ addSkills: v === 'yes' }) }) : null,
           form.addSkills && form.type === 'character' ? skillRows() : null
         ] : null,
-        textField(form.type === 'mode' ? '模式名称(显示名,注册为模式翻译)' : (form.type === 'card' ? '卡牌名称' : '武将名称') + (editingExisting ? '(新显示名,可选;留空 = 不改名)' : '(显示名,会写入 translate)'), form.title, set('title'), { placeholder: form.type === 'mode' ? '例: 季节乱斗' : (form.type === 'card' ? '例: 疾风符' : '例: 凌霜') }),
-        (editingExisting && !(form.addSkills && form.type === 'character')) ? null : textField('ID 前缀(防止与其他扩展包的技能/武将/卡牌重名;可选但强烈建议)', form.idPrefix, set('idPrefix'), { placeholder: '例: cs_ (则内部 ID 形如 cs_tianfa)' }),
+        !isMechanic ? textField(form.type === 'mode' ? '模式名称(显示名,注册为模式翻译)' : (form.type === 'card' ? '卡牌名称' : '武将名称') + (editingExisting ? '(新显示名,可选;留空 = 不改名)' : '(显示名,会写入 translate)'), form.title, set('title'), { placeholder: form.type === 'mode' ? '例: 季节乱斗' : (form.type === 'card' ? '例: 疾风符' : '例: 凌霜') }) : null,
+        (isMechanic || (editingExisting && !(form.addSkills && form.type === 'character'))) ? null : textField('ID 前缀(防止与其他扩展包的技能/武将/卡牌重名;可选但强烈建议)', form.idPrefix, set('idPrefix'), { placeholder: '例: cs_ (则内部 ID 形如 cs_tianfa)' }),
         !editingExisting && form.type === 'character' ? textField('武将基本信息(势力、体力、性别…;可选)', form.charInfo, set('charInfo'), { placeholder: '例:群势力,3 体力,男性,风格偏辅助' }) : null,
         !editingExisting && form.type === 'character' ? h('div', { key: 'faction-option', className: 'nnk-character-option' },
           h('label', { className: 'nnk-option-toggle' },
@@ -1282,7 +1474,7 @@ window.__ModuleLoader__.load({
               h('code', null, form.factionColor.toUpperCase())) : null,
             e('div', 'nnk-hint', '填写本地图片的完整路径，新武将将使用这个势力。')) : null
         ) : null,
-        form.type === 'mode' ? null : h('div', { key: 'img', className: 'nnk-field' },
+        (form.type === 'mode' || isMechanic) ? null : h('div', { key: 'img', className: 'nnk-field' },
           e('label', 'nnk-label', fieldLabelParts('图片路径(武将立绘/卡牌图;可选)')),
           h('input', { className: 'nnk-input', value: form.image, placeholder: '例: D:\\pic\\hero.png —— AI 复制进扩展包 image/ 后按 ID 命名', onChange: function (ev) { set('image')(ev.target.value) } })
         ),
@@ -1297,7 +1489,7 @@ window.__ModuleLoader__.load({
           e('label', 'nnk-label', fieldLabelParts('阵亡语音文件(可选;本地 mp3,多句逗号分隔)')),
           h('input', { className: 'nnk-input', value: form.dieAudios, placeholder: '例: D:\\audio\\die1.mp3 —— 复制进扩展包 audio/die/ 后按武将ID命名,引擎自动播放', onChange: function (ev) { set('dieAudios')(ev.target.value) } })
         ) : null,
-        (editingExisting || form.type === 'mode') ? null : (form.type === 'character' ? skillRows() : [
+        (editingExisting || form.type === 'mode' || isMechanic) ? null : (form.type === 'character' ? skillRows() : [
           h(FormField, { fieldKey: 'card-effect', label: '卡牌效果', value: form.skills[0].desc, foldable: true },
           h('textarea', { className: 'nnk-textarea', value: form.skills[0].desc, placeholder: '效果:类型/花色点数需求/效果/边界', onChange: (function () {
             return function (ev) {
@@ -1452,7 +1644,7 @@ window.__ModuleLoader__.load({
                 ext.error ? null : h('span', { className: 'nnk-badge' }, '累计 ' + ext.totalRounds + ' 轮'),
                 ext.backupCount ? h('span', { className: 'nnk-badge' }, ext.backupCount + ' 备份') : null
               ),
-              ext.lastTask ? e('div', 'nnk-taskmeta', '最近: [' + (ext.lastTask.kind === 'card' ? '卡牌' : ext.lastTask.kind === 'mode' ? '模式' : '武将') + '] ' + ext.lastTask.summary + ' · ' + fmt(ext.lastTask.at)) : null,
+              ext.lastTask ? e('div', 'nnk-taskmeta', '最近: [' + (ext.lastTask.kind === 'card' ? '卡牌' : ext.lastTask.kind === 'mode' ? '模式' : ext.lastTask.kind === 'mechanic' ? '机制' : '武将') + '] ' + ext.lastTask.summary + ' · ' + fmt(ext.lastTask.at)) : null,
               ext.error ? h('div', { className: 'nnk-err', role: 'alert' }, ext.error) : null,
               h('button', { className: 'nnk-copy', disabled: !!ext.error, onClick: function () { openDetail(ext.folder) } }, '📦 备份/注意点')
             );
@@ -3311,6 +3503,7 @@ window.__ModuleLoader__.load({
             '【无名杀工坊·问题反馈】',
             '任务ID: ' + task.id,
             '目标扩展文件夹: ' + task.folder,
+            task.mechanic ? '自定义机制: ' + task.mechanic.id + '（' + task.mechanic.kind + '）。核对机制定义及其相关调用方，参考 references/custom-mechanic.md。' : '',
             skill ? '问题技能: ' + skill : '',
             '当前轮次: 第 ' + fb.task.rounds + ' 轮',
             '── 问题描述/游戏内表现/报错 ──',
@@ -3333,8 +3526,8 @@ window.__ModuleLoader__.load({
         var skills = Array.isArray(task.skills) ? task.skills : [];
         var confirmed = skills.filter(function (s) { return s.status === 'confirmed' }).length;
         var warn = [];
-        if (!task.image && task.type !== 'mode' && !task.target) warn.push('未登记图片');   /* 编辑任务不强制补图，与任务浮窗保持一致。 */
-        if (skills.length && confirmed < skills.length) warn.push('技能确认 ' + confirmed + '/' + skills.length);
+        if (!task.image && task.type !== 'mode' && task.type !== 'mechanic' && !task.target) warn.push('未登记图片');
+        if (skills.length && confirmed < skills.length) warn.push((task.type === 'mechanic' ? '机制确认 ' : '技能确认 ') + confirmed + '/' + skills.length);
         if (audioNeed(task)) warn.push('有已登记未交付的配音');
         if (warn.length && !window.confirm('「' + task.id + '」' + warn.join('、') + '。\n确定标记整个任务完成、同时确认全部子项并归档吗?')) return;
         fetch('/noname-kit-api/tasks/complete', {
@@ -3388,6 +3581,8 @@ window.__ModuleLoader__.load({
         var fbTarget = box.fbFor && box.fbFor.id === task.id ? box.fbFor : null;
         var skills = Array.isArray(task.skills) ? task.skills : [];
         var isModeTask = task.type === 'mode';
+        var isMechanicTask = task.type === 'mechanic';
+        var needsImage = !isModeTask && !isMechanicTask;
         return h('div', { key: task.id, className: 'nnk-taskrow' },
           h('div', { className: 'nnk-task-title' },
             h('span', { className: 'nnk-badge ' + (task.status === 'open' ? 'nnk-status-open' : 'nnk-status-done') },
@@ -3396,12 +3591,12 @@ window.__ModuleLoader__.load({
           ),
           h('div', { className: 'nnk-taskmeta' }, e('span', 'nnk-ui-text', '📂 '), task.folder + ' · 返工 ' + task.rounds + ' 轮 · ' + fmt(task.updatedAt)),
           skills.length
-            ? e('div', 'nnk-taskmeta nnk-ui-text', (isModeTask ? '规则确认进度: ' : '技能确认进度: ') + skills.filter(function (s) { return s.status === 'confirmed' }).length + '/' + skills.length + (isModeTask ? ' · 模式任务:不涉及图片' : (!task.image && !task.target ? ' · 📷 缺图片(不登记图片不会自动完成)' : (!task.image && task.target ? ' · 编辑任务:不涉及图片' : ''))) + (audioNeed(task) ? ' · 🔊 缺配音(已登记的配音复制齐才会自动完成)' : ''))
+            ? e('div', 'nnk-taskmeta nnk-ui-text', (isMechanicTask ? '机制确认进度: ' : isModeTask ? '规则确认进度: ' : '技能确认进度: ') + skills.filter(function (s) { return s.status === 'confirmed' }).length + '/' + skills.length + (isModeTask ? ' · 模式任务:不涉及图片' : (needsImage && !task.image ? (task.target ? ' · 编辑任务:不涉及图片' : ' · 📷 缺图片(不登记图片不会自动完成)') : '')) + (audioNeed(task) ? ' · 🔊 缺配音(已登记的配音复制齐才会自动完成)' : ''))
             : null,
           h('div', { className: 'nnk-task-actions' },
-            h('button', { className: 'nnk-smallbtn', onClick: function () { setD({ expanded: expanded ? null : task.id, fbFor: null, msg: '' }) } }, expanded ? '收起' : (skills.length ? '展开技能树' : '展开')),
+            h('button', { className: 'nnk-smallbtn', onClick: function () { setD({ expanded: expanded ? null : task.id, fbFor: null, msg: '' }) } }, expanded ? '收起' : (isMechanicTask ? '展开机制' : skills.length ? '展开技能树' : '展开')),
             !isDoneSection ? h('button', { className: 'nnk-smallbtn', onClick: function () { setD({ expanded: task.id, fbFor: fbTarget && !fbTarget.skill ? null : { id: task.id, skill: '' }, issue: '', msg: '' }) } }, '🔁 反馈') : null,
-            !isDoneSection && !task.image && !isModeTask ? h('button', { className: 'nnk-smallbtn', disabled: box.imageBusy, onClick: function () { addImage(task) } }, '📷 补图') : null,
+            !isDoneSection && !task.image && needsImage ? h('button', { className: 'nnk-smallbtn', disabled: box.imageBusy, onClick: function () { addImage(task) } }, '📷 补图') : null,
             !isDoneSection && audioNeed(task) ? h('button', { className: 'nnk-smallbtn', onClick: function () { addAudio(task) } }, '🔊 补配音') : null,
             !isDoneSection ? h('button', { className: 'nnk-smallbtn', disabled: box.imageBusy && box.imageFor === task.id, onClick: function () { markDone(task) } }, '✅ 标记完成') : null,
             isDoneSection ? h('button', { className: 'nnk-smallbtn', title: '回到进行中:可补图/补配音或重新确认后再次收口' , onClick: function () { reopenTask(task) } }, '🔁 重开') : null,

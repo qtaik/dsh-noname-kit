@@ -10,6 +10,7 @@ import { STRUCTURAL_NAMES, findAllSections, sectionProperties } from './blocks.j
 import { isEntryId } from './entry-id.js'
 import { sourceStructure } from './module-parser.js'
 import { entryFileType } from './entry-file.js'
+import { inspectMechanics, hasMechanicCandidates } from './mechanics.js'
 
 /** 代码区(字符串/注释之外)不允许出现的全角标点。 */
 const FULLWIDTH = /[，。；：？！“”‘’【】（）〈〉《》、※]/
@@ -112,10 +113,13 @@ function compileCheck(code, style) {
   return { ok: false, message: '语法错误: ' + (parsed.parseError || parsed.error || '无法静态解析模块源码') }
 }
 
-/** 从代码里猜扩展 name 字段的值。 */
-function extractName(code) {
-  const m = code.match(/\bname\s*:\s*(['"])([^'"]+)\1/)
-  return m ? m[2] : null
+/** 识别扩展名时跳过已定位的机制对象，机制显示名可以出现在扩展入口之前。 */
+function extractName(code, excluded) {
+  const mask = buildCodeMask(code)
+  for (const m of code.matchAll(/\bname\s*:\s*(['"])([^'"]+)\1/g)) {
+    if (!mask[m.index] && !excluded.some(([start, end]) => m.index >= start && m.index < end)) return m[2]
+  }
+  return null
 }
 
 /**
@@ -151,7 +155,7 @@ export function collectDefinedIds(code, options = {}) {
  * @param {string} [input.folder] - 目标文件夹名(用于 name 一致性检查)。
  * @returns {{ok:boolean, style:string, errors:Array, warnings:Array}}
  */
-export function validateExtensionCode({ code, style, kind, folder, idPrefix }) {
+export function validateExtensionCode({ code, file, style, kind, folder, idPrefix }) {
   const errors = []
   const warnings = []
   if (typeof code !== 'string' || code.trim().length === 0) {
@@ -207,7 +211,9 @@ export function validateExtensionCode({ code, style, kind, folder, idPrefix }) {
     }
   }
 
-  const name = extractName(code)
+  const mechanisms = compile.ok && hasMechanicCandidates(code) ? inspectMechanics(code, { file, includeRanges: true }) : null
+  if (mechanisms && !mechanisms.ok) errors.push(...mechanicErrors(mechanisms))
+  const name = extractName(code, mechanisms?.objectRanges || [])
   if (!name) {
     errors.push({ message: '没有找到扩展的 name 字段(返回对象里的 name: "扩展名")。' })
   } else if (folder && name !== folder) {
@@ -252,7 +258,7 @@ export function validateFileCode(input) {
   try { target = entryFileType(input.file) } catch (error) {
     return { ok: false, errors: [{ message: error.message }], warnings: [] }
   }
-  if (target.fileType === 'entry') return { ...validateExtensionCode(input), ...target }
+  if (target.fileType === 'entry') return { ...validateExtensionCode({ ...input, file: target.file }), ...target }
   const style = target.fileType === 'json' ? 'json' : 'module'
   const verdict = { ok: true, style, errors: [], warnings: [], ...target }
   if (typeof input.code !== 'string') {
@@ -262,7 +268,15 @@ export function validateFileCode(input) {
   } else {
     const syntax = syntaxCheck(input.code, 'module')
     if (!syntax.ok) verdict.errors.push({ message: syntax.message })
+    else if (hasMechanicCandidates(input.code)) {
+      const mechanisms = inspectMechanics(input.code, { file: target.file })
+      if (!mechanisms.ok) verdict.errors.push(...mechanicErrors(mechanisms))
+    }
   }
   verdict.ok = verdict.errors.length === 0
   return verdict
+}
+
+function mechanicErrors(result) {
+  return [result.error, ...(result.warnings || [])].filter(Boolean).map(message => ({ message }))
 }

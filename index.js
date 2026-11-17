@@ -16,13 +16,14 @@ import { validateFileCode } from './src/validate.js'
 import { searchReference } from './src/reference.js'
 import { detectCandidates } from './src/detect.js'
 import { listCatalog, readCatalog } from './src/catalog.js'
-import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, migrateExtension, prunePackageBackups, listEntries, listEntrySkills, listAvatars } from './src/write.js'
+import { writeExtension, readExtension, listBackups, rollbackExtension, extRootOf, safeFolderPath, migrateExtension, prunePackageBackups, listEntries, listEntrySkills, listAvatars } from './src/write.js'
+import { listMechanics } from './src/mechanics.js'
 import { readHistory, archiveTask, listExtensionHistories, recordBackup, deleteNote } from './src/history.js'
 import { copyImages } from './src/images.js'
 import { copyVideos } from './src/videos.js'
 import { listExtensionFolders } from './src/detect.js'
 import { copyAudios, audioTargetKind } from './src/audio.js'
-import { createTask, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, setSkillAudioFiles, setDieAudioFiles, completeById, deleteTask, reopenTask, getTask } from './src/tasks.js'
+import { createTask, validateTaskMechanics, listTasks, skillFeedback, markSkillsWritten, setSkillStatus, setTaskImage, setSkillAudioFiles, setDieAudioFiles, completeById, deleteTask, reopenTask, getTask } from './src/tasks.js'
 import { bundledPresetDir, hostHasDeclarativePreset, installPreset, presetDirOf, presetStatus } from './src/preset.js'
 import { bundledKernelVersion, createBridgeSession, installKernel, bindKernelBridge, bridgeBaseUrl, kernelStatus, kernelRuntimeStatus } from './src/online.js'
 import { cachedUpdate, checkForUpdate, detectInstall, installHint } from './src/update.js'
@@ -915,11 +916,61 @@ export function apply(ctx, config) {
           const openOnly = url.searchParams.get('open') === '1'
           return json(200, { tasks: await listTasks(dshHomeDir, { openOnly }) })
         }
+        if (req.method === 'GET' && url.pathname === '/noname-kit-api/mechanics') {
+          if (!active) return json(503, { ok: false, mechanics: [], error: 'noname-kit 未配置 nonameDir(或目录无效)，无法读取机制' })
+          const result = await listMechanics(nonameDir, url.searchParams.get('folder'))
+          return json(result.ok ? 200 : 400, result)
+        }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/tasks') {
           if (!active) return json(503, { error: 'noname-kit 未配置 nonameDir(或目录无效),无法创建任务' })
           const body = await readBody()
+          const mechanism = validateTaskMechanics(body)
+          if (!mechanism.ok) return json(400, mechanism)
+          let mechanicWarnings = []
+          if (body.type === 'mechanic' || mechanism.mechanicIds.length) {
+            let packageExists = false
+            try {
+              const { full } = safeFolderPath(nonameDir, typeof body.folder === 'string' ? body.folder.trim() : body.folder)
+              try {
+                if (!statSync(full).isDirectory()) throw new Error('目标扩展包路径不是目录。')
+                packageExists = true
+              } catch (error) { if (error.code !== 'ENOENT') throw error }
+              if (packageExists && body.type === 'mechanic' && body.packageMeta != null &&
+                  ['extension.js', 'extension.ts'].some(file => existsSync(join(full, file)))) {
+                return json(400, { ok: false, error: '目标扩展包已存在。请切换到「编辑已有扩展包」，再选择「创建新」添加机制。' })
+              }
+            } catch (error) { return json(400, { ok: false, error: error.message }) }
+            // New packages have no mechanism declarations yet. References and edits always need an existing package.
+            if (packageExists || mechanism.mechanicIds.length || body.target) {
+              const catalog = await listMechanics(nonameDir, body.folder.trim())
+              if (!catalog.ok) return json(400, catalog)
+              mechanicWarnings = catalog.warnings || []
+              const available = new Map(catalog.mechanics.map(item => [item.id, item]))
+              for (const id of mechanism.mechanicIds) {
+                const existing = available.get(id)
+                if (!existing || existing.kind === 'global-rule') {
+                  return json(400, { ok: false, error: `机制「${id}」不存在、无法唯一识别或属于全局规则，不能作为技能引用。`, warnings: catalog.warnings || [] })
+                }
+              }
+              if (body.type === 'mechanic') {
+                const existing = available.get(mechanism.mechanic.id)
+                if (body.target) {
+                  if (!existing || existing.kind !== mechanism.mechanic.kind) return json(400, { ok: false, error: '待编辑机制不存在或类型已变化，请刷新机制列表；编辑须保留原 ID 和 kind。', warnings: catalog.warnings || [] })
+                  const proposal = mechanism.mechanic
+                  const hasOtherChanges = proposal.kind === 'skill-type' ? proposal.parameters
+                    : proposal.kind === 'global-rule' && (proposal.activation || proposal.scope || proposal.end)
+                  if (body.title.trim() === existing.name.trim() && proposal.description === existing.description.trim() &&
+                      !proposal.rules && !proposal.invocation && !hasOtherChanges) {
+                    return json(400, { ok: false, error: '请至少修改一处机制内容。可单独修改名称、规则说明、调用时机、判定与结算或此类别的其他字段。' })
+                  }
+                } else {
+                  if (existing || catalog.unavailableIds?.includes(mechanism.mechanic.id)) return json(400, { ok: false, error: '此扩展包已定义同 ID 机制，或该 ID 的声明无效/重复；请先编辑或修复已有定义。', warnings: mechanicWarnings })
+                }
+              }
+            }
+          }
           const result = await createTask(dshHomeDir, body)
-          return json(result.ok ? 200 : 400, result)
+          return json(result.ok ? 200 : 400, { ...result, ...(mechanicWarnings.length ? { warnings: mechanicWarnings } : {}) })
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/tasks/feedback') {
           if (!active) return json(503, { error: 'noname-kit 未配置 nonameDir(或目录无效)' })
@@ -937,7 +988,7 @@ export function apply(ctx, config) {
             archived = await archiveTask(nonameDir, {
               folder: result.task.folder, taskId: result.task.id, kind: result.task.type,
               /* 仅对需要图片的任务生成缺图提示；模式任务和编辑已有条目的任务豁免图片条件。 */
-              summary: '全部技能确认无误' + ((result.task.image || result.task.type === 'mode' || result.task.target) ? '' : '(注意:缺图片)'),
+              summary: '全部技能确认无误' + ((result.task.image || result.task.type === 'mode' || result.task.type === 'mechanic' || result.task.target) ? '' : '(注意:缺图片)'),
               notes: result.task.notes, rounds: result.task.rounds,
             }).catch(() => ({ totalTasks: 0 }))
           }
@@ -950,7 +1001,7 @@ export function apply(ctx, config) {
           const task = await getTask(dshHomeDir, body.taskId)
           if (!task) return json(404, { ok: false, error: '任务不存在，请刷新任务列表后重试' })
           if (task.status !== 'open') return json(400, { ok: false, error: '任务已完成，请先重开任务再补图' })
-          if (task.type === 'mode') return json(400, { ok: false, error: '模式任务不需要补图' })
+          if (task.type === 'mode' || task.type === 'mechanic') return json(400, { ok: false, error: '模式或机制任务不需要补图' })
           if (body.folder !== task.folder) return json(400, { ok: false, error: '任务扩展目录已变化，请刷新任务列表后重试' })
           const src = String(body.source || '').trim()
           if (!src) return json(400, { ok: false, error: '图片本地路径为空' })

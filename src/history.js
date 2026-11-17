@@ -48,8 +48,7 @@ export async function archiveTask(nonameDir, { folder, taskId, kind, summary, no
       id: 'task-' + Date.now(),
       taskId: taskId || null,
       folder,
-      /* 将任务类型明确映射为 character、card 或 mode，供历史分类与徽标使用。 */
-      kind: kind === 'card' || kind === 'mode' ? kind : 'character',
+      kind: ['card', 'mode', 'mechanic'].includes(kind) ? kind : 'character',
       summary: '',
       notes: [],
       rounds: 1,

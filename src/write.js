@@ -5,6 +5,7 @@ import {withBatchWrite} from './batch.js'
 import { ENTRY_ID_SOURCE, isEntryId } from './entry-id.js'
 import { join, resolve, basename, relative, sep, dirname, parse } from 'node:path'
 import { validateFileCode, syntaxCheck, collectDefinedIds } from './validate.js'
+import { inspectMechanics, listMechanics, hasMechanicCandidates } from './mechanics.js'
 import { normalizeEntryFile } from './entry-file.js'
 import { scanEffectiveAnchored, scanBlocks, extractBlock, assembleBlocks, checkFidelity, migrateCode, stripAnchors, findAllSections, sectionProperties, virtualCharacterBlocks, virtualCardBlocks, virtualBlocks, virtualTranslateBlocks, CONTENT_KINDS } from './blocks.js'
 
@@ -14,6 +15,23 @@ const FOLDER_RE = /^[\w\u4e00-\u9fff-]{1,64}$/
 
 /** 多文件包扫描时跳过素材、备份和依赖目录。 */
 const SKIP_DIRS = new Set(['backup', 'image', 'audio', 'node_modules', '.git'])
+const mechanismWriters = new Map()
+
+// Serialize only operations introducing mechanism IDs in the same package.
+// Ordinary edits retain the existing shared publication lease and do not queue here.
+async function withMechanicWriteLock(folder, run) {
+  const key = process.platform === 'win32' ? resolve(folder).toLowerCase() : resolve(folder)
+  const previous = mechanismWriters.get(key)
+  let release
+  const ticket = new Promise(done => { release = done })
+  mechanismWriters.set(key, ticket)
+  await previous
+  try { return await run() }
+  finally {
+    release()
+    if (mechanismWriters.get(key) === ticket) mechanismWriters.delete(key)
+  }
+}
 
 /** Reject links in every existing component, including the selected root and leaf.
  * A lexical path inside extension/ may otherwise follow a Windows junction outside it. */
@@ -186,10 +204,11 @@ async function prunePackageBackupsInner(nonameDir, folder) {
  * 校验并写入扩展源码。
  * code 提交全文，editScope 检查改动范围外的原文；blocks/edits/deletes 只替换指定部分。
  * @returns 失败时返回 errors/warnings；写入成功时返回 path、backup 和 infoWritten。
- * manual 模式返回代码而不写入源码；file 指向模块文件时只检查语法。
+ * manual 模式返回校验后的代码。新增机制 ID 会和包内已有定义核对。
  */
 export async function writeExtension(nonameDir, args) { assertNoLinkPath(nonameDir); return withBatchWrite(nonameDir,()=>writeExtensionInner(nonameDir,args)) }
-async function writeExtensionInner(nonameDir, { folder, file, code, blocks, edits, deletes, editScope, style, kind, infoJson, idPrefix, writeMode }) {
+async function writeExtensionInner(nonameDir, args, mechanismLocked = false) {
+  const { folder, file, code, blocks, edits, deletes, editScope, style, kind, infoJson, idPrefix, writeMode } = args
   const blockMode = Array.isArray(blocks) || Array.isArray(edits) || Array.isArray(deletes)
   const full = safeFolderPath(nonameDir, folder).full
   assertNoLinkPath(join(full, 'info.json'))
@@ -260,6 +279,32 @@ async function writeExtensionInner(nonameDir, { folder, file, code, blocks, edit
         ok: false, wrote: false,
         errors: [{ message: `检测到 ${lost.length} 个内部 ID 在新代码中消失: ${lost.join(', ')}——直接覆盖会丢失它们。若确要删除,请在需求中明确说明后再试;否则请把它们的定义补回新代码。` }],
         warnings: [],
+      }
+    }
+  }
+
+  // Only newly introduced mechanism IDs require a package lookup. Rewriting a
+  // definition already in this file must not turn unrelated old conflicts into a gate.
+  if (hasMechanicCandidates(finalCode)) {
+    const before = new Set(hasMechanicCandidates(oldCode)
+      ? inspectMechanics(oldCode, { file: entryPath.rel }).mechanics.map(item => item.id) : [])
+    const added = inspectMechanics(finalCode, { file: entryPath.rel }).mechanics.filter(item => !before.has(item.id))
+    if (added.length) {
+      // Re-read and reassemble inside the package queue, so concurrent creation
+      // sees the preceding writer's completed file rather than an earlier snapshot.
+      if (!mechanismLocked) return withMechanicWriteLock(full, () => writeExtensionInner(nonameDir, args, true))
+      let packageExists = false
+      try { packageExists = (await stat(full)).isDirectory() } catch (error) { if (error.code !== 'ENOENT') throw error }
+      if (packageExists) {
+        const catalog = await listMechanics(nonameDir, folder, { excludeFile: entryPath.rel })
+        const occupied = new Set([...(catalog.mechanics || []).map(item => item.id), ...(catalog.unavailableIds || [])])
+        const conflicts = added.filter(item => occupied.has(item.id)).map(item => item.id)
+        if (conflicts.length) return {
+          ...verdict, ok: false, wrote: false,
+          errors: [{ message: `新增机制 ID 已在此扩展包其他声明中占用: ${conflicts.join(', ')}。请编辑原定义或使用不同 ID。` }],
+        }
+        // Discovery is bounded and static; gaps remain visible without blocking an unrelated ID.
+        for (const message of [catalog.error, ...(catalog.warnings || [])].filter(Boolean)) verdict.warnings.push({ message })
       }
     }
   }
