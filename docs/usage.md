@@ -18,7 +18,7 @@ Web 版可用 `dsh plugin --profile web add dsh-noname-kit` 安装，也可将�
 
 DSH 0.1.7 起随插件加载开发模式。0.1.6 及以下的宿主使用独立副本，可在设置页点「重装 preset」，或在插件目录运行 `node scripts/install-preset.mjs`；覆盖前会备份，重装后对新建会话生效。开发模式使用原生工具调用，不随宿主的全局 PTC 设置改变。
 
-插件的 Node.js 要求见 [package.json](../package.json)，同时须满足所用 DSH 的要求；例如 DSH 0.2.2-rc.3 要求 Node.js 24.9.0 及以上。桌面版自带运行时，Windows 下的 Bash 工具使用本机 Git Bash，工具权限由宿主设置决定。
+插件的 Node.js 要求见 [package.json](../package.json)，同时须满足所用 DSH 的要求。例如 DSH 0.2.2-rc.5 要求 Node.js 24.9.0 及以上。桌面版自带运行时，Windows 下的 Bash 工具使用本机 Git Bash，工具权限由宿主设置决定。
 
 Web 版卸载命令为 `dsh plugin --profile web remove dsh-noname-kit`。卸载插件不会删除游戏里的「联机助手」内核、扩展、任务、历史或备份；不再使用内核时，可在游戏的扩展菜单中删除。
 
