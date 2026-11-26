@@ -123,7 +123,7 @@ function descriptionOf(skills) {
  * target 标记编辑已有条目。packageMeta 记录新包需求，名称取目标目录名。
  * 写入工具以登记的 writeMode 为准。
  */
-export async function createTask(dshHome, { id, folder, packageMeta, type, title, mechanic, charInfo, newFaction, portraitVideo, pile, skills, image, dieAudios, target, writeMode, modeBrief, modeNum, modeWin, modeRules }) {
+export async function createTask(dshHome, { id, folder, packageMeta, type, title, mechanic, charInfo, newFaction, portraitVideo, pile, skills, image, dieAudios, target, writeMode, modeBrief, modeNum, modeWin, modeRules }, { generationOnly = false } = {}) {
   if (typeof id !== 'string' || !ID_RE.test(id.trim())) {
     return { ok: false, error: `任务ID「${id}」不合法:只允许中文/字母/数字/下划线/连字符,长度 1-64。` }
   }
@@ -197,6 +197,7 @@ export async function createTask(dshHome, { id, folder, packageMeta, type, title
     title: taskType === 'mechanic' ? title.trim() : String(title || '').slice(0, 60),
     ...(taskType === 'mechanic' ? { mechanic: mechanism.mechanic } : {}),
     ...(metadata ? { packageMeta: metadata } : {}),
+    ...(generationOnly ? { generationOnly: true } : {}),
     charInfo: String(charInfo || '').slice(0, 500),
     newFaction: faction,
     portraitVideo: video,

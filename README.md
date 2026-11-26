@@ -74,6 +74,10 @@ dsh plugin --profile web add dsh-noname-kit
 - [AI 开发规范](presets/noname-dev/skills/noname-extension-dev/SKILL.md)与[开发主题指南](presets/noname-dev/skills/noname-extension-dev/references/development-guide.md)。
 - [提交插件问题](https://github.com/qtaik/dsh-noname-kit/issues)。开发任务的问题优先在任务列表反馈，便于保留上下文；公开日志前遮住密钥和连接凭据。
 
+**NONAME-KIT 插件交流群**（QQ群号 `883253437`）。欢迎在群里提问、反馈插件使用问题，也可以一起设计武将。搜索群号或扫描下方二维码即可加入。
+
+<a href="docs/screenshots/qq-group.png"><img src="docs/screenshots/qq-group.png" width="320" alt="NONAME-KIT 插件交流群 883253437 的入群二维码"></a>
+
 本地检查入口：`npm test`。实际玩法、游戏界面和跨网络对局仍需分别验证。
 
 MIT License

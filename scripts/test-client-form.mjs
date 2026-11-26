@@ -398,7 +398,7 @@ try {
     checkbox(label).props.onChange({ target: { checked } })
     await flush()
   }
-  const submitTask = async (id) => {
+  const submitTask = async (id, { generationOnly = false } = {}) => {
     await change('任务ID', id)
     const sentBefore = sent.length
     submitBtn().props.onClick()
@@ -410,7 +410,7 @@ try {
     const post = req(r => r.url.endsWith('/tasks') && r.opts && r.opts.method === 'POST')
     assert.ok(post, '有效表单应登记任务')
     const body = JSON.parse(post.opts.body)
-    post.reply({ ok: true })
+    post.reply({ ok: true, task: { generationOnly } })
     await flush()
     assert.equal(sent.length, sentBefore + 1, '任务消息只发送一次')
     const message = sent[sent.length - 1]
@@ -476,6 +476,17 @@ try {
   ok(createdOptions.message.includes('静态立绘独立处理') && createdOptions.message.includes('复制成功不等于已验证播放'), '视频消息保留静态回退和播放验证要求')
 
   ok(createdOptions.message.includes('references/video-portrait.md') && ['player.node.avatar', 'avatar2', 'lib.assetURL', 'pointer-events:none'].every(part => videoReference.includes(part)), '新建视频任务能定位头像叠加参考且保留实现细节')
+
+  clickRadio('写入方式manual')
+  await flush()
+  const manualDraft = await submitTask('manual-no-game', { generationOnly: true })
+  assert.equal(manualDraft.body.writeMode, 'manual')
+  assert.deepEqual(manualDraft.body.packageMeta, defaultMeta)
+  ok(!/D:\\Games\\noname|noname_copy_|游戏目录\(/.test(manualDraft.message) &&
+    ['等我回复「确认」', 'noname_write_extension', 'info.json', '供用户手动放置', 'video/'].every(part => manualDraft.message.includes(part)),
+    '无游戏目录的手动新包派发源码校验和素材手动放置说明，保留确认步骤')
+  clickRadio('写入方式auto')
+  await flush()
 
   console.log('场景 10:取消勾选不提交隐藏值，重新勾选保留输入')
   await toggle('创建新势力', false)

@@ -56,11 +56,15 @@ export function extRootOf(nonameDir) {
   return join(resolve(nonameDir), 'extension')
 }
 
-/** 校验文件夹名并解析出安全绝对路径;逃逸直接抛错。 */
-export function safeFolderPath(nonameDir, folder) {
+function assertFolderName(folder) {
   if (typeof folder !== 'string' || !FOLDER_RE.test(folder)) {
     throw new Error(`非法的扩展文件夹名「${folder}」:只允许中文/字母/数字/下划线/连字符,长度 1-64。`)
   }
+}
+
+/** 校验文件夹名并解析出安全绝对路径;逃逸直接抛错。 */
+export function safeFolderPath(nonameDir, folder) {
+  assertFolderName(folder)
   const root = extRootOf(nonameDir)
   const full = resolve(root, folder)
   if (full !== root && !full.startsWith(root + sep)) {
@@ -206,26 +210,36 @@ async function prunePackageBackupsInner(nonameDir, folder) {
  * @returns 失败时返回 errors/warnings；写入成功时返回 path、backup 和 infoWritten。
  * manual 模式返回校验后的代码。新增机制 ID 会和包内已有定义核对。
  */
-export async function writeExtension(nonameDir, args) { assertNoLinkPath(nonameDir); return withBatchWrite(nonameDir,()=>writeExtensionInner(nonameDir,args)) }
+export async function writeExtension(nonameDir, args) {
+  if (nonameDir === null) {
+    if (args.writeMode !== 'manual') throw new Error('请配置有效的游戏目录后再自动写入。')
+    assertFolderName(args.folder)
+    return writeExtensionInner(null, args)
+  }
+  assertNoLinkPath(nonameDir)
+  return withBatchWrite(nonameDir, () => writeExtensionInner(nonameDir, args))
+}
 async function writeExtensionInner(nonameDir, args, mechanismLocked = false) {
   const { folder, file, code, blocks, edits, deletes, editScope, style, kind, infoJson, idPrefix, writeMode } = args
   const blockMode = Array.isArray(blocks) || Array.isArray(edits) || Array.isArray(deletes)
-  const full = safeFolderPath(nonameDir, folder).full
-  assertNoLinkPath(join(full, 'info.json'))
-  const entryPath = safeEntryFilePath(nonameDir, folder, file)
+  const full = nonameDir === null ? null : safeFolderPath(nonameDir, folder).full
+  if (full) assertNoLinkPath(join(full, 'info.json'))
+  const entryPath = full ? safeEntryFilePath(nonameDir, folder, file) : { rel: normalizeEntryFile(file) }
   const sourceOptions = { file: entryPath.rel }
   const target = entryPath.full
 
   // 旧文件:两种模式都先读(区块模式组装、全文模式保真/防丢都依赖它)
   let oldCode = null
-  try {
-    const bytes = await readFile(target)
-    oldCode = bytes.toString('utf8')
-    if (!bytes.equals(Buffer.from(oldCode, 'utf8'))) {
-      return { ok: false, wrote: false, errors: [{ message: '旧文件不是可无损读写的 UTF-8,拒绝覆盖;请先由用户备份并确认编码。' }], warnings: [] }
+  if (target) {
+    try {
+      const bytes = await readFile(target)
+      oldCode = bytes.toString('utf8')
+      if (!bytes.equals(Buffer.from(oldCode, 'utf8'))) {
+        return { ok: false, wrote: false, errors: [{ message: '旧文件不是可无损读写的 UTF-8,拒绝覆盖;请先由用户备份并确认编码。' }], warnings: [] }
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
     }
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error
   }
 
   let finalCode = code
@@ -285,7 +299,7 @@ async function writeExtensionInner(nonameDir, args, mechanismLocked = false) {
 
   // Only newly introduced mechanism IDs require a package lookup. Rewriting a
   // definition already in this file must not turn unrelated old conflicts into a gate.
-  if (hasMechanicCandidates(finalCode)) {
+  if (full && hasMechanicCandidates(finalCode)) {
     const before = new Set(hasMechanicCandidates(oldCode)
       ? inspectMechanics(oldCode, { file: entryPath.rel }).mechanics.map(item => item.id) : [])
     const added = inspectMechanics(finalCode, { file: entryPath.rel }).mechanics.filter(item => !before.has(item.id))

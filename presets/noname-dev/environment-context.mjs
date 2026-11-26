@@ -18,7 +18,7 @@ export function registerPresetContext(ctx, state) {
     name: 'noname-kit:environment', order: 205, required: true, interpolate: false,
     text: () => {
       const { active, nonameDir } = state()
-      if (!active) return '无名杀工坊尚未配置游戏目录。请使用工坊设置配置游戏目录；未配置时不要在盘符根或用户目录搜索安装位置。'
+      if (!active) return '无名杀工坊尚未配置游戏目录。新建扩展可手动校验并交付完整源码及素材放置清单。本机引擎检索、已有扩展读写和素材复制需要配置有效目录。未配置时不要在盘符根或用户目录搜索安装位置。'
       const extension = join(nonameDir, 'extension')
       return [
         '无名杀工坊当前环境（以本次配置为准；会话工作目录可能与游戏目录不同）：',

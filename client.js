@@ -1075,12 +1075,13 @@ window.__ModuleLoader__.load({
           }).then(function (r) { return r.json() }).then(function (reg) {
             if (!reg.ok) throw new Error(reg.error || '任务注册失败');
             registeredTaskId = taskId;
-            return { taskId: taskId, pile: pile, gameDir: gameDir, gameDirPosix: gameDirPosix };
+            return { taskId: taskId, pile: pile, gameDir: gameDir, gameDirPosix: gameDirPosix, generationOnly: reg.task && reg.task.generationOnly === true };
           });
         }).then(function (ctx2) {
           var taskId = ctx2.taskId;
           var pile = ctx2.pile;
-          var gameDir = ctx2.gameDir || '';
+          var generationOnly = ctx2.generationOnly;
+          var gameDir = generationOnly ? '' : ctx2.gameDir || '';
           var gameDirPosix = ctx2.gameDirPosix || '';
           var skillLines = skills.map(function (s, i) { return (i + 1) + '. ' + s.name + (s.desc ? ':' + s.desc : '') }).join('\n');
           var mechanicReferences = skills.filter(function (s) { return s.mechanicIds && s.mechanicIds.length }).map(function (s) {
@@ -1098,31 +1099,39 @@ window.__ModuleLoader__.load({
           var audioBlock = audioLines
             ? '── 配音(技能发动语音,只放扩展包内 audio/,禁止动本体目录) ──\n' + audioLines +
               '\n技能代码必须写 audio: "ext:' + form.folder.trim() + '/audio/skill:<句数>"(如两句就是 :2;禁止写不带 ext: 的 audio,那会去游戏本体目录找文件)。' +
-              '实现完成后用 noname_copy_audio 把每句复制为 audio/skill/<技能内部ID><序号>.mp3(序号从 1 连号,句数与 audio 字段一致),调用时带上任务ID与归属技能名(任务里的技能显示名)。'
+               (generationOnly
+                 ? '为每句列出对应的 audio/skill/<技能内部ID><序号>.mp3（从 1 连号，句数与 audio 字段一致），供用户手动放置。'
+                 : '实现完成后用 noname_copy_audio 把每句复制为 audio/skill/<技能内部ID><序号>.mp3(序号从 1 连号,句数与 audio 字段一致),调用时带上任务ID与归属技能名(任务里的技能显示名)。')
             : '';
           var dieAudioBlock = dieAudioList.length
             ? '── 阵亡语音 ──\n文件: ' + dieAudioList.join('、') +
-              '\n实现完成后用 noname_copy_audio 复制为 audio/die/<武将内部ID>.mp3(多句:<ID>1.mp3、<ID>2.mp3…)。' +
-              '按当前引擎核对默认查找或已有音频引用，避免重复挂载；调用时带任务ID,target 以 die/ 开头。'
+               (generationOnly
+                 ? '\n列出音频的包内放置路径，例如 audio/die/<武将内部ID>.mp3。结合可用参考核对音频引用，避免重复挂载。'
+                 : '\n实现完成后用 noname_copy_audio 复制为 audio/die/<武将内部ID>.mp3(多句:<ID>1.mp3、<ID>2.mp3…)。' +
+                   '按当前引擎核对默认查找或已有音频引用，避免重复挂载；调用时带任务ID,target 以 die/ 开头。')
             : '';
           var factionBlock = newFaction
             ? '── 新势力 ──\n名称: ' + newFaction.name + '\n势力图片路径: ' + newFaction.image +
               '\n势力颜色: ' + (newFaction.color || '使用引擎默认样式') +
               '\n创建此势力并把本次新武将归入该势力；先核对当前引擎和启用的 UI 中势力注册、翻译及标识图的实际用法，内部 ID 遵守任务前缀并避免重名。' +
-              '势力图单独用 noname_copy_images 复制到扩展包 image/，使用独立的势力图文件名并保留真实后缀；此次复制不带 taskId，不与武将立绘合批登记，避免把势力图当成立绘。素材和注册代码均放在本扩展内。' +
+               (generationOnly
+                 ? '为势力图列出扩展包 image/ 下的独立文件名，保留真实后缀，供用户手动放置。'
+                 : '势力图单独用 noname_copy_images 复制到扩展包 image/，使用独立的势力图文件名并保留真实后缀；此次复制不带 taskId，不与武将立绘合批登记，避免把势力图当成立绘。素材和注册代码均放在本扩展内。') +
               '实现参考：加载 noname-extension-dev 后按技能资源目录读取 references/custom-faction.md，核对当前引擎和已有兼容方案。'
             : '';
           var portraitVideoBlock = portraitVideo
             ? '── 视频动态立绘 ──\n视频路径: ' + portraitVideo +
               (editingExisting ? '\n目标武将内部 ID: ' + form.entryId + '。只为此武将添加或更换动态立绘，沿用现有静态立绘作为回退；先读取现有播放逻辑，保留无关技能和其他武将，不创建新武将。' : '') +
-              '\n此视频用于本次武将的动态立绘。用 noname_copy_videos，参数 folder 为目标扩展文件夹，videos:[{source:上述绝对路径,target:武将内部ID加原视频后缀}]，按返回的 video/ 路径引用；不要交给 noname_copy_images，不改后缀伪装图片。' +
+               (generationOnly
+                 ? '\n按 video/<武将内部ID加原视频后缀> 引用并列出放置路径，供用户手动放置。'
+                 : '\n此视频用于本次武将的动态立绘。用 noname_copy_videos，参数 folder 为目标扩展文件夹，videos:[{source:上述绝对路径,target:武将内部ID加原视频后缀}]，按返回的 video/ 路径引用；不要交给 noname_copy_images，不改后缀伪装图片。') +
               '先核对当前引擎和启用 UI 的立绘挂载方式，再实现静音循环播放、正确缩放与点击透传、切换武将或离开界面时清理；不能只把视频路径填进静态 img 字段。' +
               '实现参考：加载 noname-extension-dev 后按技能资源目录读取 references/video-portrait.md，核对当前头像节点与已有播放管理器。' +
               (editingExisting ? '静态立绘独立处理，先核对目标武将原有图片并沿用作为回退；本次未填图片路径不代表缺图，仅实际缺少静态图时说明。' : '静态立绘独立处理，已提供时用于加载或播放失败的回退；未提供时说明缺图。') +
-              '不把视频或势力图登记为静态立绘图片。复制成功不等于已验证播放，交付时分别说明复制、播放实现和实际验证结果。'
+               (generationOnly ? '' : '不把视频或势力图登记为静态立绘图片。复制成功不等于已验证播放，交付时分别说明复制、播放实现和实际验证结果。')
             : '';
           var characterOptionsBlock = [factionBlock, portraitVideoBlock, mechanicReferenceBlock,
-            (factionBlock || portraitVideoBlock) ? '以上勾选项属于本任务需求，交付检查一并覆盖。手动模式只生成源码成品；素材复制遵守用户已授权范围，用户要求全部手动时提供资源清单与放置位置。' : ''
+            !generationOnly && (factionBlock || portraitVideoBlock) ? '以上勾选项属于本任务需求，交付检查一并覆盖。手动模式只生成源码成品；素材复制遵守用户已授权范围，用户要求全部手动时提供资源清单与放置位置。' : ''
           ].filter(Boolean).join('\n');
           var pileText;
           if (type === 'card' && pile.join && pile.entries) pileText = '加入牌堆,条目(每行「花色 点数」;花色只允许 spade/heart/club/diamond/none,none=无花色):\n' + pile.entries;
@@ -1161,7 +1170,7 @@ window.__ModuleLoader__.load({
             text = [
               '【无名杀工坊·新任务】',
               '任务ID: ' + taskId,
-              '任务性质: 创建全新扩展包(含一个自定义游戏模式;目标文件夹当前不存在,需要从零创建 extension.js 与 info.json)',
+              '任务性质: 创建全新扩展包(含一个自定义游戏模式，需要从零创建 extension.js 与 info.json)',
               packageBlock,
               '类型: 🎲 新玩法(自定义游戏模式,用 game.addMode 注册为独立模式)',
               (form.title.trim() ? '模式名称(显示名,注册为模式翻译): ' + form.title.trim() : ''),
@@ -1232,7 +1241,7 @@ window.__ModuleLoader__.load({
             text = [
               '【无名杀工坊·新任务】',
               '任务ID: ' + taskId,
-              '任务性质: 创建全新扩展包(目标文件夹当前不存在,需要从零创建 extension.js 与 info.json)',
+              '任务性质: 创建全新扩展包(需要从零创建 extension.js 与 info.json)',
               packageBlock,
               '类型: ' + (type === 'card' ? '卡牌' : '武将(含 ' + skills.length + ' 个技能)'),
               (form.title.trim() ? '名称(显示名,写入 translate): ' + form.title.trim() : ''),
@@ -1246,13 +1255,18 @@ window.__ModuleLoader__.load({
               '── 牌堆 ──',
               pileText,
               form.reference.trim() ? '── 用户提供的参考代码 ──\n' + form.reference.trim() : '',
-              form.image.trim() ? '── 图片 ──\n用户已提供图片路径: ' + form.image.trim() + '\n实现完成后用 noname_copy_images 复制进扩展包 image/ 目录,按 武将ID/卡牌ID 命名文件,调用时带上任务ID。' : '',
+              form.image.trim() ? '── 图片 ──\n用户已提供图片路径: ' + form.image.trim() + (generationOnly
+                ? '\n列出扩展包 image/ 下按武将或卡牌 ID 命名的图片路径，供用户手动放置。'
+                : '\n实现完成后用 noname_copy_images 复制进扩展包 image/ 目录,按 武将ID/卡牌ID 命名文件,调用时带上任务ID。') : '',
               (audioBlock || ''),
               (dieAudioBlock || ''),
               characterOptionsBlock,
               '执行请求: 请按 noname-extension-dev 逐技能或逐条规则核对需求，问清会改变玩法的待定项，再给出完整的【需求理解确认】清单。等我回复「确认」后开始实现。',
               form.idPrefix.trim() ? '内部 ID 命名规则:所有新增技能/武将/卡牌的内部 ID 必须 = 「' + form.idPrefix.trim() + '」前缀 + 拼音或英文(如 ' + form.idPrefix.trim() + 'tianfa),中文显示名写入 translate——防止跨扩展包命名冲突。' : '',
             ].filter(Boolean).join('\n');
+          }
+          if (generationOnly) {
+            text += '\n本任务未配置有效的本机游戏目录。结合用户提供的参考或可核对的目标版本源码调研。确认后用 noname_write_extension 的手动方式按文件校验全文，交付完整源码、info.json 和素材放置清单。缺少目标引擎证据时说明具体兼容性限制。';
           }
           return dispatch.send(text).then(function () {
             setForm(function (prev) { return Object.assign({}, prev, { busy: false, reference: '', taskId: '' }) });
@@ -1528,6 +1542,7 @@ window.__ModuleLoader__.load({
           ) : null
         ] : null,
         radioGroup('写入方式', form.writeMode, [{ value: 'auto', text: '自动写入（确认方案并校验通过后写入）' }, { value: 'manual', text: '手动复制(只生成代码)' }], set('writeMode')),
+        form.writeMode === 'manual' ? e('div', 'nnk-hint', '未配置游戏目录时，AI 无法查阅本机游戏源码，生成的效果可能不够理想。') : null,
         textField('示例参考代码(你找到的想模仿的官方实现;可选)', form.reference, set('reference'), { code: true, placeholder: '粘贴官方技能代码,AI 会优先参考它的写法' }),
         ),
         h('div', { className: 'nnk-submit-area' },
@@ -1812,7 +1827,7 @@ window.__ModuleLoader__.load({
         e('div', 'nnk-settings-heading', h('b', null, '游戏目录'), h('span', { className: 'nnk-hint' }, '　AI 自动写入扩展的游戏本体位置——填到能看见 extension 文件夹的那一层(新版结构如 resources/app/src),别把 extension 本身填进路径')),
         e('div', 'nnk-hint', form.nonameDir
           ? '当前: ' + form.nonameDir + '(' + (form.source === 'cordis.yml' ? '由配置文件指定' : '工坊设置') + ')'
-          : '⚠️ 未配置——AI 无法自动写入,只能用「手动复制」模式'),
+          : '尚未配置游戏目录。新建扩展包可选择「手动复制」。'),
         h('input', { className: 'nnk-input', value: form.manual, placeholder: '填游戏根目录(那一层里能看到 extension 文件夹)', onChange: function (ev) { set({ manual: ev.target.value }) } }),
         h('div', { style: { marginTop: '6px' } },
           h('button', { className: 'nnk-smallbtn', disabled: form.scanning || form.busy, onClick: scan }, form.scanning ? '扫描中…' : (form.scanned ? '🔍 重新扫描本机' : '🔍 自动扫描本机')),
@@ -1854,7 +1869,8 @@ window.__ModuleLoader__.load({
         ),
         h('section', { className: 'nnk-settings-section nnk-settings-about' },
         h('div', { className: 'nnk-settings-heading', style: { marginTop: '14px' } }, h('b', null, '关于')),
-        e('div', 'nnk-hint', '无名杀工坊(noname-kit)v' + (form.version || '?') + ' · 「无名杀开发模式」与工坊同属一套,本页设置保存在 ~/.dsh/noname-kit.json')
+        e('div', 'nnk-hint', '无名杀工坊(noname-kit)v' + (form.version || '?') + ' · 「无名杀开发模式」与工坊同属一套,本页设置保存在 ~/.dsh/noname-kit.json'),
+        e('div', 'nnk-hint', h('a', { href: 'https://github.com/qtaik/dsh-noname-kit', target: '_blank', rel: 'noopener noreferrer', style: { color: 'var(--dsw-alias-brand-primary)', textDecoration: 'underline' } }, '项目仓库（GitHub）'))
         )
       );
     }
@@ -3259,7 +3275,7 @@ window.__ModuleLoader__.load({
             h('span', { className: 'nnk-identity nnk-modern-only nnk-brand-label' }, h(WorkshopIcon, { size: 24 }), 'NONAME-KIT'), h(AppearanceSwitch)),
           h(WorkshopTabs, { active: active, setActive: setActive, id: viewId }),
           h(WorkshopPage, { active: active, id: viewId },
-          phase === false && active === 'new' ? e('div', 'nnk-err', '⚠️ 还没配置游戏目录——到「⚙ 设置」页填一下就能自动写入;暂时不配也行,把写入方式设为「手动复制」。') : null,
+          phase === false && active === 'new' ? e('div', 'nnk-hint', '新建扩展包可直接选择「手动复制」。自动写入或编辑已有扩展包时，请先在工坊设置中配置游戏目录。') : null,
           active === 'new' ? h(NewTaskForm, { prepareDispatch: prepareDispatch }) : null,
           active === 'tasklist' ? h(TaskListContent, { prepareDispatch: prepareDispatch }) : null,
           active === 'history' ? h(HistoryPanel) : null,
@@ -3424,7 +3440,7 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({ taskId: task.id, skill: skill, status: 'confirmed' }),
         }).then(function (r) { return r.json() }).then(function (b) {
           if (!b.ok) { setD({ err: b.error || '操作失败' }); return }
-          setD({ msg: b.autoCompleted ? '🎉 「' + task.id + '」全部技能确认且图片/配音就位,自动完成并归档!' : '' });
+          setD({ msg: b.autoCompleted ? '🎉 「' + task.id + '」全部技能已确认，任务自动完成' + (b.archived ? '并归档。' : '。') : '' });
           load();
         }, function (error) { setD({ err: error && error.message || String(error) }) });
       };
@@ -3509,7 +3525,11 @@ window.__ModuleLoader__.load({
             '── 问题描述/游戏内表现/报错 ──',
             issue,
             '── 执行要求 ──',
-            '执行请求: 请按已确认的方案修复上述问题。确实需要改变玩法或扩大范围时，请先列出变更部分，等我回复「确认」后再实现变更。先读取当前代码，按 noname-extension-dev 执行开发流程与按文件校验。完成后调用 noname_skills_written，原样带回任务ID ' + task.id + '。',
+            '执行请求: 请按已确认的方案修复上述问题。确实需要改变玩法或扩大范围时，请先列出变更部分，等我回复「确认」后再实现变更。' +
+              (task.generationOnly
+                ? '用用户提供的当前源码定位问题，需要时请用户贴出实际文件。按 noname-extension-dev 校验并手动交付修改后的完整文件。'
+                : '先读取当前代码，按 noname-extension-dev 执行开发流程与按文件校验。') +
+              '完成后调用 noname_skills_written，原样带回任务ID ' + task.id + '。',
             'skills 只填本轮实际修复的任务技能名称,不要照抄整个任务清单;其他技能的确认状态保持不变。' + (skill ? '本次反馈技能名: ' + JSON.stringify(skill) + '。' : ''),
             '如果本轮确实修改了其他已确认技能,将这些技能名称同时列入 skills 和 retestSkills,使其重新待测试;未修改的已确认技能不得列入 retestSkills。',
           ].filter(Boolean).join('\n');
@@ -3529,7 +3549,7 @@ window.__ModuleLoader__.load({
         if (!task.image && task.type !== 'mode' && task.type !== 'mechanic' && !task.target) warn.push('未登记图片');
         if (skills.length && confirmed < skills.length) warn.push((task.type === 'mechanic' ? '机制确认 ' : '技能确认 ') + confirmed + '/' + skills.length);
         if (audioNeed(task)) warn.push('有已登记未交付的配音');
-        if (warn.length && !window.confirm('「' + task.id + '」' + warn.join('、') + '。\n确定标记整个任务完成、同时确认全部子项并归档吗?')) return;
+        if (warn.length && !window.confirm('「' + task.id + '」' + warn.join('、') + '。\n确定标记整个任务完成、同时确认全部子项吗？')) return;
         fetch('/noname-kit-api/tasks/complete', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           /* 任务完成时同时提交 notes，将技能写入过程中登记的引擎级注意点保存到 history.notes。 */

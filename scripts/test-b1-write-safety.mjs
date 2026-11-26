@@ -9,6 +9,8 @@ import { runInNewContext } from 'node:vm'
 import { checkFidelity, assembleBlocks } from '../src/blocks.js'
 import { writeExtension } from '../src/write.js'
 import * as guardModule from '../src/guard.js'
+import { createGeneratedOutputStore, generatedOutputOwner } from '../src/generated-output.js'
+import { createTask, getTask, markSkillsWritten } from '../src/tasks.js'
 import { readWorkingDirectory } from '../presets/noname-dev/working-directory.mjs'
 let count = 0
 async function test(label, fn) { await fn(); count++; console.log('  ✓ ' + label) }
@@ -104,15 +106,54 @@ try {
   })
   await test('sequential unique edits apply to assembled current text', () => assert.equal(assembleBlocks(mod, [], [{ find: 'helper', replace: 'renamed' }, { find: 'renamed', replace: 'final' }]).code, mod.replace('helper', 'final')))
   const index = readFileSync(new URL('../index.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
-  let tool
-  const begin = index.lastIndexOf('ctx.tools.register(defineTool({', index.indexOf("name: 'noname_write_extension'"))
-  runInNewContext(index.slice(begin, index.indexOf("  ctx.tools.register(defineTool({\n    name: 'noname_copy_images'", begin)), {
-    ctx: { tools: { register(t) { tool = t } } }, defineTool: (t) => t, active: true, nonameDir: dir, dshHomeDir: dir,
-    writeExtension, recordBackup: async () => {}, getTask: async () => ({ writeMode: 'auto' }),
-  })
+  const tools = new Map()
+  const host = {
+    ctx: { tools: { register(t) { tools.set(t.name, t) } } }, defineTool: (t) => t, active: true, nonameDir: dir, dshHomeDir: dir,
+    writeExtension, recordBackup: async () => {}, getTask, markSkillsWritten,
+    generatedOutputs: createGeneratedOutputStore(), generatedOutputOwner,
+  }
+  const registerStart = index.indexOf('  const registerDeveloperTools = ')
+  const registerEnd = index.indexOf("  ctx.provide('nonameKitTools'", registerStart)
+  runInNewContext(index.slice(registerStart, registerEnd) + '\nregisterDeveloperTools(ctx)', host)
+  const tool = tools.get('noname_write_extension')
+  await createTask(dir, { id: 'existing', folder: args.folder, writeMode: 'auto' })
   await test('real registered tool entry cannot bypass scope using task/manual override', async () => {
-    const r = await tool.execute({ ...args, code: old, taskId: 'task', writeMode: 'manual' })
+    const r = await tool.execute({ ...args, code: old, taskId: 'existing', writeMode: 'manual' })
     assert.equal(r.ok, false); assert.equal(r.wrote, false); assert.match(r.errors[0].message, /editScope/)
+  })
+  await test('new manual task validates and returns code without using a game directory', async () => {
+    const original = await readFile(target, 'utf8')
+    const id = 'manual-only'
+    const made = await createTask(dir, { id, title: '甲', folder: args.folder, packageMeta: {}, writeMode: 'manual' }, { generationOnly: true })
+    assert.equal(made.ok, true)
+    host.active = false
+    const source = old + '// ' + '草稿'.repeat(8500) + '\n'
+    const exec = { agent: { id: 'test-session' } }
+    const result = await tool.execute({ ...args, code: source, taskId: id, infoJson: '{"name":"测试包"}' }, exec)
+    assert.equal(result.ok, true)
+    assert.equal(result.wrote, false)
+    assert.ok(result.draftId)
+    let page = result
+    let code = page.code
+    while (!page.pagination.complete) {
+      page = await tools.get('noname_read_extension').execute({ folder: args.folder, draftId: result.draftId, offset: page.pagination.nextOffset }, exec)
+      code += page.code
+    }
+    assert.equal(code, source)
+    assert.equal(await readFile(target, 'utf8'), original)
+    const written = await tools.get('noname_skills_written').execute({ taskId: id, skills: ['甲'] })
+    assert.equal(written.ok, true, written.error)
+    assert.equal((await getTask(dir, id)).skills[0].status, 'written')
+    const invalid = await tool.execute({ ...args, code: old, taskId: id, infoJson: '{invalid' })
+    assert.equal(invalid.ok, false)
+    assert.match(invalid.errors[0].message, /info\.json/)
+    assert.equal((await tool.execute({ ...args, taskId: id, edits: [{ find: 'x', replace: 'y' }] })).ok, false)
+    assert.equal((await tool.execute({ ...args, taskId: id, file: '../escape.js', code: old })).ok, false)
+    assert.equal((await tool.execute({ ...args, code: old, taskId: 'existing', writeMode: 'manual' })).ok, false)
+    host.active = true
+    const afterSetup = await tool.execute({ ...args, code: old, taskId: id })
+    assert.equal(afterSetup.ok, true)
+    assert.equal(afterSetup.wrote, false)
   })
   let guard
   const guardBegin = index.indexOf('ctx.tools.guard((exec)')

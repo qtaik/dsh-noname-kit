@@ -411,7 +411,7 @@ export function apply(ctx, config) {
 
   ctx.tools.register(defineTool({
     name: 'noname_write_extension',
-    description: 'Assemble and validate a package-relative JavaScript file, then back up and write it, or return the assembled code in manual mode. Entry files receive extension checks; other .js files receive module syntax checks. Submit only the target and its necessary, previously read dependencies using blocks or unique edits; unchanged regions are retained. Full-text overwrites of existing files require editScope and preserve bytes outside it. Validation and backups reduce write errors; check the returned result and test the affected game behavior.',
+    description: 'Assemble and validate a package-relative JavaScript file, then back up and write it, or return the assembled code in manual mode. Without a configured game directory, submit complete files in manual mode for a new extension. Entry files receive extension checks; other .js files receive module syntax checks. Submit only the target and its necessary, previously read dependencies using blocks or unique edits; unchanged regions are retained. Full-text overwrites of existing files require editScope and preserve bytes outside it. Validation and backups reduce write errors; check the returned result and test the affected game behavior.',
     parameters: {
       folder: { type: 'string', required: true, description: 'Extension folder name.' },
       file: { type: 'string', description: 'Relative .js path inside the extension package for multi-file packs (e.g. character/character.js). Defaults to extension.js. Block-mode requires that file to be anchored (workshop migrate button first).' },
@@ -455,18 +455,17 @@ export function apply(ctx, config) {
       render: (args, value) => renderExtensionWrite(args, value),
     },
     async execute(args, exec) {
-      if (!active) {
-        return { ok: false, wrote: false, error: '未配置 nonameDir(游戏本体目录):请在插件配置里填 nonameDir 后重启,或直接复制代码手动保存。' }
-      }
       try {
         // 写入方式由用户表单决定；带 taskId 时采用任务中登记的 writeMode。
-        if (args.taskId) {
-          const task = await getTask(dshHomeDir, args.taskId)
-          if (task && task.writeMode && task.writeMode !== args.writeMode) {
-            args = { ...args, writeMode: task.writeMode }
-          }
+        const task = args.taskId ? await getTask(dshHomeDir, args.taskId) : null
+        if (task?.writeMode && task.writeMode !== args.writeMode) {
+          args = { ...args, writeMode: task.writeMode }
         }
-        const result = await writeExtension(nonameDir, args)
+        const generationOnly = task?.generationOnly === true || !active
+        if (generationOnly && (args.writeMode !== 'manual' || (args.taskId && !task?.generationOnly))) {
+          return { ok: false, wrote: false, error: '请在工坊「设置」配置有效的游戏目录后再编辑已有扩展或自动写入。' }
+        }
+        const result = await writeExtension(generationOnly ? null : nonameDir, args)
         if (result.wrote && result.backup) {
           try { await recordBackup(nonameDir, args.folder, result.backup) }
           catch (error) { result.warnings = [...(result.warnings || []), { message: '代码已写入且备份文件已创建，但备份登记失败：' + error.message }] }
@@ -671,7 +670,7 @@ export function apply(ctx, config) {
 
   ctx.tools.register(defineTool({
     name: 'noname_skills_written',
-    description: 'Mark only skills implemented or repaired, validated and written in this round as awaiting user in-game test. Initial implementation covers the whole task; later feedback must include only the skills actually changed. Already confirmed skills stay confirmed by default. If this round actually changes a confirmed skill, explicitly include that name in both skills and retestSkills to require a fresh user test. Never copy the entire task list into retestSkills. The task auto-completes when the user confirms every skill. For mode tasks, use rule-node names verbatim; new rule nodes are registered dynamically.',
+    description: 'Mark only skills implemented or repaired, validated and written or manually delivered in this round as awaiting user in-game test. Initial implementation covers the whole task; later feedback must include only the skills actually changed. Already confirmed skills stay confirmed by default. If this round actually changes a confirmed skill, explicitly include that name in both skills and retestSkills to require a fresh user test. Never copy the entire task list into retestSkills. For mode tasks, use rule-node names verbatim; new rule nodes are registered dynamically.',
     parameters: {
       taskId: { type: 'string', required: true, description: 'Task ID from the task message, verbatim.' },
       skills: { type: 'array', required: true, items: { type: 'string' }, description: 'Only skill display names actually implemented or repaired in this round (mode task: rule-node names, registered dynamically).' },
@@ -699,7 +698,9 @@ export function apply(ctx, config) {
       }],
     },
     async execute(args) {
-      if (!active) return { ok: false, error: '未配置 nonameDir,无法更新任务。' }
+      if (!active && !(await getTask(dshHomeDir, args.taskId))?.generationOnly) {
+        return { ok: false, error: '未配置有效的游戏目录，无法更新此任务。' }
+      }
       const result = await markSkillsWritten(dshHomeDir, args)
       if (!result.ok) {
         // missing 分支可能没有 error 字段；仅返回已定义的字段，满足 lossless JSON 的序列化要求。
@@ -911,7 +912,7 @@ export function apply(ctx, config) {
             updateCheck: next.updateCheck !== false,
           })
         }
-        // 任务登记处:读列表不要求已配置;创建/反馈/完成要求已配置(要有扩展文件夹)
+        // 无游戏目录的新建手动任务也能使用 DSH 的任务登记处。
         if (req.method === 'GET' && url.pathname === '/noname-kit-api/tasks') {
           const openOnly = url.searchParams.get('open') === '1'
           return json(200, { tasks: await listTasks(dshHomeDir, { openOnly }) })
@@ -922,12 +923,15 @@ export function apply(ctx, config) {
           return json(result.ok ? 200 : 400, result)
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/tasks') {
-          if (!active) return json(503, { error: 'noname-kit 未配置 nonameDir(或目录无效),无法创建任务' })
           const body = await readBody()
           const mechanism = validateTaskMechanics(body)
           if (!mechanism.ok) return json(400, mechanism)
+          const generationOnly = !active
+          if (generationOnly && !(body.writeMode === 'manual' && body.packageMeta != null && !body.target && !mechanism.mechanicIds.length)) {
+            return json(503, { ok: false, error: '请在工坊「设置」配置有效的游戏目录。新建扩展包可选择「手动复制」直接提交。' })
+          }
           let mechanicWarnings = []
-          if (body.type === 'mechanic' || mechanism.mechanicIds.length) {
+          if (!generationOnly && (body.type === 'mechanic' || mechanism.mechanicIds.length)) {
             let packageExists = false
             try {
               const { full } = safeFolderPath(nonameDir, typeof body.folder === 'string' ? body.folder.trim() : body.folder)
@@ -969,22 +973,22 @@ export function apply(ctx, config) {
               }
             }
           }
-          const result = await createTask(dshHomeDir, body)
+          const result = await createTask(dshHomeDir, body, { generationOnly })
           return json(result.ok ? 200 : 400, { ...result, ...(mechanicWarnings.length ? { warnings: mechanicWarnings } : {}) })
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/tasks/feedback') {
-          if (!active) return json(503, { error: 'noname-kit 未配置 nonameDir(或目录无效)' })
           const body = await readBody()
+          if (!active && !(await getTask(dshHomeDir, body.taskId))?.generationOnly) return json(503, { error: '未配置有效的游戏目录，无法更新此任务。' })
           const result = await skillFeedback(dshHomeDir, body)
           return json(result.ok ? 200 : 400, result)
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/tasks/skill-status') {
-          if (!active) return json(503, { error: 'noname-kit 未配置 nonameDir(或目录无效)' })
           const body = await readBody()
+          if (!active && !(await getTask(dshHomeDir, body.taskId))?.generationOnly) return json(503, { error: '未配置有效的游戏目录，无法更新此任务。' })
           const result = await setSkillStatus(dshHomeDir, body)
           if (!result.ok) return json(400, result)
           let archived = { totalTasks: 0 }
-          if (result.autoCompleted) {
+          if (result.autoCompleted && active) {
             archived = await archiveTask(nonameDir, {
               folder: result.task.folder, taskId: result.task.id, kind: result.task.type,
               /* 仅对需要图片的任务生成缺图提示；模式任务和编辑已有条目的任务豁免图片条件。 */
@@ -1051,28 +1055,28 @@ export function apply(ctx, config) {
           return json(200, { ok: true, autoCompleted: result.autoCompleted, task: result.task, copied: copy.copied, archived: archived.totalTasks })
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/tasks/delete') {
-          if (!active) return json(503, { error: 'noname-kit 未配置 nonameDir(或目录无效)' })
           const body = await readBody()
+          if (!active && !(await getTask(dshHomeDir, body.taskId))?.generationOnly) return json(503, { error: '未配置有效的游戏目录，无法更新此任务。' })
           const result = await deleteTask(dshHomeDir, body.taskId)
           return json(result.ok ? 200 : 400, result)
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/tasks/reopen') {
           // 重新打开已完成任务，供补图或再次确认后归档。
-          if (!active) return json(503, { error: 'noname-kit 未配置 nonameDir(或目录无效)' })
           const body = await readBody()
+          if (!active && !(await getTask(dshHomeDir, body.taskId))?.generationOnly) return json(503, { error: '未配置有效的游戏目录，无法更新此任务。' })
           const result = await reopenTask(dshHomeDir, body)
           return json(result.ok ? 200 : 400, result)
         }
         if (req.method === 'POST' && url.pathname === '/noname-kit-api/tasks/complete') {
-          if (!active) return json(503, { error: 'noname-kit 未配置 nonameDir(或目录无效)' })
           const body = await readBody()
+          if (!active && !(await getTask(dshHomeDir, body.taskId))?.generationOnly) return json(503, { error: '未配置有效的游戏目录，无法更新此任务。' })
           const done = await completeById(dshHomeDir, body)
           if (!done.ok) return json(400, done)
-          const archived = await archiveTask(nonameDir, {
+          const archived = active ? await archiveTask(nonameDir, {
             folder: done.task.folder, taskId: done.task.id, kind: done.task.type,
             summary: body.summary || done.task.summary || '手动标记完成',
             notes: (body.notes && body.notes.length ? body.notes : done.task.notes), rounds: Math.max(body.rounds || 1, done.task.rounds || 1),
-          }).catch(() => ({ totalTasks: 0 }))
+          }).catch(() => ({ totalTasks: 0 })) : { totalTasks: 0 }
           return json(200, { ok: true, task: done.task, totalTasks: archived.totalTasks })
         }
         // 版本与一致性(⚙ 设置页):刻意放在下面这道 503 闸门之前 —— 没配游戏目录

@@ -73,15 +73,52 @@ try {
     writeFileSync(join(packageDir, 'shared.js'), "export const nnkMechanic_relay = { id: 'relay', name: '接力', kind: 'shared-rule', description: '接力规则', resolve() {} };")
     const indexCode = await readFile(new URL(testPaths.sourceUrl('index.js')), 'utf8')
     const routeStart = indexCode.indexOf("        if (req.method === 'GET' && url.pathname === '/noname-kit-api/mechanics')")
-    const routeEnd = indexCode.indexOf("        if (req.method === 'POST' && url.pathname === '/noname-kit-api/tasks/feedback')", routeStart)
+    const routeEnd = indexCode.indexOf('        // 版本与一致性', routeStart)
     assert(routeStart >= 0 && routeEnd > routeStart)
     let scans = 0
-    const context = { active: true, nonameDir, dshHomeDir: home, statSync, existsSync, join, safeFolderPath, createTask: tasks.createTask, validateTaskMechanics: tasks.validateTaskMechanics, listMechanics: async (...args) => { scans++; return listMechanics(...args) } }
+    let archives = 0
+    const context = {
+      ...tasks, active: true, nonameDir, dshHomeDir: home, statSync, existsSync, join, safeFolderPath,
+      archiveTask: async () => { archives++; return { totalTasks: archives } },
+      listMechanics: async (...args) => { scans++; return listMechanics(...args) },
+    }
     const handler = runInNewContext('(async function(req, url, readBody, json) {' + indexCode.slice(routeStart, routeEnd) + '})', context)
     const request = (method, url, body = {}) => handler({ method }, new URL(url, 'http://127.0.0.1'), async () => body, (status, value) => ({ status, value }))
     const base = { id: '接口-机制', folder: '接口机制包', type: 'mechanic', title: '新规则', mechanic: { id: 'fresh', kind: 'skill-type', description: '说明', rules: '具体规则' } }
     context.active = false
     assert.equal((await request('GET', '/noname-kit-api/mechanics?folder=接口机制包')).status, 503)
+    const manual = { folder: '手动新包', packageMeta: {}, writeMode: 'manual' }
+    for (const type of ['character', 'card', 'mode', 'mechanic']) {
+      const created = await request('POST', '/noname-kit-api/tasks', { ...base, ...manual, id: '手动-' + type, type })
+      assert.equal(created.status, 200, created.value.error)
+      assert.equal(created.value.task.generationOnly, true)
+      assert.equal(created.value.task.writeMode, 'manual')
+    }
+    for (const change of [
+      { writeMode: 'auto', generationOnly: true },
+      { packageMeta: null },
+      { target: { kind: 'character', id: 'existing' } },
+      { skills: [{ name: '技能', mechanicIds: ['combo'] }] },
+    ]) {
+      const denied = await request('POST', '/noname-kit-api/tasks', { ...manual, ...change, id: '手动-拒绝' })
+      assert.equal(denied.status, 503)
+      assert.equal(await tasks.getTask(home, '手动-拒绝'), null)
+    }
+    assert.equal(scans, 0)
+    ok(true, '无目录可新建各类手动任务，自动写入、已有包和机制引用仍需目录')
+    const offlineTask = (await tasks.getTask(home, '手动-mechanic'))
+    const update = (action, fields = {}) => request('POST', '/noname-kit-api/tasks/' + action, { taskId: offlineTask.id, ...fields })
+    const confirmed = await update('skill-status', { skill: offlineTask.skills[0].name, status: 'confirmed' })
+    assert.equal(confirmed.value.autoCompleted, true)
+    assert.equal(confirmed.value.archived, 0)
+    assert.equal((await update('reopen')).status, 200)
+    assert.equal((await update('feedback', { issue: '核对触发时机' })).status, 200)
+    assert.equal((await update('complete')).value.totalTasks, 0)
+    assert.equal((await update('image')).status, 503)
+    assert.equal((await update('audio')).status, 503)
+    assert.equal((await update('delete')).status, 200)
+    assert.equal(await tasks.getTask(home, offlineTask.id), null)
+    ok(archives === 0, '无目录的任务确认、重开、反馈、完成和删除仅更新登记处')
     context.active = true
     const listing = await request('GET', '/noname-kit-api/mechanics?folder=接口机制包')
     assert.equal(listing.status, 200)
